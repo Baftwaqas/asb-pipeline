@@ -64,9 +64,7 @@ async function sendTemplate(toPhone, templateName, params) {
         {
           type: "body",
           parameters: params.map((p) => ({
-            type: "text",
-            parameter_name: p.name,
-            text: p.value,
+        type: "text",text: p.value,
           })),
         },
       ],
