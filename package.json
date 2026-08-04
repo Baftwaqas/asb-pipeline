@@ -1,0 +1,15 @@
+{
+  "name": "asb-pipeline",
+  "version": "1.0.0",
+  "description": "Apna Sasta Bazaar - Shopify to WhatsApp order pipeline",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
