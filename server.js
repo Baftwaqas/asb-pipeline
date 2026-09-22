@@ -1,45 +1,66 @@
 // ============================================================
 // ASB PIPELINE - Apna Sasta Bazaar
 // Shopify -> Postgres -> WhatsApp order pipeline
+//
+// Running direct on Meta's Cloud API. No BSP in the path.
 // ============================================================
 // Jobs:
 //   1. Prove to Meta that we own our webhook URL (the "handshake")
 //   2. Receive WhatsApp messages + delivery receipts (inbound)
 //   3. Receive Shopify orders, WRITE THEM TO THE DATABASE, then
 //      send the order_confirmed WhatsApp template
+//   4. Serve /inbox so a human can read and answer customers
 //
-// What changed when the database arrived:
-//   - Every webhook is recorded BEFORE it is processed, so a retry
-//     from a sleeping free instance can never create a second order.
-//   - Orders, customers and line items are persisted. The Shopify
-//     price becomes the CEILING price - the most the customer can
-//     ever be charged. The real price is set later at lock time.
-//   - Every WhatsApp send is logged with its wamid, so delivery
-//     receipts can be matched back to the order.
+// What changed in the AiSensy cutover (migration 003):
+//   - The WhatsApp webhook now VERIFIES META'S SIGNATURE. Before this
+//     it accepted any POST, which meant anyone who learned the URL
+//     could inject fabricated customer messages into the database.
+//     This is the single most important change in the file.
+//   - Inbound messages are parsed properly: profile name, message
+//     type, media ids, button/interactive replies, quoted messages.
+//     A webhook carrying several messages no longer loses all but
+//     the first.
+//   - Cloud API calls moved to ./whatsapp.js, which also knows how
+//     to send free-form text (needed to answer people) and download
+//     media (needed for voice notes).
+//   - Inbound messages are marked read, so customers see blue ticks
+//     and know a person is there.
 // ============================================================
 
 const express = require("express");
 const crypto = require("crypto");
 const db = require("./db");
+const wa = require("./whatsapp");
 
 const app = express();
+app.set("trust proxy", 1); // Render sits behind a proxy
 
 // ------------------------------------------------------------
 // SETTINGS - from Environment Variables in Render.
 // NEVER write real secrets here.
+//
+// Required for the direct Cloud API setup:
+//   WHATSAPP_TOKEN        System User token (permanent)
+//   PHONE_NUMBER_ID       the business number's id
+//   META_APP_SECRET       <- NEW. App secret, for webhook signatures.
+//   VERIFY_TOKEN          any string; must match what you type in Meta
+//   SHOPIFY_WEBHOOK_SECRET
+//   DATABASE_URL
+//   INBOX_PASSWORD        shared password for /inbox
+//   INBOX_COOKIE_SECRET   any long random string
 // ------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "asb-verify-2026";
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || "";
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "";
-const SHOPIFY_WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET || "";
-const TEMPLATE_LANG = "en";
 
 // ------------------------------------------------------------
-// Shopify webhook needs the RAW body to check the signature,
-// so we mount raw parsing on that path only.
+// Both webhooks need the RAW body to check their signature, so raw
+// parsing is mounted on those two paths only. Everything else gets
+// normal JSON.
+//
+// Order matters: these must come BEFORE express.json().
 // ------------------------------------------------------------
 app.use("/webhooks/shopify", express.raw({ type: "application/json" }));
+app.use("/webhooks/whatsapp", express.raw({ type: "application/json" }));
 app.use(express.json());
 
 // ------------------------------------------------------------
@@ -53,48 +74,6 @@ function normalizePhone(raw) {
   if (digits.startsWith("0")) return "92" + digits.slice(1);
   if (digits.length === 10 && digits.startsWith("3")) return "92" + digits;
   return digits;
-}
-
-// ------------------------------------------------------------
-// Tiny helper: send an approved template message via Cloud API
-// Returns { ok, wamid, data } so the caller can log it.
-// ------------------------------------------------------------
-async function sendTemplate(toPhone, templateName, params) {
-  const url = `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`;
-  const body = {
-    messaging_product: "whatsapp",
-    to: toPhone,
-    type: "template",
-    template: {
-      name: templateName,
-      language: { code: TEMPLATE_LANG },
-      components: [
-        {
-          type: "body",
-          parameters: params.map((p) => ({ type: "text", text: p.value })),
-        },
-      ],
-    },
-  };
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  const data = await res.json();
-  const wamid = data?.messages?.[0]?.id || null;
-
-  if (!res.ok) {
-    console.error("WhatsApp send FAILED:", JSON.stringify(data));
-  } else {
-    console.log("WhatsApp send OK:", wamid);
-  }
-  return { ok: res.ok, wamid, data };
 }
 
 // ============================================================
@@ -341,17 +320,22 @@ async function persistOrder(order, phone) {
 // The idempotency key makes a duplicate send impossible even if
 // this function is somehow called twice.
 // ------------------------------------------------------------
-async function logOutbound({ key, customerId, orderId, phone, template, wamid, ok, payload }) {
+// `preview` is what a human reads in the inbox. Without it a template send
+// shows up as an empty bubble, which makes the thread impossible to follow -
+// you can see that something went out but not what the customer was told.
+async function logOutbound({ key, customerId, orderId, phone, template, preview, wamid, ok, payload }) {
   try {
     await db.query(
       `INSERT INTO whatsapp_messages
          (idempotency_key, customer_id, order_id, phone, direction,
-          template_name, template_lang, wamid, status, payload, sent_at, attempts)
+          template_name, template_lang, wamid, status, payload, sent_at,
+          received_at, attempts, msg_type, body_preview)
        -- $8 is used both as an enum and in a text comparison, so both uses
        -- need an explicit cast. Without them Postgres refuses the statement
        -- with "inconsistent types deduced for parameter $8".
        VALUES ($1, $2, $3, $4, 'outbound', $5, $6, $7, $8::msg_status, $9,
-               CASE WHEN $8::text = 'sent' THEN now() ELSE NULL END, 1)
+               CASE WHEN $8::text = 'sent' THEN now() ELSE NULL END,
+               now(), 1, 'template', $10)
        ON CONFLICT (idempotency_key) DO UPDATE
           SET wamid = COALESCE(EXCLUDED.wamid, whatsapp_messages.wamid),
               status = EXCLUDED.status,
@@ -362,10 +346,11 @@ async function logOutbound({ key, customerId, orderId, phone, template, wamid, o
         orderId || null,
         phone,
         template,
-        TEMPLATE_LANG,
+        wa.templateLang,
         wamid,
         ok ? "sent" : "failed",
         payload || {},
+        (preview || template || "").slice(0, 500),
       ]
     );
   } catch (e) {
@@ -373,9 +358,101 @@ async function logOutbound({ key, customerId, orderId, phone, template, wamid, o
   }
 }
 
+// ------------------------------------------------------------
+// Store one inbound message.
+//
+// Pulls out everything worth having: the WhatsApp profile name (often
+// the only name we have for a customer who never used Shopify), the
+// type, media ids for photos and voice notes, and the readable text
+// for button taps and list selections - which arrive as structured
+// objects, not text, and used to be stored as the useless "(button)".
+// ------------------------------------------------------------
+async function saveInbound(msg, contact) {
+  const from = normalizePhone(msg.from);
+  const type = msg.type || "unknown";
+
+  // Readable text, whatever the message type.
+  let preview;
+  let mediaId = null;
+  let mediaMime = null;
+
+  switch (type) {
+    case "text":
+      preview = msg.text?.body || "";
+      break;
+    case "button":
+      // Quick-reply on a template.
+      preview = msg.button?.text || "(button)";
+      break;
+    case "interactive":
+      preview =
+        msg.interactive?.button_reply?.title ||
+        msg.interactive?.list_reply?.title ||
+        "(interactive)";
+      break;
+    case "image":
+    case "audio":
+    case "video":
+    case "document":
+    case "sticker":
+      mediaId = msg[type]?.id || null;
+      mediaMime = msg[type]?.mime_type || null;
+      preview =
+        msg[type]?.caption ||
+        (type === "audio" && msg.audio?.voice ? "(voice note)" : `(${type})`);
+      break;
+    case "location":
+      preview = `(location ${msg.location?.latitude}, ${msg.location?.longitude})` +
+        (msg.location?.name ? ` ${msg.location.name}` : "");
+      break;
+    case "order":
+      preview = "(catalogue order)";
+      break;
+    case "reaction":
+      preview = `(reacted ${msg.reaction?.emoji || ""})`;
+      break;
+    default:
+      preview = `(${type})`;
+  }
+
+  // Meta sends the message timestamp as unix seconds, as a string.
+  const at = msg.timestamp
+    ? new Date(Number(msg.timestamp) * 1000)
+    : new Date();
+
+  await db.query(
+    `INSERT INTO whatsapp_messages
+       (wamid, phone, direction, body_preview, msg_type, media_id, media_mime,
+        profile_name, reply_to, payload, status, received_at, customer_id)
+     VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7, $8, $9, 'delivered', $10,
+             (SELECT id FROM customers WHERE phone = $2))
+     ON CONFLICT (wamid) DO NOTHING`,
+    [
+      msg.id,
+      from,
+      String(preview).slice(0, 500),
+      type,
+      mediaId,
+      mediaMime,
+      contact?.profile?.name || null,
+      msg.context?.id || null,
+      msg,
+      at,
+    ]
+  );
+
+  console.log(`[wa] INBOUND ${type} from ${from}: ${String(preview).slice(0, 80)}`);
+  return { from, type, preview };
+}
+
 // ============================================================
 // ROUTES
 // ============================================================
+
+// ------------------------------------------------------------
+// The inbox UI + its API. Mounted here so it shares the db pool.
+// ------------------------------------------------------------
+app.use(require("./inbox"));
 
 // ------------------------------------------------------------
 // ROUTE 0: Health check
@@ -384,10 +461,23 @@ app.get("/", (req, res) => {
   res.send("ASB Pipeline is running. Sasta Bhi, Achha Bhi!");
 });
 
-// Deeper check - confirms the database is reachable AND migrated.
+// Deeper check - confirms the database is reachable AND migrated,
+// and that the env vars the Cloud API needs are actually present.
 app.get("/healthz", async (req, res) => {
   const h = await db.health();
-  res.status(h.ok ? 200 : 503).json(h);
+  const config = {
+    graphVersion: wa.graphVersion,
+    whatsappToken: Boolean(process.env.WHATSAPP_TOKEN),
+    phoneNumberId: Boolean(process.env.PHONE_NUMBER_ID),
+    appSecret: Boolean(process.env.META_APP_SECRET),
+    inboxConfigured: Boolean(
+      process.env.INBOX_PASSWORD &&
+        (process.env.INBOX_COOKIE_SECRET || process.env.VERIFY_TOKEN)
+    ),
+  };
+  const ready = h.ok && h.migrated && config.whatsappToken &&
+    config.phoneNumberId && config.appSecret;
+  res.status(ready ? 200 : 503).json({ ...h, config, ready });
 });
 
 // ------------------------------------------------------------
@@ -408,74 +498,119 @@ app.get("/webhooks/whatsapp", (req, res) => {
 
 // ------------------------------------------------------------
 // ROUTE 2: Inbound WhatsApp events (POST)
+//
 // Customer messages are stored; delivery receipts are matched
 // back to the outbound message by wamid.
+//
+// Step 0 is the signature check. Meta HMACs every body with the app
+// secret; without this the endpoint is an open write into our
+// customer records. It runs before anything is parsed or stored.
 // ------------------------------------------------------------
 app.post("/webhooks/whatsapp", async (req, res) => {
+  // ---- 0. Is this really Meta? ----
+  // req.body is a Buffer here (express.raw), which is exactly what was
+  // signed. Re-serialising parsed JSON would not match.
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!wa.verifySignature(raw, req.get("X-Hub-Signature-256"))) {
+    console.warn("[wa] webhook REJECTED - bad or missing signature");
+    return res.sendStatus(401);
+  }
+
   // Always answer 200 fast, or Meta keeps retrying
   res.sendStatus(200);
 
-  const raw = JSON.stringify(req.body || {});
-  const eventId = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 40);
+  let body;
+  try {
+    body = JSON.parse(raw.toString("utf8"));
+  } catch (e) {
+    console.error("[wa] webhook body is not JSON:", e.message);
+    return;
+  }
+
+  const eventId = crypto
+    .createHash("sha256")
+    .update(raw)
+    .digest("hex")
+    .slice(0, 40);
 
   try {
     const { isNew, id: eventRowId } = await db.recordWebhook(
       "whatsapp",
       eventId,
       "messages",
-      req.body
+      body
     );
     if (!isNew) {
       console.log("Duplicate WhatsApp webhook ignored");
       return;
     }
 
-    const change = req.body?.entry?.[0]?.changes?.[0]?.value;
+    // A single webhook can carry several entries, each with several
+    // changes, each with several messages. The old code read [0] of
+    // everything and silently dropped the rest - which on a busy
+    // Community Day morning means lost customer messages.
+    let handled = 0;
 
-    // --- a real message from a customer ---
-    const msg = change?.messages?.[0];
-    if (msg) {
-      const from = msg.from;
-      const type = msg.type;
-      const text = msg.text?.body || `(${type})`;
-      console.log(`INBOUND from ${from}: ${text}`);
+    for (const entry of body?.entry || []) {
+      for (const change of entry?.changes || []) {
+        const value = change?.value || {};
+        const contacts = value.contacts || [];
 
-      await db.query(
-        `INSERT INTO whatsapp_messages
-           (wamid, phone, direction, body_preview, payload, status,
-            customer_id)
-         VALUES ($1, $2, 'inbound', $3, $4, 'delivered',
-                 (SELECT id FROM customers WHERE phone = $2))
-         ON CONFLICT (wamid) DO NOTHING`,
-        [msg.id, from, text.slice(0, 500), msg]
-      );
+        // --- real messages from customers ---
+        for (let i = 0; i < (value.messages || []).length; i++) {
+          const msg = value.messages[i];
+          try {
+            await saveInbound(msg, contacts[i] || contacts[0]);
+            handled++;
+            // Blue ticks: cheap, free, and tells the customer a human
+            // is on the other end. Never allowed to fail the webhook.
+            wa.markRead(msg.id).catch(() => {});
+          } catch (e) {
+            console.error(`[wa] could not save inbound ${msg.id}:`, e.message);
+          }
+        }
 
-      await db.markWebhookProcessed(eventRowId);
-      return;
+        // --- delivery receipts for things we sent ---
+        for (const status of value.statuses || []) {
+          console.log(`STATUS: ${status.recipient_id} -> "${status.status}"`);
+          try {
+            await db.query(
+              `UPDATE whatsapp_messages
+                  SET status = $2::msg_status,
+                      delivered_at = CASE WHEN $2::text IN ('delivered','read')
+                                          THEN COALESCE(delivered_at, now()) END,
+                      read_at      = CASE WHEN $2::text = 'read'
+                                          THEN COALESCE(read_at, now()) END,
+                      error_code   = $3
+                WHERE wamid = $1`,
+              [
+                status.id,
+                status.status,
+                status.errors?.[0]?.code?.toString() || null,
+              ]
+            );
+            handled++;
+          } catch (e) {
+            console.error("[wa] status update failed:", e.message);
+          }
+        }
+
+        // --- account-level notices worth seeing in the logs ---
+        // Template rejections and quality-rating drops arrive here. On a
+        // BSP dashboard these showed up as an alert; direct on the Cloud
+        // API, the log is the alert.
+        if (change.field && change.field !== "messages") {
+          console.warn(
+            `[wa] account event "${change.field}": ${JSON.stringify(value).slice(0, 400)}`
+          );
+          handled++;
+        }
+      }
     }
 
-    // --- a delivery receipt for something we sent ---
-    const status = change?.statuses?.[0];
-    if (status) {
-      console.log(`STATUS: ${status.recipient_id} -> "${status.status}"`);
-
-      await db.query(
-        `UPDATE whatsapp_messages
-            SET status = $2::msg_status,
-                delivered_at = CASE WHEN $2::text IN ('delivered','read')
-                                    THEN COALESCE(delivered_at, now()) END,
-                read_at      = CASE WHEN $2::text = 'read'
-                                    THEN COALESCE(read_at, now()) END,
-                error_code   = $3
-          WHERE wamid = $1`,
-        [status.id, status.status, status.errors?.[0]?.code?.toString() || null]
-      );
-
-      await db.markWebhookProcessed(eventRowId);
-      return;
+    if (handled === 0) {
+      console.log("Webhook event (other):", raw.toString("utf8").slice(0, 300));
     }
-
-    console.log("Webhook event (other):", raw.slice(0, 300));
     await db.markWebhookProcessed(eventRowId);
   } catch (e) {
     console.error("Error reading WhatsApp webhook:", e.message);
@@ -495,7 +630,7 @@ app.post("/webhooks/shopify", async (req, res) => {
   // ---- 1. Verify the HMAC signature ----
   const hmacHeader = req.get("X-Shopify-Hmac-Sha256") || "";
   const digest = crypto
-    .createHmac("sha256", SHOPIFY_WEBHOOK_SECRET)
+    .createHmac("sha256", process.env.SHOPIFY_WEBHOOK_SECRET || "")
     .update(req.body)
     .digest("base64");
 
@@ -591,7 +726,7 @@ app.post("/webhooks/shopify", async (req, res) => {
     }
 
     // --- tell the customer ---
-    const result = await sendTemplate(phone, "order_confirmed", [
+    const result = await wa.sendTemplate(phone, "order_confirmed", [
       { name: "customer_name", value: firstName },
       { name: "order_id", value: saved?.order_number || orderName },
       { name: "order_items", value: items || "-" },
@@ -604,6 +739,9 @@ app.post("/webhooks/shopify", async (req, res) => {
       orderId: saved?.orderId,
       phone,
       template: "order_confirmed",
+      preview:
+        `Order ${saved?.order_number || orderName} confirmed for ${firstName} — ` +
+        `${items || "-"} · max Rs ${totalPKR}`,
       wamid: result.wamid,
       ok: result.ok,
       payload: { order_name: orderName, response: result.data },
@@ -618,7 +756,19 @@ app.post("/webhooks/shopify", async (req, res) => {
 
 // ------------------------------------------------------------
 app.listen(PORT, async () => {
-  console.log(`ASB Pipeline listening on port ${PORT}`);
+  console.log(`ASB Pipeline listening on port ${PORT} (Graph ${wa.graphVersion})`);
+
+  // Fail loudly at boot rather than silently at the first message.
+  if (!process.env.META_APP_SECRET) {
+    console.error(
+      "[wa] META_APP_SECRET is NOT set - every WhatsApp webhook will be " +
+        "rejected with 401. Add it in Render -> Environment."
+    );
+  }
+  if (!process.env.INBOX_PASSWORD) {
+    console.warn("[inbox] INBOX_PASSWORD not set - /inbox will refuse to sign anyone in.");
+  }
+
   const h = await db.health();
   if (h.ok && h.migrated) {
     console.log(`[db] connected - ${h.tables} tables, ${h.asbFunctions} asb_* functions`);

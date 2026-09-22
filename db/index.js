@@ -20,15 +20,40 @@ if (!connectionString) {
   process.exit(1);
 }
 
-// Render's INTERNAL hostname looks like `dpg-xxxxx-a` — no dots, no TLS needed.
-// The EXTERNAL hostname ends in `.render.com` and requires SSL. Render's certs
-// are signed by a CA that isn't in Node's default trust store, hence the
-// rejectUnauthorized flag. Traffic is still encrypted.
-const isExternal = /\.render\.com/i.test(connectionString);
+// TLS decision, by hostname.
+//
+// This used to test for `.render.com` specifically, which silently breaks the
+// moment the database lives anywhere else: a Neon URL
+// (`ep-xxx.us-east-1.aws.neon.tech`) did not match, SSL was switched OFF, and
+// Neon — which requires TLS — refused the connection. The failure reads like a
+// bad password, so it costs an hour to find.
+//
+// The real rule is about the hostname's shape, not its brand:
+//   * Render's INTERNAL host is a bare name with no dots (`dpg-xxxxx-a`) and
+//     sits on a private network — no TLS needed.
+//   * localhost / 127.0.0.1 — no TLS needed.
+//   * Anything else crosses the public internet and must use TLS.
+//
+// rejectUnauthorized is false because Render's certs are signed by a CA that
+// isn't in Node's default trust store. Traffic is still encrypted. Neon's certs
+// DO verify properly, so once Render is out of the picture this can become
+// `{ rejectUnauthorized: true }`.
+let dbHost = '';
+try {
+  dbHost = new URL(connectionString).hostname;
+} catch (_) {
+  // Not a URL (e.g. a key=value DSN). Fall back to requiring TLS — the safe
+  // default for anything we cannot positively identify as local.
+}
+const isLocal =
+  dbHost === 'localhost' ||
+  dbHost === '127.0.0.1' ||
+  dbHost === '::1' ||
+  (dbHost !== '' && !dbHost.includes('.'));   // Render internal: no dots
 
 const pool = new Pool({
   connectionString,
-  ssl: isExternal ? { rejectUnauthorized: false } : false,
+  ssl: isLocal ? false : { rejectUnauthorized: false },
 
   // Free-tier Postgres has a low connection ceiling and the web service is a
   // single instance. Five is plenty and leaves headroom for psql sessions.
@@ -43,12 +68,17 @@ const pool = new Pool({
 });
 
 pool.on('error', (err) => {
-  // Fires when an IDLE client dies (e.g. Render restarts the database).
-  // The pool replaces it automatically — log, don't crash.
+  // Fires when an IDLE client dies — Render restarting the database, or Neon
+  // scaling a compute to zero after 5 minutes idle (which drops open
+  // connections by design). The pool replaces it on the next query, so this is
+  // a log line, not a crash. On Neon this is expected and harmless.
   console.error('[db] idle client error:', err.message);
 });
 
-console.log(`[db] pool ready (${isExternal ? 'external+ssl' : 'internal'}, max 5)`);
+console.log(
+  `[db] pool ready (host ${dbHost || 'unparsed'}, ` +
+    `${isLocal ? 'no tls' : 'tls'}, max 5)`
+);
 
 // ---------------------------------------------------------------------------
 // query — for anything that fits in a single statement
