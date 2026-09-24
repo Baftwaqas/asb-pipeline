@@ -1,0 +1,23 @@
+# ============================================================================
+# HELD MIGRATIONS — scripts/migrate.js will SKIP every file listed here.
+#
+# A file lands here when it is written but must not run yet. The runner names
+# each one it skips on every run, so a hold is loud, not silent. Delete a line
+# to release that migration; the next run applies it.
+#
+# Format: one filename per line. Blank lines and #-comments ignored.
+# ============================================================================
+
+# 005 models the hero/community qualification at the ORDER level
+# (orders.order_type). Waqas corrected this on 2026-09-19: qualification is
+# per-LINE and derived from the quantity on that line, not a property of the
+# whole order. 006, 007 and 008 all build on 005's shape, so releasing any of
+# them before 009 rewrites it would bake the wrong model into the live
+# database and make it expensive to undo.
+#
+# RELEASE CONDITION: write 009 (per-line, quantity-derived qualification),
+# then delete all five lines below together.
+005_multi_feature.sql
+006_individual_flow.sql
+007_protect_hero_unlock.sql
+008_hero_setup_checks.sql
