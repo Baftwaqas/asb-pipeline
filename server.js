@@ -143,14 +143,16 @@ async function resolveProduct(client, item) {
 
   if (variantId) {
     const hit = await client.query(
-      `SELECT id, unit, name_en, name_ur FROM products WHERE shopify_variant_id = $1`,
+      `SELECT id, unit, name_en, name_ur, market_price
+         FROM products WHERE shopify_variant_id = $1`,
       [variantId]
     );
     if (hit.rows.length) return hit.rows[0];
   }
   if (sku) {
     const hit = await client.query(
-      `SELECT id, unit, name_en, name_ur FROM products WHERE sku = $1`,
+      `SELECT id, unit, name_en, name_ur, market_price
+         FROM products WHERE sku = $1`,
       [sku]
     );
     if (hit.rows.length) {
@@ -170,7 +172,7 @@ async function resolveProduct(client, item) {
     `INSERT INTO products (sku, name_en, category, unit, shopify_product_id, shopify_variant_id)
      VALUES ($1, $2, 'uncategorised', 'kg', $3, $4)
      ON CONFLICT (sku) DO UPDATE SET name_en = EXCLUDED.name_en
-     RETURNING id, unit, name_en, name_ur`,
+     RETURNING id, unit, name_en, name_ur, market_price`,
     [
       stubSku,
       item.title || stubSku,
@@ -270,11 +272,24 @@ async function persistOrder(order, phone) {
       }
 
       await client.query(
+        // market_unit_price is the BAZAAR rate, frozen onto this line.
+        //
+        // It cannot come from the Shopify webhook - an order line_item carries
+        // `price` but not `compare_at_price` (confirmed against Shopify's Order
+        // API reference). So it is read from our own catalogue, which mirrors
+        // compare_at_price via db/seed/001_shopify_catalogue.sql.
+        //
+        // NULL is a legitimate value and means "we don't know the bazaar rate
+        // for this product". The bill then omits the comparison for that line
+        // rather than inventing one. On a merge, COALESCE keeps whatever rate
+        // was recorded first - the promise the customer already saw.
         `INSERT INTO order_items (order_id, product_id, name_snapshot, name_ur_snapshot,
-                                  unit, qty_ordered, ceiling_unit_price)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                  unit, qty_ordered, ceiling_unit_price, market_unit_price)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (order_id, product_id) DO UPDATE
-            SET qty_ordered = order_items.qty_ordered + EXCLUDED.qty_ordered`,
+            SET qty_ordered = order_items.qty_ordered + EXCLUDED.qty_ordered,
+                market_unit_price = COALESCE(order_items.market_unit_price,
+                                             EXCLUDED.market_unit_price)`,
         [
           orderRow.id,
           product.id,
@@ -283,6 +298,7 @@ async function persistOrder(order, phone) {
           product.unit,
           qty,
           ceiling,
+          product.market_price ?? null,
         ]
       );
 
@@ -290,10 +306,10 @@ async function persistOrder(order, phone) {
       // Never overwrite an existing ceiling - that would move a promise
       // that customers have already seen.
       await client.query(
-        `INSERT INTO cycle_prices (cycle_id, product_id, ceiling_price)
-         VALUES ($1, $2, $3)
+        `INSERT INTO cycle_prices (cycle_id, product_id, ceiling_price, market_price)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (cycle_id, product_id) DO NOTHING`,
-        [cycle.id, product.id, ceiling]
+        [cycle.id, product.id, ceiling, product.market_price ?? null]
       );
     }
 
