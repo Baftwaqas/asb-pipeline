@@ -205,6 +205,101 @@
      the thread would render on top of the placeholder. */
   #threadView { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   #threadView[hidden] { display: none; }
+  /* ---------- add order (a customer ordered by WhatsApp) ---------- */
+  .add-order {
+    flex: none; border: 1px solid var(--accent); color: var(--accent);
+    background: transparent; border-radius: 7px; padding: 5px 10px;
+    font-size: 12.5px; font-weight: 600;
+  }
+  .add-order:hover { background: var(--green-soft); }
+  #opShade {
+    position: fixed; inset: 0; background: rgb(0 0 0 / .35); z-index: 30;
+  }
+  #opShade[hidden], #orderPanel[hidden] { display: none; }
+  #orderPanel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 31;
+    width: min(460px, 100vw); background: var(--panel); color: var(--ink);
+    border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgb(0 0 0 / .18);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  @media (max-width: 820px) { #orderPanel { width: 100vw; border-left: 0; } }
+  .op-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .op-head h3 { margin: 0; font-size: 16px; flex: 1; min-width: 0; }
+  .op-head small { display: block; color: var(--ink-2); font-size: 12px; font-weight: 400; }
+  .op-x { background: none; border: 0; color: var(--ink-2); font-size: 22px; line-height: 1; padding: 2px 6px; }
+  .op-body { flex: 1; overflow-y: auto; padding: 14px 16px 18px; min-height: 0; }
+  .op-foot { border-top: 1px solid var(--line); padding: 12px 16px; background: var(--panel); }
+  .op-label { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 0 0 5px; }
+  .op-row { display: flex; gap: 8px; align-items: center; }
+  .op-row .field { margin-bottom: 0; }
+  .op-hint { font-size: 12px; color: var(--ink-2); margin: 5px 0 14px; }
+  .op-deliv {
+    border-radius: 8px; padding: 9px 11px; font-size: 13px; margin: 0 0 16px;
+    background: var(--green-soft); color: var(--ink);
+  }
+  .op-deliv b { color: var(--green); }
+  .op-deliv.bad { background: var(--warn-bg); color: var(--warn); }
+  .op-deliv.bad b { color: var(--warn); }
+  .op-results {
+    border: 1px solid var(--line); border-radius: 8px; max-height: 230px;
+    overflow-y: auto; margin: 8px 0 16px;
+  }
+  .op-item {
+    display: flex; width: 100%; align-items: center; gap: 10px; text-align: left;
+    background: none; border: 0; border-bottom: 1px solid var(--line);
+    padding: 8px 10px; color: inherit;
+  }
+  .op-item:last-child { border-bottom: 0; }
+  .op-item:hover { background: var(--panel-2); }
+  .op-name { flex: 1; min-width: 0; }
+  .op-ur { font-size: 16px; display: block; }
+  .op-en { font-size: 12px; color: var(--ink-2); display: block; }
+  .op-price { text-align: right; font-size: 12.5px; flex: none; }
+  .op-price small { display: block; color: var(--ink-2); font-size: 11.5px; }
+  .op-in { color: var(--accent); font-weight: 700; font-size: 12px; flex: none; }
+  .op-none { padding: 14px 10px; color: var(--ink-2); font-size: 13px; }
+  .op-bag h4 { margin: 0 0 6px; font-size: 13px; }
+  .op-line {
+    display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid var(--line);
+  }
+  .op-step { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .op-step button { background: var(--panel-2); border: 0; color: var(--ink); width: 30px; height: 32px; font-size: 16px; }
+  .op-step input {
+    width: 46px; height: 32px; border: 0; text-align: center; background: var(--panel);
+    color: var(--ink); font: inherit; -moz-appearance: textfield;
+  }
+  .op-step input::-webkit-inner-spin-button { -webkit-appearance: none; }
+  .op-lt { min-width: 74px; text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .op-tot { margin-top: 10px; font-size: 13.5px; }
+  .op-tot div { display: flex; justify-content: space-between; padding: 2px 0; }
+  .op-tot .big { font-size: 16px; font-weight: 700; }
+  .op-tot .save { color: var(--green); font-weight: 600; }
+  .op-empty { color: var(--ink-2); font-size: 13px; padding: 10px 0; }
+  .op-err { color: var(--danger); font-size: 13px; margin: 0 0 8px; }
+  .op-err:empty { display: none; }
+  .op-ok {
+    background: var(--green-soft); border-radius: 8px; padding: 10px 12px;
+    font-size: 13.5px; margin-bottom: 12px;
+  }
+  .op-ok b { display: block; font-size: 15px; }
+  .op-preview {
+    white-space: pre-wrap; word-wrap: break-word; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px;
+    font-size: 14px; margin-bottom: 12px;
+    /* Each line takes its own direction, as WhatsApp does: a line that starts
+       with an Urdu name reads right-to-left. Shows the bill as she will see it. */
+    unicode-bidi: plaintext;
+  }
+  .op-btns { display: flex; gap: 8px; }
+  .op-btns[hidden] { display: none; }
+  .op-btns .btn { flex: 1; }
+  .btn.alt { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line); }
+  .op-note { font-size: 12.5px; color: var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+
   .toast {
     position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
     background: #111b21; color: #fff; padding: 9px 15px; border-radius: 8px;
@@ -255,6 +350,7 @@
           <small id="tPhone"></small>
         </div>
         <span class="win" id="tWin">—</span>
+        <button class="add-order" id="addOrderBtn" title="She ordered in this chat — enter it so she gets the same bill as a Shopify order">+ Order</button>
       </div>
       <div class="ctx" id="tCtx" hidden></div>
       <div id="msgs"></div>
@@ -269,6 +365,58 @@
     </div>
   </main>
 </div>
+
+<!-- ======================= ADD ORDER ======================= -->
+<div id="opShade" hidden></div>
+<aside id="orderPanel" hidden aria-labelledby="opTitle" role="dialog">
+  <div class="op-head">
+    <h3 id="opTitle">New order<small id="opWho"></small></h3>
+    <button class="op-x" id="opClose" aria-label="Close">×</button>
+  </div>
+
+  <!-- step 1: build the order -->
+  <div class="op-body" id="opForm">
+    <label class="op-label" for="opName">Customer name</label>
+    <input class="field" id="opName" maxlength="80" placeholder="Name for the bill">
+
+    <label class="op-label" for="opAt">She ordered at (Karachi time)</label>
+    <div class="op-row">
+      <input class="field" type="datetime-local" id="opAt">
+      <button class="ghost" id="opNow" type="button">Now</button>
+    </div>
+    <p class="op-hint">Filled from her last message. This decides the delivery day, not the time you type it in.</p>
+    <div class="op-deliv" id="opDeliv">…</div>
+
+    <label class="op-label" for="opSearch">Add products</label>
+    <input class="field" id="opSearch" placeholder="Search: aloo, tamatar, ٹماٹر, mango…" autocomplete="off">
+    <div class="op-results" id="opResults"></div>
+
+    <div class="op-bag">
+      <h4>Her order</h4>
+      <div id="opLines"></div>
+      <div class="op-tot" id="opTot"></div>
+    </div>
+  </div>
+
+  <!-- step 2: saved, show what she will read -->
+  <div class="op-body" id="opDone" hidden>
+    <div class="op-ok" id="opOk"></div>
+    <label class="op-label">Message for the customer</label>
+    <div class="op-preview" id="opPreview" dir="auto"></div>
+    <div class="op-note" id="opWinNote" hidden></div>
+  </div>
+
+  <div class="op-foot">
+    <p class="op-err" id="opErr"></p>
+    <div class="op-btns" id="opFormBtns">
+      <button class="btn" id="opSave" disabled>Save order</button>
+    </div>
+    <div class="op-btns" id="opDoneBtns" hidden>
+      <button class="btn alt" id="opCopy">Copy text</button>
+      <button class="btn" id="opSend">Send to customer</button>
+    </div>
+  </div>
+</aside>
 
 <script>
 // ===========================================================================
@@ -468,6 +616,8 @@ $('filterBtn').addEventListener('click', (e) => {
 // THREAD
 // ===========================================================================
 async function openThread(phone, keepScroll = false) {
+  // An order half-typed for one customer must never be saved against another.
+  if (O.phone && O.phone !== phone) closeOrderPanel(true);
   S.phone = phone;
   $('placeholder').hidden = true;
   $('threadView').hidden = false;
@@ -478,6 +628,9 @@ async function openThread(phone, keepScroll = false) {
 
   const { ok, data } = await api('/api/inbox/thread/' + encodeURIComponent(phone));
   if (!ok) return;
+
+  if (phone !== S.phone) return;   // she clicked another chat while this loaded
+  S.thread = data;
 
   const c = data.conversation || {};
   $('tName').textContent = c.display_name || '+' + phone;
@@ -711,6 +864,384 @@ async function sendTemplate(name) {
   openThread(S.phone, true);
   loadConvs();
 }
+
+// ===========================================================================
+// ADD ORDER
+//
+// A customer who writes "2 kilo aloo, aadha kilo adrak" gets exactly what a
+// Shopify customer gets: a delivery day from the time SHE ordered, the ASB
+// rate as her "zyada se zyada", the bazaar rate beside it, and later the
+// final bill. The server does the pricing and the maths; this panel only
+// collects what she asked for and shows the message before it goes.
+// ===========================================================================
+const O = {
+  phone: null,
+  key: null,             // one per panel: a double-click saves once
+  catalogue: [],
+  bySku: new Map(),
+  bag: new Map(),        // sku -> packs, in the order they were added
+  sourceWamid: null,
+  saved: null,           // the server's reply once saved
+  delivTimer: null,
+  delivPassed: false,
+};
+
+const PKT_MS = 5 * 60 * 60 * 1000;
+// A real instant -> "2026-10-04T19:50" as a Karachi wall clock, for the
+// datetime-local box. Whatever time zone this laptop or phone is set to.
+const toPktInput = (d) => new Date(new Date(d).getTime() + PKT_MS).toISOString().slice(0, 16);
+// ...and back: the box's value is Karachi time, so say so explicitly.
+const fromPktInput = (v) => (v ? new Date(v + ':00+05:00') : null);
+
+// Same shape as bill.js money(): "Rs 1,240", no paisa.
+const rs = (n) => 'Rs ' + String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+function newKey() {
+  try { return crypto.randomUUID(); } catch (_) {
+    return 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  }
+}
+
+async function openOrderPanel() {
+  if (!S.phone || !S.thread) return;
+  const c = S.thread.conversation || {};
+
+  O.phone = S.phone;
+  O.key = newKey();
+  O.bag = new Map();
+  O.saved = null;
+
+  // Her last message: its time is her order time, its id is the paper trail.
+  const lastIn = [...(S.thread.messages || [])].reverse().find((m) => m.direction === 'inbound' && m.at);
+  O.sourceWamid = lastIn?.wamid || null;
+
+  $('opWho').textContent = '+' + O.phone;
+  $('opName').value = c.display_name || '';
+  const max = toPktInput(Date.now());
+  const min = toPktInput(Date.now() - 7 * 24 * 3600 * 1000);
+  $('opAt').max = max;
+  $('opAt').min = min;
+  $('opAt').value = lastIn ? toPktInput(lastIn.at) : max;
+  $('opSearch').value = '';
+  $('opErr').textContent = '';
+
+  $('opForm').hidden = false;
+  $('opDone').hidden = true;
+  $('opFormBtns').hidden = false;
+  $('opDoneBtns').hidden = true;
+  $('opShade').hidden = false;
+  $('orderPanel').hidden = false;
+
+  refreshDelivery();
+  renderBag();
+
+  // Prices are fetched every time the panel opens - the price can change in
+  // Shopify between two customers.
+  $('opResults').innerHTML = '<div class="op-none">Loading products…</div>';
+  const { ok, data } = await api('/api/inbox/catalogue');
+  if (!ok) { $('opResults').innerHTML = '<div class="op-none">Could not load products.</div>'; return; }
+  O.catalogue = data.products || [];
+  O.bySku = new Map(O.catalogue.map((p) => [p.sku, p]));
+  renderResults();
+  if (innerWidth > 820) $('opSearch').focus();
+}
+
+function closeOrderPanel(force = false) {
+  if (!force && O.bag.size && !O.saved &&
+      !confirm('Close without saving? The products you added will be lost.')) return;
+  $('orderPanel').hidden = true;
+  $('opShade').hidden = true;
+  O.phone = null;
+  O.bag = new Map();
+  O.saved = null;
+}
+
+// ---- delivery day, live, from the order time ------------------------------
+function refreshDelivery() {
+  clearTimeout(O.delivTimer);
+  O.delivTimer = setTimeout(async () => {
+    const at = fromPktInput($('opAt').value);
+    const box = $('opDeliv');
+    if (!at || Number.isNaN(at.getTime())) {
+      box.className = 'op-deliv bad';
+      box.textContent = 'Set the time she ordered.';
+      O.delivPassed = true;
+      return updateSave();
+    }
+    const { ok, data } = await api('/api/inbox/delivery?at=' + encodeURIComponent(at.toISOString()));
+    if (!ok) return;
+    O.delivPassed = Boolean(data.passed);
+    box.className = 'op-deliv' + (data.passed ? ' bad' : '');
+    box.innerHTML = '';
+    const b = document.createElement('b');
+    if (data.passed) {
+      b.textContent = `Delivery ${data.delivery} has already gone.`;
+      box.append(b, document.createElement('br'),
+        'An order from that time is too late for it. Press "Now" to put her on the next delivery.');
+    } else {
+      b.textContent = 'Delivery: ' + data.delivery;
+      box.append(b, document.createElement('br'),
+        `Ordered ${data.ordered} · booking for this delivery closes ${data.cutoff}`);
+    }
+    updateSave();
+  }, 200);
+}
+$('opAt').addEventListener('input', refreshDelivery);
+$('opNow').addEventListener('click', () => {
+  $('opAt').max = toPktInput(Date.now() + 60000);
+  $('opAt').value = toPktInput(Date.now());
+  refreshDelivery();
+});
+
+// ---- product search ------------------------------------------------------
+const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[ً-ٟ]/g, '');
+
+function renderResults() {
+  const q = norm($('opSearch').value.trim());
+  const box = $('opResults');
+  box.innerHTML = '';
+  // Best match first, because Enter adds the top row: "aloo" must be potatoes,
+  // not the Aloo Gosht kit that merely starts with the same word.
+  //   0 = a name IS the search    1 = a name starts with it
+  //   2 = a word in a name starts with it    3 = it appears anywhere
+  const rank = (p) => {
+    let best = 9;
+    for (const f of [p.name_en, p.name_ur, p.name_roman, p.sku]) {
+      const n = norm(f);
+      if (!n) continue;
+      if (n === q) best = Math.min(best, 0);
+      else if (n.startsWith(q)) best = Math.min(best, 1);
+      else if (n.split(/[\s·—-]+/).some((w) => w.startsWith(q))) best = Math.min(best, 2);
+      else if (n.includes(q)) best = Math.min(best, 3);
+    }
+    return best;
+  };
+  const hits = !q ? O.catalogue : O.catalogue
+    .map((p, i) => ({ p, i, r: rank(p) }))
+    .filter((h) => h.r < 9)
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((h) => h.p);
+
+  if (!hits.length) {
+    const d = document.createElement('div');
+    d.className = 'op-none';
+    d.textContent = q ? 'Nothing matches. Out-of-season items (Rs 0 in Shopify) are not listed.' : 'No products on sale.';
+    box.appendChild(d);
+    return;
+  }
+  for (const p of hits) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'op-item';
+    b.innerHTML = `
+      <span class="op-name"><span class="op-ur" dir="auto"></span><span class="op-en"></span></span>
+      <span class="op-in"></span>
+      <span class="op-price"><span class="p"></span><small></small></span>`;
+    b.querySelector('.op-ur').textContent = p.name_ur || p.name_en;
+    b.querySelector('.op-en').textContent = p.name_en + (p.name_roman ? ' · ' + p.name_roman : '');
+    b.querySelector('.op-price .p').textContent = `${rs(p.asb_price)} / ${p.pack_label}`;
+    b.querySelector('.op-price small').textContent =
+      p.market_price ? `bazaar ${rs(p.market_price)}` : '';
+    const inBag = O.bag.get(p.sku);
+    b.querySelector('.op-in').textContent = inBag ? '✓ ' + inBag : '';
+    b.addEventListener('click', () => {
+      O.bag.set(p.sku, (O.bag.get(p.sku) || 0) + 1);
+      renderBag();
+      renderResults();
+    });
+    box.appendChild(b);
+  }
+}
+$('opSearch').addEventListener('input', renderResults);
+$('opSearch').addEventListener('keydown', (e) => {
+  // Enter adds the top match - fast when she lists ten things in one message.
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const first = $('opResults').querySelector('.op-item');
+  if (first) { first.click(); $('opSearch').select(); }
+});
+
+// ---- her order -----------------------------------------------------------
+function setPacks(sku, packs) {
+  const n = Math.round(Number(packs) * 1000) / 1000;
+  if (!(n > 0)) O.bag.delete(sku); else O.bag.set(sku, Math.min(n, 200));
+  renderBag();
+  renderResults();
+}
+
+function renderBag() {
+  const box = $('opLines');
+  box.innerHTML = '';
+  let ceiling = 0, bazaar = 0;
+
+  if (!O.bag.size) {
+    box.innerHTML = '<div class="op-empty">Nothing yet. Search above and tap a product to add it.</div>';
+  }
+  for (const [sku, packs] of O.bag) {
+    const p = O.bySku.get(sku);
+    if (!p) continue;
+    const line = packs * p.asb_price;
+    ceiling += line;
+    bazaar += packs * (p.market_price || p.asb_price);
+
+    const row = document.createElement('div');
+    row.className = 'op-line';
+    row.innerHTML = `
+      <span class="op-name"><span class="op-ur" dir="auto"></span><span class="op-en"></span></span>
+      <span class="op-step">
+        <button type="button" aria-label="Less">−</button>
+        <input type="number" inputmode="decimal" min="0" max="200" step="any">
+        <button type="button" aria-label="More">+</button>
+      </span>
+      <span class="op-lt"></span>`;
+    row.querySelector('.op-ur').textContent = p.name_ur || p.name_en;
+    row.querySelector('.op-en').textContent = `${p.name_en} · × ${p.pack_label} · ${p.rate_label}`;
+    const input = row.querySelector('input');
+    input.value = packs;
+    input.setAttribute('aria-label', `How many ${p.pack_label} of ${p.name_en}`);
+    input.addEventListener('change', () => setPacks(sku, input.value));
+    const [minus, plus] = row.querySelectorAll('button');
+    minus.addEventListener('click', () => setPacks(sku, packs - 1));
+    plus.addEventListener('click', () => setPacks(sku, packs + 1));
+    row.querySelector('.op-lt').textContent = rs(line);
+    box.appendChild(row);
+  }
+
+  const tot = $('opTot');
+  tot.innerHTML = '';
+  if (O.bag.size) {
+    const add = (label, value, cls) => {
+      const d = document.createElement('div');
+      if (cls) d.className = cls;
+      const a = document.createElement('span'); a.textContent = label;
+      const b = document.createElement('span'); b.textContent = value;
+      d.append(a, b);
+      tot.appendChild(d);
+    };
+    add('Avg bazaar rate par', rs(bazaar));
+    add('Zyada se zyada', rs(ceiling), 'big');
+    if (bazaar > ceiling) add('Abhi se bachat', rs(bazaar - ceiling), 'save');
+  }
+  updateSave();
+}
+
+function updateSave() {
+  $('opSave').disabled = !O.bag.size || O.delivPassed || !$('opAt').value;
+}
+
+// ---- save ----------------------------------------------------------------
+$('opSave').addEventListener('click', async () => {
+  const at = fromPktInput($('opAt').value);
+  $('opErr').textContent = '';
+  $('opSave').disabled = true;
+  $('opSave').textContent = 'Saving…';
+
+  let res;
+  try {
+    res = await api('/api/inbox/order', {
+      method: 'POST',
+      body: JSON.stringify({
+        phone: O.phone,
+        name: $('opName').value.trim(),
+        orderedAt: at.toISOString(),
+        lines: [...O.bag].map(([sku, packs]) => ({ sku, packs })),
+        sourceWamid: O.sourceWamid,
+        clientKey: O.key,
+        agent: S.agent,
+      }),
+    });
+  } catch (e) {
+    res = { ok: false, data: { message: 'No connection. Nothing was saved - try again.' } };
+  }
+  $('opSave').textContent = 'Save order';
+
+  if (!res.ok) {
+    $('opErr').textContent = res.data?.message || 'Could not save the order.';
+    if (res.data?.error === 'delivery_passed') refreshDelivery();
+    updateSave();
+    return;
+  }
+  showSaved(res.data);
+  openThread(O.phone, true);   // the order now shows in the bar above the chat
+  loadConvs();
+});
+
+function showSaved(r) {
+  O.saved = r;
+  const ok = $('opOk');
+  ok.innerHTML = '';
+  const b = document.createElement('b');
+  b.textContent = `${r.duplicate ? 'Already saved' : 'Saved'} · ${r.orderNumber}`;
+  ok.append(b, `Delivery ${r.delivery} · zyada se zyada ${rs(r.ceilingTotal)}`);
+  if (r.merged) {
+    ok.append(document.createElement('br'),
+      'She already had an order for this delivery, so these were added to the same bag. The message shows the whole bag.');
+  }
+  $('opPreview').textContent = r.message;
+
+  const note = $('opWinNote');
+  $('opSend').disabled = !r.windowOpen;
+  if (r.windowOpen) {
+    note.hidden = true;
+  } else {
+    note.hidden = false;
+    note.textContent =
+      'Her 24-hour window is closed, so this cannot go as a normal message. ' +
+      'Copy the text for now; the order itself is saved.';
+  }
+
+  $('opForm').hidden = true;
+  $('opDone').hidden = false;
+  $('opFormBtns').hidden = true;
+  $('opDoneBtns').hidden = false;
+  $('opErr').textContent = '';
+}
+
+$('opCopy').addEventListener('click', async () => {
+  const text = O.saved?.message || '';
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied');
+  } catch (_) {
+    // Clipboard blocked (older phone browsers): select it so a long-press copies.
+    const r = document.createRange();
+    r.selectNodeContents($('opPreview'));
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    toast('Selected - copy it with your keyboard or a long press');
+  }
+});
+
+$('opSend').addEventListener('click', async () => {
+  if (!O.saved || !O.phone) return;
+  $('opSend').disabled = true;
+  $('opSend').textContent = 'Sending…';
+  const phone = O.phone;
+  const { ok, data } = await api('/api/inbox/reply', {
+    method: 'POST',
+    body: JSON.stringify({ phone, body: O.saved.message, agent: S.agent }),
+  });
+  $('opSend').textContent = 'Send to customer';
+  if (!ok) {
+    $('opSend').disabled = false;
+    $('opErr').textContent =
+      (data?.error === 'window_closed'
+        ? 'Her reply window just closed. '
+        : 'WhatsApp did not accept it: ' + (data?.message || 'unknown error') + '. ') +
+      'The order is saved - copy the text and send it by hand.';
+    return;
+  }
+  toast('Bill sent');
+  closeOrderPanel(true);
+  openThread(phone, true);
+  loadConvs();
+});
+
+$('addOrderBtn').addEventListener('click', openOrderPanel);
+$('opClose').addEventListener('click', () => closeOrderPanel());
+$('opShade').addEventListener('click', () => closeOrderPanel());
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('orderPanel').hidden) closeOrderPanel();
+});
 
 // ===========================================================================
 // POLL

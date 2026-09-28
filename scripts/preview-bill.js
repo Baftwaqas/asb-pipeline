@@ -37,7 +37,7 @@ async function main() {
     `SELECT o.id, o.order_number, o.status::text AS status,
             o.ceiling_total, o.billed_total, o.savings_total, o.grand_total,
             o.market_total, o.community_total,
-            cy.code AS cycle_code,
+            cy.code AS cycle_code, cy.delivery_date, o.placed_at,
             COALESCE(c.name, 'Customer') AS customer_name,
             c.phone
        FROM orders o
@@ -59,6 +59,7 @@ async function main() {
             oi.qty_ordered, oi.qty_packed,
             oi.ceiling_unit_price, oi.final_unit_price, oi.billed_unit_price,
             oi.market_unit_price, oi.market_line_total, oi.community_savings,
+            p.min_qty AS pack_size,
             oi.line_total, oi.ceiling_line_total, oi.line_savings
        FROM order_items oi
        JOIN products p ON p.id = oi.product_id

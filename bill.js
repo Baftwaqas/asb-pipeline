@@ -58,23 +58,38 @@ const SPOKEN_GRAMS = {
   250: "pao",
   500: "aadha kg",
   750: "pauna kg",
-  1000: "1 kg",
 };
 
 /**
  * "1 kg" · "aadha kg" · "1 darjan" · "2 gaddi"
- * Trailing zeros are dropped: 1.000 reads as 1, 0.950 reads as 0.95.
+ *
+ * PACK SIZE MATTERS, and getting this wrong put "1 g" of spinach on a test
+ * bill. Shopify sells a PACK: spinach is a 500 g bag, so an order for one bag
+ * arrives as quantity 1 while the product's unit is 'g'. Rendering the raw
+ * quantity reads as one gram.
+ *
+ * So the phrase is built from the TOTAL: packs x pack size. One bag of spinach
+ * is "aadha kg"; two bags are "1 kg"; two 1 kg mangoes are "2 kg". The rate
+ * beside it stays per pack, which keeps the arithmetic on the line honest -
+ * "1 kg x Rs 50 = Rs 100" is exactly what two half-kilo bags cost.
+ *
+ * packSize comes from products.min_qty. When it is missing the quantity is
+ * used as-is, which is the old behaviour and correct for anything sold singly.
  */
-function qtyPhrase(qty, unit) {
-  const n = Number(qty);
+function qtyPhrase(qty, unit, packSize) {
+  const packs = Number(qty);
+  const size = Number(packSize) > 0 ? Number(packSize) : 1;
+  const total = packs * size;
   const word = UNIT_WORD[unit] || unit;
 
   if (unit === "g") {
-    const spoken = SPOKEN_GRAMS[n];
+    const spoken = SPOKEN_GRAMS[total];
     if (spoken) return spoken;
-    return `${trimNum(n)} g`;
+    // Past a kilo, people say kilos.
+    if (total >= 1000) return `${trimNum(total / 1000)} kg`;
+    return `${trimNum(total)} g`;
   }
-  return `${trimNum(n)} ${word}`;
+  return `${trimNum(total)} ${word}`;
 }
 
 function trimNum(n) {
@@ -94,6 +109,67 @@ function money(n) {
   return "Rs " + String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+
+/**
+ * The rate as a customer reads it on a paper bill.
+ *
+ * Weight goods are quoted PER KG, whatever the pack size. Without this the
+ * line "1 kg x Rs 50 = Rs 100" appears for two 500 g bags of spinach - the
+ * rate is per bag but sits next to the total weight, and the multiplication
+ * on the customer's own line does not add up. Per kg it reads
+ * "1 kg x Rs 100/kg = Rs 100", which does.
+ *
+ * Everything sold by count (gaddi, darjan, adad, packet) keeps its per-unit
+ * rate, because there the pack IS the unit.
+ */
+function ratePhrase(ratePerPack, unit, packSize) {
+  const r = Number(ratePerPack);
+  const size = Number(packSize) > 0 ? Number(packSize) : 1;
+  if (unit === "g") return `${money((r / size) * 1000)}/kg`;
+  if (unit === "kg") return `${money(r / size)}/kg`;
+  return money(r);
+}
+
+
+// Day and month names exactly as Waqas writes them to customers:
+// "Monday, 5 October". Everyone reads these; no translation needed.
+const DAY = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH = ["January","February","March","April","May","June","July",
+               "August","September","October","November","December"];
+const PKT_OFFSET_MS = 5 * 60 * 60 * 1000; // Pakistan: UTC+5 all year, no DST
+
+/** "Monday, 5 October" from a DATE value ('2026-10-05' or a Date). */
+function deliveryPhrase(d) {
+  if (!d) return null;
+  const iso = d instanceof Date
+    ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`
+    : String(d).slice(0, 10);
+  const [y, m, day] = iso.split("-").map(Number);
+  if (!y || !m || !day) return null;
+  // A calendar date has no time zone; read it at UTC noon so no offset can
+  // tip it into the neighbouring day.
+  const dow = new Date(Date.UTC(y, m - 1, day, 12)).getUTCDay();
+  return `${DAY[dow]}, ${day} ${MONTH[m - 1]}`;
+}
+
+/**
+ * "Saturday, 3 October, 9:00 PM" - when the customer placed the order, in
+ * Karachi time whatever time zone the server runs in. This is the moment that
+ * decides her delivery day, so it is printed right above it: she can see for
+ * herself why a Sunday 8:15pm order arrives on Thursday, not Monday.
+ */
+function orderedPhrase(ts) {
+  if (!ts) return null;
+  const t = ts instanceof Date ? ts : new Date(ts);
+  if (Number.isNaN(t.getTime())) return null;
+  const k = new Date(t.getTime() + PKT_OFFSET_MS);
+  const h24 = k.getUTCHours();
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const mm = String(k.getUTCMinutes()).padStart(2, "0");
+  return `${DAY[k.getUTCDay()]}, ${k.getUTCDate()} ${MONTH[k.getUTCMonth()]}, ` +
+         `${h12}:${mm} ${h24 < 12 ? "AM" : "PM"}`;
+}
+
 /** Name the customer recognises: Urdu if we have it, English otherwise. */
 function productLabel(line) {
   return (line.name_ur && line.name_ur.trim()) || line.name_en || line.sku;
@@ -108,15 +184,19 @@ function productLabel(line) {
 // ---------------------------------------------------------------------------
 function orderConfirmation(order) {
   const name = firstName(order.customer_name);
+  const delivery = deliveryPhrase(order.delivery_date);
+  const ordered = orderedPhrase(order.ordered_at || order.placed_at);
 
   const lines = (order.lines || []).map((l) => {
-    const qty = qtyPhrase(l.qty_ordered, l.unit);
-    const rate = money(l.ceiling_unit_price);
+    const qty = qtyPhrase(l.qty_ordered, l.unit, l.pack_size);
+    const rate = ratePhrase(l.ceiling_unit_price, l.unit, l.pack_size);
     const total = money(Number(l.qty_ordered) * Number(l.ceiling_unit_price));
     // The bazaar rate only prints when we actually have one AND it is higher.
     // A missing rate prints nothing rather than implying parity.
     const mkt = Number(l.market_unit_price || 0);
-    const bazaar = mkt > Number(l.ceiling_unit_price) ? money(mkt) : null;
+    const bazaar = mkt > Number(l.ceiling_unit_price)
+      ? ratePhrase(mkt, l.unit, l.pack_size)
+      : null;
     return { label: productLabel(l), qty, rate, total, bazaar };
   });
 
@@ -126,12 +206,12 @@ function orderConfirmation(order) {
 
   const body = lines.map((l) =>
     l.bazaar
-      ? `${l.label} · ${l.qty} × ${l.rate} = ${l.total} (bazaar ${l.bazaar})`
+      ? `${l.label} · ${l.qty} × ${l.rate} = ${l.total} (Avg bazaar rate ${l.bazaar})`
       : `${l.label} · ${l.qty} × ${l.rate} = ${l.total}`
   );
   const bodyFlat = lines.map((l) =>
     l.bazaar
-      ? `${l.label} ${l.qty} × ${l.rate} = ${l.total} (bazaar ${l.bazaar})`
+      ? `${l.label} ${l.qty} × ${l.rate} = ${l.total} (Avg bazaar rate ${l.bazaar})`
       : `${l.label} ${l.qty} × ${l.rate} = ${l.total}`
   );
 
@@ -140,7 +220,7 @@ function orderConfirmation(order) {
   // met, or on anything that can still go wrong.
   const savingBlock = communitySaved > 0
     ? [
-        `Bazaar mein yehi saman: ${money(market)}`,
+        `Avg bazaar rate par yehi saman: ${money(market)}`,
         `Zyada se zyada aap denge: *${money(ceiling)}*`,
         `Abhi se bachat: *${money(communitySaved)}* ✅`,
       ]
@@ -149,14 +229,15 @@ function orderConfirmation(order) {
   const rich = [
     `Assalam-o-Alaikum ${name} 🌿`,
     `Aap ka order mil gaya — *${order.order_number}*`,
+    ...(ordered ? [`Order diya: ${ordered}`] : []),
+    ...(delivery ? [`Delivery: *${delivery}*`] : []),
     ``,
     ...body,
     ``,
     ...savingBlock,
     ``,
     `Is se zyada aap kabhi nahi denge — ye hamara wada hai.`,
-    `Mandi se saman lane ke baad asal wazan aur asal rate ka`,
-    `bill bhejenge. Rate aur kam hua to aap aur kam denge.`,
+    `Delivery ke din rate aur kam hua to aap aur kam denge.`,
     ``,
     `Apna Sasta Bazaar`,
   ].join("\n");
@@ -168,6 +249,8 @@ function orderConfirmation(order) {
     params: {
       customer_name: name,
       order_id: order.order_number,
+      ordered: ordered || "-",
+      delivery: delivery || "-",
       order_items: bodyFlat.join(" • "),
       bazaar_total: money(market),
       zyada_se_zyada: money(ceiling),
@@ -198,9 +281,9 @@ function finalBill(order) {
 
     return {
       label: productLabel(l),
-      qty: qtyPhrase(qty, l.unit),
-      rate: money(billedRate),
-      wasRate: money(ceilingRate),
+      qty: qtyPhrase(qty, l.unit, l.pack_size),
+      rate: ratePhrase(billedRate, l.unit, l.pack_size),
+      wasRate: ratePhrase(ceilingRate, l.unit, l.pack_size),
       total: money(lineTotal),
       cheaper,
       reweighed,
@@ -229,12 +312,12 @@ function finalBill(order) {
   // So the flat form drops the inner dot.
   const body = lines.map((l) =>
     l.cheaper
-      ? `${l.label} · ${l.qty} × ${l.rate} = ${l.total} (tha ${l.wasRate})`
+      ? `${l.label} · ${l.qty} × ${l.rate} = ${l.total} (pehlay tha ${l.wasRate})`
       : `${l.label} · ${l.qty} × ${l.rate} = ${l.total}`
   );
   const bodyFlat = lines.map((l) =>
     l.cheaper
-      ? `${l.label} ${l.qty} × ${l.rate} = ${l.total} (tha ${l.wasRate})`
+      ? `${l.label} ${l.qty} × ${l.rate} = ${l.total} (pehlay tha ${l.wasRate})`
       : `${l.label} ${l.qty} × ${l.rate} = ${l.total}`
   );
 
@@ -250,7 +333,7 @@ function finalBill(order) {
   // everything and cannot be misread.
   const tail = [`Asal bill: *${money(billed)}*`];
 
-  if (market > billed) tail.push(`Bazaar mein yehi saman: ${money(market)}`);
+  if (market > billed) tail.push(`Avg bazaar rate par yehi saman: ${money(market)}`);
 
   if (saved > 0) {
     tail.push(`Aap ki kul bachat: *${money(saved)}* 🎉`);
@@ -265,7 +348,7 @@ function finalBill(order) {
   if (mandiSaved === 0 && communitySaved > 0) {
     tail.push(``);
     tail.push(`Is dafa mandi ka rate wohi raha, is liye ASB rate hi laga —`);
-    tail.push(`lekin bazaar se aap ne phir bhi ${money(communitySaved)} kam diye.`);
+    tail.push(`lekin avg bazaar rate se aap ne phir bhi ${money(communitySaved)} kam diye.`);
   }
 
   const reweighedAny = lines.some((l) => l.reweighed);
@@ -328,5 +411,8 @@ module.exports = {
   templateSafe,
   // exported for tests
   qtyPhrase,
+  ratePhrase,
+  deliveryPhrase,
+  orderedPhrase,
   money,
 };

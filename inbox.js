@@ -18,6 +18,9 @@
 //   POST /api/inbox/template           approved template (works any time)
 //   POST /api/inbox/handled            clear the unread badge
 //   GET  /api/inbox/media/:id          stream an inbound photo or voice note
+//   GET  /api/inbox/catalogue          products on sale, for the order panel
+//   GET  /api/inbox/delivery?at=ISO    which delivery an order placed then gets
+//   POST /api/inbox/order              save an order taken on WhatsApp
 //
 // AUTH: one shared password (INBOX_PASSWORD) traded for an HMAC-signed,
 // HttpOnly cookie. Two people, one warehouse — per-user accounts would be
@@ -30,6 +33,9 @@ const crypto = require("crypto");
 const path = require("path");
 const db = require("./db");
 const wa = require("./whatsapp");
+const bill = require("./bill");
+const schedule = require("./schedule");
+const orders = require("./orders");
 
 const router = express.Router();
 
@@ -429,6 +435,203 @@ router.get("/api/inbox/media/:id", requireAuth, async (req, res) => {
   } catch (e) {
     console.error("[inbox] media proxy failed:", e.message);
     res.status(502).send("Could not fetch media");
+  }
+});
+
+// ============================================================================
+// ORDERS TAKEN ON WHATSAPP
+//
+// A customer writes "2 kilo tamatar, 1 gaddi dhania" to the business number.
+// Whoever is on the inbox picks the products and quantities; the order then
+// follows exactly the rules a Shopify order follows (orders.js): delivery day
+// from the booking calendar, one bag per household per delivery, the same
+// ceiling for the same product on the same delivery, the same bill.
+// ============================================================================
+
+const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+const todayPKT = () => new Date(Date.now() + PKT_OFFSET_MS).toISOString().slice(0, 10);
+
+// ---------------------------------------------------------------------------
+// Products on sale, for the picker. Only what has an ASB price today: a
+// product Shopify shows at Rs 0 is out of season and cannot be ordered.
+// ---------------------------------------------------------------------------
+router.get("/api/inbox/catalogue", requireAuth, async (_req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT sku, name_en, name_ur, name_roman, category, unit::text AS unit,
+              min_qty AS pack_size, asb_price, market_price, sort_order
+         FROM products
+        WHERE is_active AND asb_price > 0
+        ORDER BY category, sort_order, name_en`
+    );
+    // Labels come from bill.js so the panel says "aadha kg" and "Rs 320/kg"
+    // exactly as the customer's bill will - one copy of that logic, not two.
+    res.json({
+      products: rows.map((p) => ({
+        ...p,
+        asb_price: Number(p.asb_price),
+        market_price: p.market_price == null ? null : Number(p.market_price),
+        pack_label: bill.qtyPhrase(1, p.unit, p.pack_size),
+        rate_label: bill.ratePhrase(p.asb_price, p.unit, p.pack_size),
+      })),
+    });
+  } catch (e) {
+    console.error("[inbox] catalogue failed:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// "If she ordered at this time, when does it arrive?" - so the panel can show
+// the delivery day while the order is being typed, before anything is saved.
+// ---------------------------------------------------------------------------
+router.get("/api/inbox/delivery", requireAuth, (req, res) => {
+  const at = req.query.at ? new Date(String(req.query.at)) : new Date();
+  if (Number.isNaN(at.getTime())) return res.status(400).json({ error: "Bad time" });
+  const slot = schedule.deliveryFor(at);
+  res.json({
+    ordered: bill.orderedPhrase(at),
+    delivery: bill.deliveryPhrase(slot.deliveryDate),
+    deliveryDate: slot.deliveryDate,
+    cutoff: bill.orderedPhrase(slot.locksAt),
+    passed: slot.deliveryDate <= todayPKT(),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Save an order typed in from a WhatsApp conversation.
+//
+// body: {
+//   phone, name,
+//   orderedAt   when the CUSTOMER ordered (her message time, not now) - this
+//               decides the delivery day, so staff taking an hour to get to
+//               the message never pushes her to the next delivery
+//   lines       [{ sku, packs }]
+//   sourceWamid the message the order was read from
+//   clientKey   one per order panel; a double-click saves once
+//   agent
+// }
+//
+// Replies with the confirmation text. Sending it is a separate, deliberate
+// click, so the person at the inbox reads what the customer will read first.
+// ---------------------------------------------------------------------------
+router.post("/api/inbox/order", requireAuth, express.json(), async (req, res) => {
+  const b = req.body || {};
+  const phone = normalizePhone(b.phone);
+  const name = String(b.name || "").trim().slice(0, 80) || null;
+  const agent = String(b.agent || "asb").slice(0, 40);
+  const clientKey = String(b.clientKey || "").slice(0, 80);
+  const sourceWamid = b.sourceWamid ? String(b.sourceWamid).slice(0, 200) : null;
+
+  if (!phone) return res.status(400).json({ error: "bad_phone", message: "No valid phone number." });
+  if (!clientKey) return res.status(400).json({ error: "no_key", message: "Missing form key; reload the page." });
+
+  // --- order time ------------------------------------------------------------
+  const orderedAt = new Date(String(b.orderedAt || ""));
+  if (Number.isNaN(orderedAt.getTime())) {
+    return res.status(400).json({ error: "bad_time", message: "Order time is missing or not a valid time." });
+  }
+  if (orderedAt.getTime() > Date.now() + 5 * 60 * 1000) {
+    return res.status(400).json({ error: "future_time", message: "Order time is in the future." });
+  }
+  if (orderedAt.getTime() < Date.now() - 7 * 24 * 3600 * 1000) {
+    return res.status(400).json({ error: "old_time", message: "Order time is more than a week ago." });
+  }
+  const slot = schedule.deliveryFor(orderedAt);
+  if (slot.deliveryDate <= todayPKT()) {
+    return res.status(409).json({
+      error: "delivery_passed",
+      message:
+        `An order placed ${bill.orderedPhrase(orderedAt)} was for ` +
+        `${bill.deliveryPhrase(slot.deliveryDate)}, which is today or already gone. ` +
+        `Set the order time to now to put it on the next delivery.`,
+    });
+  }
+
+  // --- lines -----------------------------------------------------------------
+  const raw = Array.isArray(b.lines) ? b.lines : [];
+  const merged = new Map();
+  for (const l of raw) {
+    const sku = String(l?.sku || "").trim();
+    const packs = Number(l?.packs);
+    if (!sku) continue;
+    if (!(packs > 0) || packs > 200 || Math.round(packs * 1000) !== packs * 1000) {
+      return res.status(400).json({ error: "bad_qty", message: `Quantity for ${sku} must be between 0 and 200.` });
+    }
+    merged.set(sku, (merged.get(sku) || 0) + packs);
+  }
+  const lines = [...merged].map(([sku, packs]) => ({ sku, packs }));
+  if (!lines.length) return res.status(400).json({ error: "no_lines", message: "Add at least one product." });
+  if (lines.length > 60) return res.status(400).json({ error: "too_many", message: "More than 60 products in one order." });
+
+  try {
+    const result = await db.tx(async (client) => {
+      // Insert-first dedupe, the same trick the Shopify webhook uses: the
+      // unique (source, event_id) row means a double-click or a retried
+      // request cannot save the order twice and double every quantity.
+      const key = await client.query(
+        `INSERT INTO webhook_events (source, event_id, topic, payload)
+         VALUES ('inbox', $1, 'order/create', $2)
+         ON CONFLICT (source, event_id) DO NOTHING
+         RETURNING id`,
+        [clientKey, { phone, lines, orderedAt, agent }]
+      );
+      if (!key.rows.length) {
+        const prev = await client.query(
+          `SELECT payload->>'order_id' AS order_id FROM webhook_events
+            WHERE source = 'inbox' AND event_id = $1`,
+          [clientKey]
+        );
+        return { duplicate: true, orderId: Number(prev.rows[0]?.order_id) || null };
+      }
+
+      const saved = await orders.saveInboxOrder(client, {
+        phone, name, orderedAt, lines, enteredBy: agent, sourceWamid,
+      });
+
+      await client.query(
+        `UPDATE webhook_events
+            SET status = 'processed', processed_at = now(), attempts = attempts + 1,
+                payload = payload || jsonb_build_object('order_id', $2::bigint,
+                                                        'order_number', $3::text)
+          WHERE id = $1`,
+        [key.rows[0].id, saved.orderId, saved.orderNumber]
+      );
+      return saved;
+    });
+
+    if (!result.orderId) {
+      return res.status(409).json({ error: "duplicate", message: "This order was already saved." });
+    }
+
+    const forBill = await orders.loadOrderForBill(db, result.orderId);
+    forBill.ordered_at = orderedAt;
+    const composed = bill.orderConfirmation(forBill);
+
+    const conv = await db.query(
+      `SELECT window_open FROM asb_conversations WHERE phone = $1`, [phone]
+    ).catch(() => ({ rows: [] }));
+
+    console.log(
+      `[inbox] ${agent} ${result.duplicate ? "re-submitted" : "saved"} WhatsApp order ` +
+        `${forBill.order_number} for +${phone}` +
+        `${result.merged ? " (merged into the existing bag)" : ""}`
+    );
+
+    res.json({
+      ok: true,
+      duplicate: Boolean(result.duplicate),
+      merged: Boolean(result.merged),
+      orderNumber: forBill.order_number,
+      delivery: bill.deliveryPhrase(forBill.delivery_date),
+      ceilingTotal: Number(forBill.ceiling_total),
+      message: composed.rich,
+      windowOpen: Boolean(conv.rows[0]?.window_open),
+    });
+  } catch (e) {
+    if (e.userFacing) return res.status(400).json({ error: "rejected", message: e.message });
+    console.error("[inbox] order failed:", e.message);
+    res.status(500).json({ error: "server", message: "Could not save the order. Nothing was saved." });
   }
 });
 

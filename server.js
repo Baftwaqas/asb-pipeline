@@ -30,6 +30,8 @@
 const express = require("express");
 const crypto = require("crypto");
 const db = require("./db");
+const bill = require("./bill");
+const { resolveCycle, upsertCustomer, findOpenOrder, loadOrderForBill } = require("./orders");
 const wa = require("./whatsapp");
 
 const app = express();
@@ -90,47 +92,6 @@ function normalizePhone(raw) {
 // The WARN line is deliberate: provisional cycles need their real
 // lock and delivery times set by hand.
 // ------------------------------------------------------------
-async function resolveCycle(client) {
-  const open = await client.query(
-    `SELECT id, code FROM cycles WHERE status = 'open'
-      ORDER BY cycle_date DESC LIMIT 1`
-  );
-  if (open.rows.length > 0) return open.rows[0];
-
-  const code = "C-AUTO-" + new Date().toISOString().slice(0, 10);
-  const created = await client.query(
-    `INSERT INTO cycles (code, cycle_date, opens_at, locks_at, delivery_date, status, notes)
-     VALUES ($1, CURRENT_DATE, now(), now() + interval '1 day',
-             CURRENT_DATE + 1, 'open',
-             'auto-created by the pipeline - set real lock/delivery times')
-     ON CONFLICT (code) DO UPDATE SET code = EXCLUDED.code
-     RETURNING id, code`,
-    [code]
-  );
-  console.warn(
-    `[db] no open cycle found - created provisional ${created.rows[0].code}. ` +
-      `Set its locks_at / delivery_date before the mandi run.`
-  );
-  return created.rows[0];
-}
-
-// ------------------------------------------------------------
-// Find or create the customer. Phone is the identity.
-// ------------------------------------------------------------
-async function upsertCustomer(client, { phone, name, shopifyCustomerId }) {
-  const { rows } = await client.query(
-    `INSERT INTO customers (phone, name, shopify_customer_id)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (phone) DO UPDATE
-        SET name = COALESCE(customers.name, EXCLUDED.name),
-            shopify_customer_id =
-              COALESCE(customers.shopify_customer_id, EXCLUDED.shopify_customer_id)
-     RETURNING id, name, society_id, badge`,
-    [phone, name || null, shopifyCustomerId ? String(shopifyCustomerId) : null]
-  );
-  return rows[0];
-}
-
 // ------------------------------------------------------------
 // Match a Shopify line item to a product in our catalogue.
 // Try variant id, then SKU, then title. If nothing matches we
@@ -194,7 +155,10 @@ async function resolveProduct(client, item) {
 // ------------------------------------------------------------
 async function persistOrder(order, phone) {
   return db.tx(async (client) => {
-    const cycle = await resolveCycle(client);
+    const cycle = await resolveCycle(
+      client,
+      order.created_at ? new Date(order.created_at) : new Date()
+    );
 
     const firstName =
       order.customer?.first_name || order.shipping_address?.first_name || null;
@@ -211,17 +175,13 @@ async function persistOrder(order, phone) {
     const addr = order.shipping_address || {};
 
     // Is there already a live order for this household this cycle?
-    const existing = await client.query(
-      `SELECT id, order_number FROM orders
-        WHERE customer_id = $1 AND cycle_id = $2 AND status <> 'cancelled'`,
-      [customer.id, cycle.id]
-    );
+    const existing = await findOpenOrder(client, customer.id, cycle.id);
 
     let orderRow;
     let merged = false;
 
-    if (existing.rows.length > 0) {
-      orderRow = existing.rows[0];
+    if (existing) {
+      orderRow = existing;
       merged = true;
       console.log(
         `[db] merging Shopify ${order.name} into existing ${orderRow.order_number}`
@@ -231,8 +191,9 @@ async function persistOrder(order, phone) {
         `INSERT INTO orders (customer_id, cycle_id, society_id, channel, status,
                              shopify_order_id, shopify_order_name,
                              deliver_building, deliver_flat, deliver_note,
-                             source_payload)
-         VALUES ($1, $2, $3, 'shopify', 'confirmed', $4, $5, $6, $7, $8, $9)
+                             source_payload, placed_at)
+         VALUES ($1, $2, $3, 'shopify', 'confirmed', $4, $5, $6, $7, $8, $9,
+                 COALESCE($10::timestamptz, now()))
          ON CONFLICT (shopify_order_id) DO NOTHING
          RETURNING id, order_number`,
         [
@@ -245,6 +206,9 @@ async function persistOrder(order, phone) {
           addr.address1 || null,
           order.note || null,
           order,
+          // When the customer ordered, per Shopify. A retried webhook can
+          // arrive hours later; the bill must show the real order time.
+          order.created_at || null,
         ]
       );
 
@@ -326,10 +290,12 @@ async function persistOrder(order, phone) {
       orderId: orderRow.id,
       customerId: customer.id,
       cycleCode: cycle.code,
+      deliveryDay: cycle.deliveryDay,
       ...totals.rows[0],
     };
   });
 }
+
 
 // ------------------------------------------------------------
 // Log an outbound WhatsApp send against the order.
@@ -731,7 +697,7 @@ app.post("/webhooks/shopify", async (req, res) => {
         return;
       }
       console.log(
-        `   Saved as ${saved.order_number} in cycle ${saved.cycleCode}` +
+        `   Saved as ${saved.order_number} for ${saved.deliveryDay} delivery (${saved.cycleCode})` +
           `${saved.merged ? " (merged)" : ""}, ceiling Rs ${saved.ceiling_total}`
       );
     } catch (e) {
@@ -741,12 +707,48 @@ app.post("/webhooks/shopify", async (req, res) => {
       // and the raw payload is safe in webhook_events for a later backfill.
     }
 
+    // --- compose the message ---
+    //
+    // Built from the saved order when we have one. If the DB write failed we
+    // fall back to the raw Shopify payload rather than sending nothing: an
+    // improvised confirmation beats silence for the customer, and the payload
+    // is safe in webhook_events for a later backfill.
+    let composed = null;
+    if (saved?.orderId) {
+      try {
+        const forBill = await loadOrderForBill(db, saved.orderId);
+        if (forBill) {
+          // On a merge the saved order carries the FIRST order's time. The
+          // message confirms THIS order, so it states this order's time.
+          forBill.ordered_at = order.created_at || forBill.placed_at;
+          composed = bill.orderConfirmation(forBill);
+        }
+      } catch (e) {
+        console.error(`   Could not compose bill for ${orderName}:`, e.message);
+      }
+    }
+
+    // Print the exact customer-facing text to the log. This is how the message
+    // can be read and checked while outbound sending is still blocked.
+    if (composed) {
+      console.log("   --- message the customer would receive ---");
+      for (const ln of composed.rich.split("\n")) console.log("   " + ln);
+      console.log("   ------------------------------------------");
+    }
+
+    // Template parameters reject newlines, tabs and long runs of spaces, so the
+    // single-line form goes on the wire. Guard it rather than trusting it.
+    const itemsParam = composed
+      ? bill.templateSafe(composed.params.order_items).value
+      : (items || "-");
+    const maxBillParam = composed ? composed.params.zyada_se_zyada : `Rs ${totalPKR}`;
+
     // --- tell the customer ---
     const result = await wa.sendTemplate(phone, "order_confirmed", [
       { name: "customer_name", value: firstName },
       { name: "order_id", value: saved?.order_number || orderName },
-      { name: "order_items", value: items || "-" },
-      { name: "max_bill", value: totalPKR },
+      { name: "order_items", value: itemsParam },
+      { name: "max_bill", value: maxBillParam },
     ]);
 
     await logOutbound({
@@ -755,9 +757,10 @@ app.post("/webhooks/shopify", async (req, res) => {
       orderId: saved?.orderId,
       phone,
       template: "order_confirmed",
-      preview:
-        `Order ${saved?.order_number || orderName} confirmed for ${firstName} — ` +
-        `${items || "-"} · max Rs ${totalPKR}`,
+      preview: composed
+        ? composed.rich
+        : `Order ${saved?.order_number || orderName} confirmed for ${firstName} — ` +
+          `${items || "-"} · max Rs ${totalPKR}`,
       wamid: result.wamid,
       ok: result.ok,
       payload: { order_name: orderName, response: result.data },
