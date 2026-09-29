@@ -28,6 +28,7 @@
 //   POST /api/inbox/broadcast          create + start a rate-list broadcast
 //   GET  /api/inbox/broadcast/:id      progress
 //   POST /api/inbox/broadcast/:id/stop
+//   POST /api/inbox/contacts/import    bring a contact list over (AiSensy)
 //
 // AUTH: one shared password (INBOX_PASSWORD) traded for an HMAC-signed,
 // HttpOnly cookie. Two people, one warehouse — per-user accounts would be
@@ -842,6 +843,63 @@ router.get("/api/inbox/broadcast/:id", requireAuth, async (req, res) => {
 router.post("/api/inbox/broadcast/:id/stop", requireAuth, async (req, res) => {
   await broadcast.stop(db, Number(req.params.id));
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Bring a contact list over from AiSensy (or any other tool).
+//   body: { source: "aisensy", contacts: [{ phone, name, firstSeen, blocked }] }
+// Safe to send twice, and in pieces: a number already here keeps its first
+// row (a missing name is filled in). `blocked` numbers are also put on the
+// opt-out list so a rate list never reaches them.
+// ---------------------------------------------------------------------------
+router.post("/api/inbox/contacts/import", requireAuth, express.json({ limit: "3mb" }), async (req, res) => {
+  const b = req.body || {};
+  const source = String(b.source || "import").replace(/[^\w-]/g, "").slice(0, 30) || "import";
+  const list = Array.isArray(b.contacts) ? b.contacts.slice(0, 20000) : [];
+  const phones = [], names = [], seen = [], blocked = [];
+  const done = new Set();
+  let bad = 0;
+  for (const c of list) {
+    let d = String((c && c.phone) || "").replace(/\D/g, "");
+    if (d.startsWith("00")) d = d.slice(2);
+    if (d.startsWith("0")) d = "92" + d.slice(1);
+    if (d.length === 10 && d.startsWith("3")) d = "92" + d;
+    if (d.length < 8 || d.length > 15 || done.has(d)) { bad += d.length < 8 || d.length > 15 ? 1 : 0; continue; }
+    done.add(d);
+    const t = c.firstSeen ? new Date(c.firstSeen) : null;
+    phones.push(d);
+    names.push(c.name ? String(c.name).trim().slice(0, 80) || null : null);
+    seen.push(t && !isNaN(t) ? t.toISOString() : null);
+    if (c.blocked) blocked.push(d);
+  }
+  try {
+    const out = await db.tx(async (client) => {
+      const ins = await client.query(
+        `INSERT INTO marketing_contacts (phone, name, source, first_seen)
+         SELECT p, n, $4, s::timestamptz FROM unnest($1::text[], $2::text[], $3::text[]) AS x(p, n, s)
+         ON CONFLICT (phone) DO UPDATE
+           SET name = COALESCE(marketing_contacts.name, EXCLUDED.name)
+         RETURNING (xmax = 0) AS inserted`,
+        [phones, names, seen, source]
+      );
+      const opt = await client.query(
+        `INSERT INTO marketing_opt_outs (phone, source)
+         SELECT unnest($1::text[]), $2 ON CONFLICT (phone) DO NOTHING`,
+        [blocked, `${source}_blocked`]
+      );
+      return { added: ins.rows.filter((r) => r.inserted).length, optedOut: opt.rowCount };
+    });
+    const { rows } = await db.query(`SELECT count(*)::int AS n FROM marketing_contacts`);
+    console.log(`[inbox] contacts import (${source}): ${phones.length} received, ${out.added} new, ${out.optedOut} blocked`);
+    res.json({ ok: true, received: phones.length, added: out.added, alreadyHere: phones.length - out.added,
+               blockedAdded: out.optedOut, unreadable: bad, totalContacts: rows[0].n });
+  } catch (e) {
+    const missing = /does not exist/.test(e.message);
+    res.status(missing ? 503 : 500).json({
+      error: missing ? "not_migrated" : "server",
+      message: missing ? "Run the database update first: node scripts/migrate.js" : e.message,
+    });
+  }
 });
 
 module.exports = router;

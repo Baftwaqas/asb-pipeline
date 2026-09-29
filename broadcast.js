@@ -61,8 +61,9 @@ async function handleOptWords(db, phone, text) {
 
 // ---------------------------------------------------------------------------
 // Who a broadcast can go to: every customer we have a proper Pakistani mobile
-// number for, and everyone who has ever messaged the business number. Numbers
-// pasted in by hand (for example exported from AiSensy) are added on top.
+// number for, everyone who has ever messaged the business number, and the
+// contacts carried over from AiSensy (migration 014). Numbers pasted in by
+// hand are added on top.
 // ---------------------------------------------------------------------------
 async function audience(db) {
   const { rows } = await db.query(
@@ -71,6 +72,8 @@ async function audience(db) {
        UNION
        SELECT DISTINCT phone FROM whatsapp_messages
         WHERE direction = 'inbound' AND phone ~ '^92[0-9]{10}$'
+       UNION
+       SELECT phone FROM marketing_contacts WHERE phone ~ '^92[0-9]{10}$'
      )
      SELECT e.phone, (o.phone IS NOT NULL) AS opted_out
        FROM everyone e

@@ -495,6 +495,9 @@
       <label class="op-label" for="bcExtra">Add more numbers (for example exported from AiSensy)</label>
       <textarea class="field" id="bcExtra" placeholder="0300 1234567, 0321-7654321 …"></textarea>
       <p class="op-hint" id="bcExtraHint"></p>
+      <label class="op-label" style="cursor:pointer;text-decoration:underline" for="bcImportFile">Import a saved contact list (CSV file)</label>
+      <input type="file" id="bcImportFile" accept=".csv,text/csv,text/plain" hidden>
+      <p class="op-hint" id="bcImportMsg"></p>
     </div>
 
     <div id="bcProgress" hidden>
@@ -1500,7 +1503,7 @@ async function openBroadcast(onePhone = null) {
   const b = document.createElement('b');
   b.textContent = data.audience;
   $('bcCount').append(b, ` customers will get it`,
-    data.optedOut ? ` · ${data.optedOut} said STOP and are left out` : '');
+    data.optedOut ? ` · ${data.optedOut} left out (said STOP or blocked)` : '');
   $('bcRecent').innerHTML = '';
   for (const r of data.recent || []) {
     const d = document.createElement('div');
@@ -1524,6 +1527,65 @@ $('bcClose').addEventListener('click', closeBroadcast);
 $('bcDelivery').addEventListener('input', () => { bcPreview(); bcUpdateButtons(); });
 $('bcCutoff').addEventListener('input', () => { bcPreview(); bcUpdateButtons(); });
 $('bcExtra').addEventListener('input', bcUpdateButtons);
+
+// ---------------------------------------------------------------------------
+// Import a contact list file (the one saved from AiSensy, or any CSV with a
+// phone column). The numbers are kept for good, so every later rate list
+// reaches them too. Columns are found by name: phone / Mobile Number, name,
+// first_seen / Created At, blocked (1 = never send them a rate list).
+// ---------------------------------------------------------------------------
+function parseCsv(text) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') q = false;
+      else cell += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter((r) => r.some((c) => c.trim()));
+}
+
+$('bcImportFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  const msg = $('bcImportMsg');
+  const rows = parseCsv((await f.text()).replace(/^﻿/, ''));
+  const head = (rows[0] || []).map((h) => h.trim().toLowerCase());
+  const col = (...names) => head.findIndex((h) => names.includes(h));
+  const iPhone = col('phone', 'mobile number', 'mobile', 'number');
+  if (iPhone < 0) { msg.textContent = 'This file has no "phone" column.'; return; }
+  const iName = col('name'), iSeen = col('first_seen', 'created at'), iBlocked = col('blocked');
+  const contacts = rows.slice(1).map((r) => ({
+    phone: r[iPhone],
+    name: iName >= 0 ? r[iName] : '',
+    firstSeen: iSeen >= 0 ? r[iSeen] : '',
+    blocked: iBlocked >= 0 && /^(1|yes|true|blocked)$/i.test((r[iBlocked] || '').trim()),
+  })).filter((c) => c.phone);
+  if (!contacts.length) { msg.textContent = 'No numbers found in this file.'; return; }
+
+  let added = 0, already = 0, blocked = 0, total = 0;
+  for (let i = 0; i < contacts.length; i += 1000) {
+    msg.textContent = `Importing ${Math.min(i + 1000, contacts.length)} of ${contacts.length}…`;
+    const { ok, data } = await api('/api/inbox/contacts/import', {
+      method: 'POST', body: JSON.stringify({ source: 'aisensy', contacts: contacts.slice(i, i + 1000) }),
+    });
+    if (!ok) { msg.textContent = data?.message || 'Import failed.'; return; }
+    added += data.added; already += data.alreadyHere; blocked += data.blockedAdded; total = data.totalContacts;
+  }
+  msg.textContent = `Done: ${added} new numbers saved` + (already ? `, ${already} were already here` : '') +
+    (blocked ? `, ${blocked} blocked numbers will never get a rate list` : '') + `. ${total} imported contacts in all.`;
+  openBroadcast(B.one);
+});
+
 $('opShade').addEventListener('click', () => { if (!$('bcPanel').hidden) closeBroadcast(); });
 
 // The poster is uploaded to Meta as soon as it is chosen, once, and the same
