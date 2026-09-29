@@ -6,9 +6,14 @@
 // in when sending (server.js, inbox.js). If the wording changes here, the
 // template has to be re-submitted - a template is approved word for word.
 //
-//   asb_order_bill   UTILITY    the bill at checkout ("zyada se zyada")
-//   asb_final_bill   UTILITY    the asal bill after the mandi run
-//   asb_rate_list    MARKETING  the rate-list poster, with booking cut-off
+//   asb_order_bill_v2   UTILITY    the bill at checkout ("zyada se zyada")
+//   asb_final_bill_v2   UTILITY    the asal bill after the mandi run
+//   asb_rate_list_v2    MARKETING  the rate-list poster, with booking cut-off
+//
+// Why "_v2": the first submissions (without the suffix) were deleted by
+// AiSensy on 29 Sep 2026 while it was still a partner on the account. Meta
+// then locks a deleted name for 4 weeks ("existing Urdu content is being
+// deleted"), so the templates were re-submitted under new names.
 //
 // Why templates at all: WhatsApp lets a business send free text only to
 // someone who wrote to it in the last 24 hours. A Shopify customer usually
@@ -35,7 +40,7 @@ const ITEMS_MAX = 620;
 
 const TEMPLATES = {
   orderBill: {
-    name: "asb_order_bill",
+    name: "asb_order_bill_v2",
     language: LANG,
     category: "UTILITY",
     body:
@@ -57,7 +62,7 @@ const TEMPLATES = {
   },
 
   finalBill: {
-    name: "asb_final_bill",
+    name: "asb_final_bill_v2",
     language: LANG,
     category: "UTILITY",
     body:
@@ -77,7 +82,7 @@ const TEMPLATES = {
   },
 
   rateList: {
-    name: "asb_rate_list",
+    name: "asb_rate_list_v2",
     language: LANG,
     category: "MARKETING",
     headerImage: true,
