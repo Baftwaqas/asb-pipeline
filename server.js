@@ -65,7 +65,11 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "asb-verify-2026";
 // ------------------------------------------------------------
 app.use("/webhooks/shopify", express.raw({ type: "application/json" }));
 app.use("/webhooks/whatsapp", express.raw({ type: "application/json" }));
-app.use(express.json());
+// The limit matters: this parser runs before every route, so a per-route
+// express.json({ limit }) further down never gets a say. Pictures sent from
+// the inbox (up to 5 MB, base64) and contact-list imports are far bigger
+// than the 100 KB default, which answered them with "413 Payload Too Large".
+app.use(express.json({ limit: "8mb" }));
 
 // ------------------------------------------------------------
 // Tiny helper: turn any Pakistani phone format into 923001234567
