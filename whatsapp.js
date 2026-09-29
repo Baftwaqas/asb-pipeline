@@ -86,6 +86,14 @@ async function postMessage(body) {
 async function sendTemplate(toPhone, templateName, params = [], opts = {}) {
   const components = [];
 
+  // Image header (the rate-list poster). The id comes from uploadMedia().
+  if (opts.headerImageId) {
+    components.push({
+      type: "header",
+      parameters: [{ type: "image", image: { id: String(opts.headerImageId) } }],
+    });
+  }
+
   if (params.length) {
     components.push({
       type: "body",
@@ -135,6 +143,54 @@ async function sendText(toPhone, bodyText, opts = {}) {
     ...(opts.replyToWamid
       ? { context: { message_id: opts.replyToWamid } }
       : {}),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// uploadMedia — puts an image on Meta's servers and returns its media id.
+//
+// The id can then be sent any number of times (a broadcast uploads the poster
+// once, not once per customer). Meta keeps uploaded media for 30 days.
+// Accepts JPEG and PNG up to 5 MB, which is Meta's limit for images.
+// ---------------------------------------------------------------------------
+async function uploadMedia(buffer, mimeType, filename = "poster.jpg") {
+  if (!PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
+    return { ok: false, id: null, error: "PHONE_NUMBER_ID or WHATSAPP_TOKEN is not set" };
+  }
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", mimeType);
+  form.append("file", new Blob([buffer], { type: mimeType }), filename);
+
+  try {
+    const res = await fetch(`${BASE}/${PHONE_NUMBER_ID}/media`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.id) {
+      const err = data?.error || {};
+      console.error(`[wa] media upload FAILED (${err.code}): ${err.message}`);
+      return { ok: false, id: null, code: err.code || null, error: err.message || `HTTP ${res.status}` };
+    }
+    return { ok: true, id: data.id };
+  } catch (e) {
+    console.error("[wa] media upload transport error:", e.message);
+    return { ok: false, id: null, error: e.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// sendImage — an uploaded image, with an optional caption. Like sendText, only
+// inside the 24h window; outside it, use the asb_rate_list template.
+// ---------------------------------------------------------------------------
+async function sendImage(toPhone, mediaId, caption = "") {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "image",
+    image: { id: String(mediaId), ...(caption ? { caption: String(caption).slice(0, 1024) } : {}) },
   });
 }
 
@@ -226,6 +282,8 @@ function verifySignature(rawBody, signatureHeader) {
 module.exports = {
   sendTemplate,
   sendText,
+  sendImage,
+  uploadMedia,
   markRead,
   getMediaUrl,
   downloadMedia,

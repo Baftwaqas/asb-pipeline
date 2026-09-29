@@ -21,6 +21,13 @@
 //   GET  /api/inbox/catalogue          products on sale, for the order panel
 //   GET  /api/inbox/delivery?at=ISO    which delivery an order placed then gets
 //   POST /api/inbox/order              save an order taken on WhatsApp
+//   POST /api/inbox/send-bill          send a saved order's bill (text or template)
+//   POST /api/inbox/send-image         send a picture into an open chat
+//   GET  /api/inbox/broadcast/setup    audience size + this delivery's wording
+//   POST /api/inbox/broadcast/poster   upload the rate-list poster once
+//   POST /api/inbox/broadcast          create + start a rate-list broadcast
+//   GET  /api/inbox/broadcast/:id      progress
+//   POST /api/inbox/broadcast/:id/stop
 //
 // AUTH: one shared password (INBOX_PASSWORD) traded for an HMAC-signed,
 // HttpOnly cookie. Two people, one warehouse — per-user accounts would be
@@ -36,6 +43,9 @@ const wa = require("./whatsapp");
 const bill = require("./bill");
 const schedule = require("./schedule");
 const orders = require("./orders");
+const notify = require("./notify");
+const broadcast = require("./broadcast");
+const T = require("./templates");
 
 const router = express.Router();
 
@@ -381,29 +391,31 @@ router.post("/api/inbox/template", requireAuth, express.json(), async (req, res)
 // Log a manual send. Separate from server.js's logOutbound because that one is
 // keyed to a Shopify order id; these have no order behind them.
 // ---------------------------------------------------------------------------
-async function logOutbound({ phone, body, agent, template, wamid, ok, payload }) {
+async function logOutbound({ phone, body, agent, template, wamid, ok, payload, mediaId, mediaMime }) {
   try {
     await db.query(
       `INSERT INTO whatsapp_messages
          (idempotency_key, customer_id, phone, direction, body_preview,
           template_name, template_lang, wamid, status, agent, payload,
-          sent_at, received_at, attempts, msg_type)
+          sent_at, received_at, attempts, msg_type, media_id, media_mime)
        VALUES ($1,
                (SELECT id FROM customers WHERE phone = $2),
                $2, 'outbound', $3, $4, $5, $6, $7::msg_status, $8, $9,
-               now(), now(), 1, $10)
+               now(), now(), 1, $10, $11, $12)
        ON CONFLICT (idempotency_key) DO NOTHING`,
       [
         `inbox:${crypto.randomUUID()}`,
         phone,
         body.slice(0, 500),
         template || null,
-        wa.templateLang,
+        template ? T.LANG : null,
         wamid,
         ok ? "sent" : "failed",
         agent || null,
         payload || {},
-        template ? "template" : "text",
+        template ? "template" : mediaId ? "image" : "text",
+        mediaId || null,
+        mediaMime || null,
       ]
     );
   } catch (e) {
@@ -635,5 +647,203 @@ router.post("/api/inbox/order", requireAuth, express.json(), async (req, res) =>
   }
 });
 
+// ============================================================================
+// SENDING A BILL, A PICTURE, A RATE LIST
+// ============================================================================
+
+// Decode an image posted as base64 JSON. The browser shrinks posters before
+// sending (max 1600 px, JPEG), so a real one is a few hundred KB; Meta's own
+// limit for images is 5 MB.
+function decodeImage(b) {
+  const mime = String(b?.mime || "");
+  if (!/^image\/(jpeg|png)$/.test(mime)) return { error: "Only JPG or PNG pictures can be sent." };
+  const data = String(b?.dataBase64 || "").replace(/^data:[^,]+,/, "");
+  const buffer = Buffer.from(data, "base64");
+  if (!buffer.length) return { error: "The picture is empty." };
+  if (buffer.length > 5 * 1024 * 1024) return { error: "The picture is larger than 5 MB." };
+  return { buffer, mime };
+}
+
+// ---------------------------------------------------------------------------
+// The bill for an order saved from the inbox. Free text inside the 24h
+// window, the approved asb_order_bill template outside it (notify.js).
+// ---------------------------------------------------------------------------
+router.post("/api/inbox/send-bill", requireAuth, express.json(), async (req, res) => {
+  const phone = normalizePhone(req.body?.phone);
+  const orderNumber = String(req.body?.orderNumber || "").trim();
+  const agent = String(req.body?.agent || "asb").slice(0, 40);
+  if (!phone || !orderNumber) return res.status(400).json({ error: "bad_request", message: "Phone and order number are needed." });
+
+  try {
+    const { rows } = await db.query(
+      `SELECT o.id, o.placed_at FROM orders o JOIN customers c ON c.id = o.customer_id
+        WHERE o.order_number = $1 AND c.phone = $2`, [orderNumber, phone]);
+    if (!rows[0]) return res.status(404).json({ error: "not_found", message: `${orderNumber} is not this customer's order.` });
+
+    const forBill = await orders.loadOrderForBill(db, rows[0].id);
+    const orderedAt = req.body?.orderedAt ? new Date(String(req.body.orderedAt)) : null;
+    if (orderedAt && !Number.isNaN(orderedAt.getTime())) forBill.ordered_at = orderedAt;
+    const composed = bill.orderConfirmation(forBill);
+
+    const { result, via, template } = await notify.sendOrderBill(db, phone, composed);
+    await logOutbound({ phone, body: composed.rich, agent, template, wamid: result.wamid, ok: result.ok, payload: result.data });
+
+    if (!result.ok) {
+      return res.status(502).json({
+        error: "send_failed", via, code: result.code,
+        message: result.data?.error?.message || "WhatsApp refused the message",
+      });
+    }
+    res.json({ ok: true, via, wamid: result.wamid });
+  } catch (e) {
+    console.error("[inbox] send-bill failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A picture into an open chat (a poster for one customer, a photo of the
+// mangoes). Only inside the 24-hour window, like any free message.
+// ---------------------------------------------------------------------------
+router.post("/api/inbox/send-image", requireAuth, express.json({ limit: "8mb" }), async (req, res) => {
+  const phone = normalizePhone(req.body?.phone);
+  const caption = String(req.body?.caption || "").trim().slice(0, 1024);
+  const agent = String(req.body?.agent || "asb").slice(0, 40);
+  if (!phone) return res.status(400).json({ error: "bad_phone", message: "No valid phone number." });
+
+  const img = decodeImage(req.body);
+  if (img.error) return res.status(400).json({ error: "bad_image", message: img.error });
+
+  if (!(await notify.windowOpen(db, phone))) {
+    return res.status(409).json({
+      error: "window_closed",
+      message: "Her 24-hour window is closed, so a picture can only go as the rate-list template. Use \"Rate list\" instead.",
+    });
+  }
+
+  try {
+    const up = await wa.uploadMedia(img.buffer, img.mime, img.mime === "image/png" ? "picture.png" : "picture.jpg");
+    if (!up.ok) return res.status(502).json({ error: "upload_failed", code: up.code, message: up.error });
+
+    const result = await wa.sendImage(phone, up.id, caption);
+    await logOutbound({
+      phone, body: caption || "(picture)", agent, template: null,
+      wamid: result.wamid, ok: result.ok, payload: result.data, mediaId: up.id, mediaMime: img.mime,
+    });
+    if (!result.ok) {
+      return res.status(502).json({ error: "send_failed", code: result.code, message: result.data?.error?.message || "WhatsApp refused the picture" });
+    }
+    res.json({ ok: true, wamid: result.wamid });
+  } catch (e) {
+    console.error("[inbox] send-image failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// RATE-LIST BROADCAST
+// ---------------------------------------------------------------------------
+
+// What the panel needs before anything is chosen: this delivery's wording,
+// how many customers there are, how many said STOP, and the last few sends.
+router.get("/api/inbox/broadcast/setup", requireAuth, async (_req, res) => {
+  try {
+    const slot = schedule.deliveryFor(new Date());
+    const people = await broadcast.audience(db);
+    res.json({
+      delivery: bill.deliveryPhrase(slot.deliveryDate),
+      cutoff: bill.orderedPhrase(slot.locksAt),
+      audience: people.filter((p) => !p.opted_out).length,
+      optedOut: people.filter((p) => p.opted_out).length,
+      running: broadcast.isRunning(),
+      recent: await broadcast.recent(db, 5),
+      template: T.TEMPLATES.rateList.name,
+    });
+  } catch (e) {
+    const missing = /does not exist/.test(e.message);
+    res.status(missing ? 503 : 500).json({
+      error: missing ? "not_migrated" : "server",
+      message: missing ? "Run the database update first: node scripts/mi*.js" : e.message,
+    });
+  }
+});
+
+// Upload the poster once. The returned id is reused for the test and the
+// real send (Meta keeps it 30 days).
+router.post("/api/inbox/broadcast/poster", requireAuth, express.json({ limit: "8mb" }), async (req, res) => {
+  const img = decodeImage(req.body);
+  if (img.error) return res.status(400).json({ error: "bad_image", message: img.error });
+  const up = await wa.uploadMedia(img.buffer, img.mime, img.mime === "image/png" ? "rate-list.png" : "rate-list.jpg");
+  if (!up.ok) return res.status(502).json({ error: "upload_failed", code: up.code, message: up.error });
+  res.json({ ok: true, mediaId: up.id, mime: img.mime });
+});
+
+// Create and start. For a real send the browser must echo back the number of
+// people it showed on the confirm button: if the audience changed in between,
+// nothing is sent and the panel shows the new number.
+router.post("/api/inbox/broadcast", requireAuth, express.json(), async (req, res) => {
+  const b = req.body || {};
+  const agent = String(b.agent || "asb").slice(0, 40);
+  const mediaId = String(b.mediaId || "").replace(/[^\w.-]/g, "");
+  const delivery = String(b.delivery || "").trim().slice(0, 60);
+  const cutoff = String(b.cutoff || "").trim().slice(0, 60);
+  const isTest = Boolean(b.isTest);
+  if (!mediaId) return res.status(400).json({ error: "no_poster", message: "Choose the poster first." });
+  if (!delivery || !cutoff) return res.status(400).json({ error: "no_wording", message: "Delivery day and booking cut-off are needed." });
+
+  if (broadcast.isRunning()) {
+    return res.status(409).json({ error: "busy", message: "Another rate list is still sending. Wait for it to finish or stop it." });
+  }
+
+  try {
+    let phones;
+    if (isTest) {
+      phones = broadcast.parsePhones(b.testPhone);
+      if (phones.length !== 1) return res.status(400).json({ error: "bad_phone", message: "Enter one mobile number for the test." });
+    } else {
+      const people = await broadcast.audience(db);
+      const optedOut = new Set(people.filter((p) => p.opted_out).map((p) => p.phone));
+      const everyone = people.filter((p) => !p.opted_out).map((p) => p.phone);
+      // Pasted numbers that said STOP are dropped here too, so the count on
+      // the confirm button is exactly the number of messages Meta will bill.
+      const extra = broadcast.parsePhones(b.extraPhones);
+      phones = [...new Set([...everyone, ...extra.filter((p) => !optedOut.has(p))])];
+      if (b.dryRun) {
+        return res.json({ ok: true, count: phones.length, leftOut: optedOut.size });
+      }
+      if (Number(b.confirmCount) !== phones.length) {
+        return res.status(409).json({
+          error: "count_changed", count: phones.length,
+          message: `The list is now ${phones.length} numbers, not ${b.confirmCount}. Check and confirm again.`,
+        });
+      }
+    }
+    if (!phones.length) return res.status(400).json({ error: "nobody", message: "There is nobody to send to." });
+
+    const id = await broadcast.create(db, {
+      agent, mediaId, mediaMime: String(b.mime || "image/jpeg"), delivery, cutoff, phones, isTest,
+    });
+    const started = broadcast.start(db, id, logOutbound);
+    if (!started.ok) return res.status(409).json({ error: "busy", message: started.error });
+    console.log(`[inbox] ${agent} started ${isTest ? "a TEST" : "a"} rate-list broadcast #${id} to ${phones.length}`);
+    res.json({ ok: true, id, count: phones.length });
+  } catch (e) {
+    console.error("[inbox] broadcast failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+router.get("/api/inbox/broadcast/:id", requireAuth, async (req, res) => {
+  const s = await broadcast.status(db, Number(req.params.id)).catch(() => null);
+  if (!s) return res.status(404).json({ error: "not_found" });
+  res.json(s);
+});
+
+router.post("/api/inbox/broadcast/:id/stop", requireAuth, async (req, res) => {
+  await broadcast.stop(db, Number(req.params.id));
+  res.json({ ok: true });
+});
+
 module.exports = router;
 module.exports.normalizePhone = normalizePhone;
+module.exports.logOutbound = logOutbound;

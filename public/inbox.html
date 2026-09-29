@@ -300,6 +300,47 @@
   .btn.alt { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line); }
   .op-note { font-size: 12.5px; color: var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
 
+  /* ---------- picture in chat ---------- */
+  #attach {
+    border: 1px solid var(--line); border-radius: 50%; width: 42px; height: 42px; flex: none;
+    background: var(--panel-2); color: var(--ink); font-size: 18px;
+  }
+  #attach:disabled { opacity: .4; cursor: default; }
+  .pic-bar {
+    display: flex; gap: 10px; align-items: center; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px; margin-bottom: 8px;
+  }
+  .pic-bar[hidden] { display: none; }
+  .pic-bar img { width: 64px; height: 64px; object-fit: cover; border-radius: 7px; flex: none; }
+  .pic-bar input { flex: 1; min-width: 0; margin: 0; }
+  .pic-bar .btn { width: auto; padding: 9px 14px; }
+
+  /* ---------- rate-list broadcast ---------- */
+  #bcPanel[hidden] { display: none; }
+  #bcPanel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 31;
+    width: min(460px, 100vw); background: var(--panel); color: var(--ink);
+    border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgb(0 0 0 / .18);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  @media (max-width: 820px) { #bcPanel { width: 100vw; border-left: 0; } }
+  .bc-poster {
+    border: 2px dashed var(--line); border-radius: 10px; padding: 14px; text-align: center;
+    margin-bottom: 14px; color: var(--ink-2); font-size: 13px; cursor: pointer; display: block;
+  }
+  .bc-poster img { max-width: 100%; max-height: 320px; border-radius: 8px; display: block; margin: 0 auto 8px; }
+  .bc-bubble {
+    background: var(--green-soft); border-radius: 10px; padding: 9px 11px; font-size: 13.5px;
+    white-space: pre-wrap; margin: 0 0 16px;
+  }
+  .bc-count { font-size: 14px; margin: 0 0 6px; }
+  .bc-count b { font-size: 18px; }
+  .bc-bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
+  .bc-bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .bc-recent { font-size: 12.5px; color: var(--ink-2); }
+  .bc-recent div { padding: 5px 0; border-bottom: 1px solid var(--line); }
+  textarea.field { resize: vertical; min-height: 70px; font-size: 13px; }
+
   .toast {
     position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
     background: #111b21; color: #fff; padding: 9px 15px; border-radius: 8px;
@@ -327,6 +368,7 @@
     <div class="list-head">
       <h2>Chats</h2>
       <span class="pill" id="unreadPill" hidden>0</span>
+      <button class="ghost" id="rateListBtn" title="Send the rate-list poster to customers">Rate list</button>
       <button class="ghost" id="filterBtn" aria-pressed="false">Unread</button>
       <button class="ghost" id="themeBtn" title="Switch light / dark">Theme</button>
       <button class="ghost" id="outBtn">Exit</button>
@@ -357,7 +399,15 @@
       <div class="comp">
         <div id="closedNote" hidden></div>
         <div class="quick" id="quick"></div>
+        <div class="pic-bar" id="picBar" hidden>
+          <img id="picThumb" alt="">
+          <input class="field" id="picCaption" maxlength="1024" placeholder="Caption (optional)">
+          <button class="btn" id="picSend">Send</button>
+          <button class="ghost" id="picCancel" aria-label="Cancel">✕</button>
+        </div>
+        <input type="file" id="picFile" accept="image/jpeg,image/png" hidden>
         <div class="comp-row">
+          <button id="attach" aria-label="Send a picture" title="Send a picture">📎</button>
           <textarea id="box" rows="1" placeholder="Type a reply…"></textarea>
           <button id="send" aria-label="Send">➤</button>
         </div>
@@ -414,6 +464,57 @@
     <div class="op-btns" id="opDoneBtns" hidden>
       <button class="btn alt" id="opCopy">Copy text</button>
       <button class="btn" id="opSend">Send to customer</button>
+    </div>
+  </div>
+</aside>
+
+<!-- ======================= RATE-LIST BROADCAST ======================= -->
+<aside id="bcPanel" hidden aria-labelledby="bcTitle" role="dialog">
+  <div class="op-head">
+    <h3 id="bcTitle">Rate list<small id="bcSub">Poster to your customers</small></h3>
+    <button class="op-x" id="bcClose" aria-label="Close">×</button>
+  </div>
+  <div class="op-body">
+    <label class="bc-poster" id="bcPosterBox">
+      <img id="bcPosterImg" alt="" hidden>
+      <span id="bcPosterMsg">Tap to choose the rate-list poster (JPG or PNG)</span>
+      <input type="file" id="bcPosterFile" accept="image/jpeg,image/png" hidden>
+    </label>
+
+    <label class="op-label" for="bcDelivery">Delivery</label>
+    <input class="field" id="bcDelivery" maxlength="60">
+    <label class="op-label" for="bcCutoff">Booking closes</label>
+    <input class="field" id="bcCutoff" maxlength="60" style="margin-bottom:0">
+    <p class="op-hint">Filled from the booking calendar. Change only if this week is different.</p>
+
+    <label class="op-label">What customers will read, under the poster</label>
+    <div class="bc-bubble" id="bcPreview"></div>
+
+    <div id="bcAudienceBox">
+      <p class="bc-count" id="bcCount">…</p>
+      <label class="op-label" for="bcExtra">Add more numbers (for example exported from AiSensy)</label>
+      <textarea class="field" id="bcExtra" placeholder="0300 1234567, 0321-7654321 …"></textarea>
+      <p class="op-hint" id="bcExtraHint"></p>
+    </div>
+
+    <div id="bcProgress" hidden>
+      <div class="bc-bar"><i id="bcBarFill"></i></div>
+      <p class="bc-count" id="bcProgressText"></p>
+      <p class="op-err" id="bcProgressErr"></p>
+    </div>
+
+    <p class="op-hint">Meta charges for every rate-list message (a marketing message — roughly Rs 13 each at recent rates). Replies to customers who wrote to you are free.</p>
+    <div class="bc-recent" id="bcRecent"></div>
+  </div>
+  <div class="op-foot">
+    <p class="op-err" id="bcErr"></p>
+    <div class="op-row" id="bcTestRow" style="margin-bottom:8px">
+      <input class="field" id="bcTestPhone" placeholder="Your number for a test" inputmode="tel">
+      <button class="btn alt" id="bcTest" style="width:auto;padding:11px 14px;white-space:nowrap;flex:none">Send test</button>
+    </div>
+    <div class="op-btns">
+      <button class="btn" id="bcSend" disabled>Send to everyone</button>
+      <button class="btn alt" id="bcStop" hidden>Stop sending</button>
     </div>
   </div>
 </aside>
@@ -772,7 +873,7 @@ function setComposer(c) {
     note.innerHTML =
       '<b>24-hour reply window is closed</b>' +
       'WhatsApp only allows free typing within 24 hours of the customer\'s last ' +
-      'message. Send an approved template instead — that reopens the window.';
+      'message. Send her the rate list (an approved template) — if she replies, the window opens again.';
   }
 
   const q = $('quick');
@@ -790,14 +891,16 @@ function setComposer(c) {
       q.appendChild(b);
     }
   } else {
-    for (const t of ['order_confirmed', 'final_bill']) {
-      const b = document.createElement('button');
-      b.textContent = '↻ ' + t;
-      b.title = 'Send the approved ' + t + ' template to reopen the conversation';
-      b.addEventListener('click', () => sendTemplate(t));
-      q.appendChild(b);
-    }
+    // Outside the window only an approved template may go. The rate list is
+    // the one that makes sense unprompted, and it reopens the chat if she
+    // replies.
+    const b = document.createElement('button');
+    b.textContent = '📢 Send her the rate list';
+    b.title = 'Sends the approved rate-list template with this week\'s poster';
+    b.addEventListener('click', () => openBroadcast(S.phone));
+    q.appendChild(b);
   }
+  $('attach').disabled = !open;
 }
 
 function autoGrow() {
@@ -1143,7 +1246,7 @@ $('opSave').addEventListener('click', async () => {
       body: JSON.stringify({
         phone: O.phone,
         name: $('opName').value.trim(),
-        orderedAt: at.toISOString(),
+        orderedAt: (O.orderedAtIso = at.toISOString()),
         lines: [...O.bag].map(([sku, packs]) => ({ sku, packs })),
         sourceWamid: O.sourceWamid,
         clientKey: O.key,
@@ -1180,14 +1283,14 @@ function showSaved(r) {
   $('opPreview').textContent = r.message;
 
   const note = $('opWinNote');
-  $('opSend').disabled = !r.windowOpen;
+  $('opSend').disabled = false;
   if (r.windowOpen) {
     note.hidden = true;
   } else {
     note.hidden = false;
     note.textContent =
-      'Her 24-hour window is closed, so this cannot go as a normal message. ' +
-      'Copy the text for now; the order itself is saved.';
+      'Her 24-hour window is closed, so the bill will go as the approved bill ' +
+      'template (Meta charges a small fee for it). Same numbers, simpler layout.';
   }
 
   $('opForm').hidden = true;
@@ -1216,21 +1319,23 @@ $('opSend').addEventListener('click', async () => {
   $('opSend').disabled = true;
   $('opSend').textContent = 'Sending…';
   const phone = O.phone;
-  const { ok, data } = await api('/api/inbox/reply', {
+  // The server picks the route: free text inside her 24-hour window, the
+  // approved bill template outside it.
+  const { ok, data } = await api('/api/inbox/send-bill', {
     method: 'POST',
-    body: JSON.stringify({ phone, body: O.saved.message, agent: S.agent }),
+    body: JSON.stringify({
+      phone, orderNumber: O.saved.orderNumber, orderedAt: O.orderedAtIso, agent: S.agent,
+    }),
   });
   $('opSend').textContent = 'Send to customer';
   if (!ok) {
     $('opSend').disabled = false;
     $('opErr').textContent =
-      (data?.error === 'window_closed'
-        ? 'Her reply window just closed. '
-        : 'WhatsApp did not accept it: ' + (data?.message || 'unknown error') + '. ') +
+      'WhatsApp did not accept it: ' + (data?.message || 'unknown error') + '. ' +
       'The order is saved - copy the text and send it by hand.';
     return;
   }
-  toast('Bill sent');
+  toast(data.via === 'template' ? 'Bill sent as template' : 'Bill sent');
   closeOrderPanel(true);
   openThread(phone, true);
   loadConvs();
@@ -1242,6 +1347,278 @@ $('opShade').addEventListener('click', () => closeOrderPanel());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('orderPanel').hidden) closeOrderPanel();
 });
+
+
+// ===========================================================================
+// PICTURES
+//
+// Phone photos are often 4-8 MB; WhatsApp's limit is 5 MB and a Karachi
+// mobile connection is slow. So every picture is shrunk in the browser first
+// (longest side 1600 px, JPEG) - a poster stays sharp and weighs a few
+// hundred KB.
+// ===========================================================================
+function shrinkImage(file, maxSide = 1600, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    if (!/^image\/(jpeg|png)$/.test(file.type)) return reject(new Error('Choose a JPG or PNG picture.'));
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * scale);
+      c.height = Math.round(img.naturalHeight * scale);
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff';               // PNG transparency -> white, not black
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      const dataUrl = c.toDataURL('image/jpeg', quality);
+      resolve({ dataUrl, dataBase64: dataUrl.split(',')[1], mime: 'image/jpeg' });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file could not be read as a picture.')); };
+    img.src = url;
+  });
+}
+
+// ---- a picture into the open chat ----
+let PIC = null;
+$('attach').addEventListener('click', () => $('picFile').click());
+$('picFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    PIC = await shrinkImage(f);
+    $('picThumb').src = PIC.dataUrl;
+    $('picCaption').value = '';
+    $('picBar').hidden = false;
+    $('picCaption').focus();
+  } catch (err) { toast(err.message, 5000); }
+});
+$('picCancel').addEventListener('click', () => { PIC = null; $('picBar').hidden = true; });
+$('picSend').addEventListener('click', async () => {
+  if (!PIC || !S.phone) return;
+  $('picSend').disabled = true;
+  $('picSend').textContent = 'Sending…';
+  const { ok, data } = await api('/api/inbox/send-image', {
+    method: 'POST',
+    body: JSON.stringify({
+      phone: S.phone, dataBase64: PIC.dataBase64, mime: PIC.mime,
+      caption: $('picCaption').value.trim(), agent: S.agent,
+    }),
+  });
+  $('picSend').disabled = false;
+  $('picSend').textContent = 'Send';
+  if (!ok) { toast(data?.message || 'Could not send the picture', 7000); return; }
+  PIC = null;
+  $('picBar').hidden = true;
+  openThread(S.phone, true);
+  loadConvs();
+});
+
+// ===========================================================================
+// RATE LIST
+//
+// One poster, this delivery's day and cut-off, sent as the approved
+// asb_rate_list template. Either to everyone (from the list header) or to
+// one customer whose chat window has closed (from her chat).
+// ===========================================================================
+const B = {
+  one: null,          // phone when sending to one customer, else null
+  mediaId: null,
+  mime: null,
+  audience: 0,
+  id: null,           // broadcast being watched
+  timer: null,
+};
+
+// Same rule as the server: Pakistani mobiles only, any common spelling.
+function normaliseOne(raw) {
+  let d = String(raw).replace(/\D/g, '');
+  if (d.startsWith('0092')) d = d.slice(2);
+  if (d.startsWith('0')) d = '92' + d.slice(1);
+  if (d.length === 10 && d.startsWith('3')) d = '92' + d;
+  return /^92[0-9]{10}$/.test(d) ? d : null;
+}
+function parsePhones(text) {
+  const out = new Set();
+  for (const piece of String(text || '').split(/[,;\n\r\t]+/)) {
+    const whole = normaliseOne(piece);
+    if (whole) { out.add(whole); continue; }
+    for (const word of piece.split(/\s+/)) {
+      const one = normaliseOne(word);
+      if (one) out.add(one);
+    }
+  }
+  return [...out];
+}
+
+function bcPreview() {
+  const d = $('bcDelivery').value.trim() || '…';
+  const c = $('bcCutoff').value.trim() || '…';
+  $('bcPreview').textContent =
+    `Assalam-o-Alaikum! 🌿 ${d} ki delivery ke liye Apna Sasta Bazaar ka naya rate list haazir hai.\n\n` +
+    `Order booking ${c} tak khuli hai. Order ke liye isi number par apni list bhej dein.\n\n` +
+    `Rate list nahi chahiye to STOP likh kar bhej dein.\n\nApna Sasta Bazaar`;
+}
+
+function bcTotal() {
+  if (B.one) return 1;
+  // Extra numbers already in the audience are not counted twice by the
+  // server; the count here can be a little high until the server confirms.
+  return B.audience + parsePhones($('bcExtra').value).length;
+}
+
+function bcUpdateButtons() {
+  const busy = Boolean(B.timer);
+  const ready = Boolean(B.mediaId) && $('bcDelivery').value.trim() && $('bcCutoff').value.trim();
+  $('bcSend').disabled = !ready || busy;
+  $('bcTest').disabled = !ready || busy;
+  // The exact number is worked out by the server and shown on the confirm
+  // step (a pasted number already on the list is not counted twice).
+  $('bcSend').textContent = B.one ? `Send to +${B.one}` : `Send to everyone (about ${bcTotal()})`;
+  const extra = parsePhones($('bcExtra').value).length;
+  $('bcExtraHint').textContent = extra ? `${extra} number(s) recognised in the box.` : '';
+}
+
+async function openBroadcast(onePhone = null) {
+  B.one = onePhone;
+  $('bcErr').textContent = '';
+  $('bcSub').textContent = onePhone ? `To +${onePhone} only` : 'Poster to your customers';
+  $('bcAudienceBox').hidden = Boolean(onePhone);
+  $('bcTestRow').hidden = Boolean(onePhone);
+  $('bcTestPhone').value = store.get('asb_test_phone', '');
+  $('opShade').hidden = false;
+  $('bcPanel').hidden = false;
+
+  const { ok, data } = await api('/api/inbox/broadcast/setup');
+  if (!ok) { $('bcErr').textContent = data?.message || 'Could not load.'; return; }
+  if (!$('bcDelivery').value) $('bcDelivery').value = data.delivery;
+  if (!$('bcCutoff').value) $('bcCutoff').value = data.cutoff;
+  B.audience = data.audience;
+  $('bcCount').innerHTML = '';
+  const b = document.createElement('b');
+  b.textContent = data.audience;
+  $('bcCount').append(b, ` customers will get it`,
+    data.optedOut ? ` · ${data.optedOut} said STOP and are left out` : '');
+  $('bcRecent').innerHTML = '';
+  for (const r of data.recent || []) {
+    const d = document.createElement('div');
+    d.textContent = `#${r.id} · ${new Date(r.created_at).toLocaleString('en-PK', { dateStyle: 'medium', timeStyle: 'short' })}` +
+      ` · ${r.is_test ? 'single' : r.total + ' people'} · ${r.status} · sent ${r.sent}` +
+      (r.failed ? ` · failed ${r.failed}` : '') + (r.last_error ? ` · ${r.last_error}` : '');
+    $('bcRecent').appendChild(d);
+  }
+  bcPreview();
+  bcUpdateButtons();
+  if (data.running) watchBroadcast(data.running);
+}
+
+function closeBroadcast() {
+  $('bcPanel').hidden = true;
+  if ($('orderPanel').hidden) $('opShade').hidden = true;
+}
+
+$('rateListBtn').addEventListener('click', () => openBroadcast(null));
+$('bcClose').addEventListener('click', closeBroadcast);
+$('bcDelivery').addEventListener('input', () => { bcPreview(); bcUpdateButtons(); });
+$('bcCutoff').addEventListener('input', () => { bcPreview(); bcUpdateButtons(); });
+$('bcExtra').addEventListener('input', bcUpdateButtons);
+$('opShade').addEventListener('click', () => { if (!$('bcPanel').hidden) closeBroadcast(); });
+
+// The poster is uploaded to Meta as soon as it is chosen, once, and the same
+// id is used for the test and for the real send.
+$('bcPosterFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  $('bcErr').textContent = '';
+  B.mediaId = null;
+  bcUpdateButtons();
+  try {
+    const img = await shrinkImage(f);
+    $('bcPosterImg').src = img.dataUrl;
+    $('bcPosterImg').hidden = false;
+    $('bcPosterMsg').textContent = 'Uploading poster…';
+    const { ok, data } = await api('/api/inbox/broadcast/poster', {
+      method: 'POST', body: JSON.stringify({ dataBase64: img.dataBase64, mime: img.mime }),
+    });
+    if (!ok) throw new Error(data?.message || 'Upload failed');
+    B.mediaId = data.mediaId;
+    B.mime = data.mime;
+    $('bcPosterMsg').textContent = 'Poster ready ✓ — tap to choose a different one';
+  } catch (err) {
+    $('bcPosterMsg').textContent = 'Tap to choose the rate-list poster (JPG or PNG)';
+    $('bcErr').textContent = err.message;
+  }
+  bcUpdateButtons();
+});
+
+async function startBroadcast(isTest) {
+  $('bcErr').textContent = '';
+  const body = {
+    mediaId: B.mediaId, mime: B.mime,
+    delivery: $('bcDelivery').value.trim(), cutoff: $('bcCutoff').value.trim(),
+    agent: S.agent, isTest,
+  };
+  if (isTest) {
+    body.testPhone = B.one || $('bcTestPhone').value;
+    if (!B.one) store.set('asb_test_phone', $('bcTestPhone').value.trim());
+  } else {
+    // Ask the server for the exact number first (pasted numbers already in
+    // the list are not counted twice; anyone who said STOP is left out).
+    body.extraPhones = $('bcExtra').value;
+    const dry = await api('/api/inbox/broadcast', { method: 'POST', body: JSON.stringify({ ...body, dryRun: true }) });
+    if (!dry.ok) { $('bcErr').textContent = dry.data?.message || 'Could not count the list.'; return; }
+    const n = dry.data.count;
+    if (!confirm(`Send the rate list to ${n} people now?\n\n` +
+      (dry.data.leftOut ? `${dry.data.leftOut} who replied STOP are left out.\n` : '') +
+      `Meta charges for each message. Once sent it cannot be taken back.`)) return;
+    body.confirmCount = n;
+  }
+  const { ok, data } = await api('/api/inbox/broadcast', { method: 'POST', body: JSON.stringify(body) });
+  if (!ok) {
+    $('bcErr').textContent = data?.message || 'Could not start.';
+    if (data?.error === 'count_changed') { B.audience = data.count - parsePhones($('bcExtra').value).length; bcUpdateButtons(); }
+    return;
+  }
+  watchBroadcast(data.id);
+}
+$('bcTest').addEventListener('click', () => startBroadcast(true));
+$('bcSend').addEventListener('click', () => startBroadcast(Boolean(B.one)));
+$('bcStop').addEventListener('click', async () => {
+  if (B.id) await api(`/api/inbox/broadcast/${B.id}/stop`, { method: 'POST' });
+});
+
+function watchBroadcast(id) {
+  B.id = id;
+  clearInterval(B.timer);
+  $('bcProgress').hidden = false;
+  $('bcStop').hidden = false;
+  const tickB = async () => {
+    const { ok, data } = await api(`/api/inbox/broadcast/${id}`);
+    if (!ok) return;
+    const done = data.sent + data.failed + data.skipped;
+    $('bcBarFill').style.width = (data.total ? Math.round((done / data.total) * 100) : 0) + '%';
+    $('bcProgressText').textContent =
+      `#${id}: sent ${data.sent} of ${data.total}` +
+      (data.failed ? ` · failed ${data.failed}` : '') +
+      (data.skipped ? ` · left out ${data.skipped} (STOP)` : '') +
+      ` · ${data.status}`;
+    $('bcProgressErr').textContent = data.last_error || '';
+    if (data.status === 'done' || data.status === 'stopped') {
+      clearInterval(B.timer);
+      B.timer = null;
+      $('bcStop').hidden = true;
+      bcUpdateButtons();
+      toast(data.status === 'done' ? `Rate list sent to ${data.sent}` : 'Rate list stopped', 5000);
+      loadConvs();
+    }
+  };
+  B.timer = setInterval(tickB, 2000);
+  bcUpdateButtons();
+  tickB();
+}
 
 // ===========================================================================
 // POLL

@@ -33,6 +33,8 @@ const db = require("./db");
 const bill = require("./bill");
 const { resolveCycle, upsertCustomer, findOpenOrder, loadOrderForBill } = require("./orders");
 const wa = require("./whatsapp");
+const notify = require("./notify");
+const broadcast = require("./broadcast");
 
 const app = express();
 app.set("trust proxy", 1); // Render sits behind a proxy
@@ -317,7 +319,7 @@ async function logOutbound({ key, customerId, orderId, phone, template, preview,
        -- with "inconsistent types deduced for parameter $8".
        VALUES ($1, $2, $3, $4, 'outbound', $5, $6, $7, $8::msg_status, $9,
                CASE WHEN $8::text = 'sent' THEN now() ELSE NULL END,
-               now(), 1, 'template', $10)
+               now(), 1, CASE WHEN $5::text IS NULL THEN 'text' ELSE 'template' END, $10)
        ON CONFLICT (idempotency_key) DO UPDATE
           SET wamid = COALESCE(EXCLUDED.wamid, whatsapp_messages.wamid),
               status = EXCLUDED.status,
@@ -327,8 +329,8 @@ async function logOutbound({ key, customerId, orderId, phone, template, preview,
         customerId || null,
         orderId || null,
         phone,
-        template,
-        wa.templateLang,
+        template || null,
+        template ? "ur" : null,
         wamid,
         ok ? "sent" : "failed",
         payload || {},
@@ -422,6 +424,13 @@ async function saveInbound(msg, contact) {
       at,
     ]
   );
+
+  // "STOP" / "band karo" takes a customer off the rate-list broadcasts,
+  // "START" puts her back. Never allowed to break saving the message.
+  if (type === "text") {
+    await broadcast.handleOptWords(db, from, preview).catch((e) =>
+      console.error("[broadcast] opt-out check failed:", e.message));
+  }
 
   console.log(`[wa] INBOUND ${type} from ${from}: ${String(preview).slice(0, 80)}`);
   return { from, type, preview };
@@ -736,31 +745,37 @@ app.post("/webhooks/shopify", async (req, res) => {
       console.log("   ------------------------------------------");
     }
 
-    // Template parameters reject newlines, tabs and long runs of spaces, so the
-    // single-line form goes on the wire. Guard it rather than trusting it.
-    const itemsParam = composed
-      ? bill.templateSafe(composed.params.order_items).value
-      : (items || "-");
-    const maxBillParam = composed ? composed.params.zyada_se_zyada : `Rs ${totalPKR}`;
+    // If the order could not be composed from the database (the DB write
+    // failed), build a stand-in from the raw Shopify payload so the customer
+    // still hears from us. Same shape bill.orderConfirmation returns.
+    if (!composed) {
+      const orderNo = saved?.order_number || orderName;
+      composed = {
+        communitySaved: 0,
+        rich:
+          `Assalam-o-Alaikum ${firstName} 🌿\nAap ka order mil gaya — *${orderNo}*\n\n` +
+          `${items || "-"}\n\nZyada se zyada: *Rs ${totalPKR}*\n\nApna Sasta Bazaar`,
+        params: {
+          customer_name: firstName, order_id: orderNo, ordered: "-", delivery: "-",
+          order_items: items || "-", bazaar_total: `Rs ${totalPKR}`,
+          zyada_se_zyada: `Rs ${totalPKR}`, abhi_se_bachat: "Rs 0",
+        },
+      };
+    }
 
     // --- tell the customer ---
-    const result = await wa.sendTemplate(phone, "order_confirmed", [
-      { name: "customer_name", value: firstName },
-      { name: "order_id", value: saved?.order_number || orderName },
-      { name: "order_items", value: itemsParam },
-      { name: "max_bill", value: maxBillParam },
-    ]);
+    // Free text if she has written to us in the last 24 hours, the approved
+    // asb_order_bill template otherwise (notify.js decides).
+    const { result, via, template } = await notify.sendOrderBill(db, phone, composed);
+    console.log(`   Bill sent as ${via}: ${result.ok ? "accepted by Meta" : "REFUSED (" + (result.code || "?") + ")"}`);
 
     await logOutbound({
       key: `order_confirmed:shopify:${order.id}`,
       customerId: saved?.customerId,
       orderId: saved?.orderId,
       phone,
-      template: "order_confirmed",
-      preview: composed
-        ? composed.rich
-        : `Order ${saved?.order_number || orderName} confirmed for ${firstName} — ` +
-          `${items || "-"} · max Rs ${totalPKR}`,
+      template,
+      preview: composed.rich,
       wamid: result.wamid,
       ok: result.ok,
       payload: { order_name: orderName, response: result.data },
@@ -796,4 +811,8 @@ app.listen(PORT, async () => {
   } else {
     console.error(`[db] NOT reachable:`, h.error);
   }
+
+  // A rate-list broadcast interrupted by a restart carries on from where it
+  // stopped. Every recipient is marked as sent, so nobody gets it twice.
+  if (h.ok) broadcast.resumeAll(db, require("./inbox").logOutbound);
 });
