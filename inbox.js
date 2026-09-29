@@ -29,6 +29,12 @@
 //   GET  /api/inbox/broadcast/:id      progress
 //   POST /api/inbox/broadcast/:id/stop
 //   POST /api/inbox/contacts/import    bring a contact list over (AiSensy)
+//   GET  /api/inbox/push/key           public key for phone notifications
+//   POST /api/inbox/push/subscribe     this device wants notifications
+//   POST /api/inbox/push/unsubscribe   this device no longer does
+//   POST /api/inbox/push/test          send a test notification to this device
+//   GET  /inbox-sw.js, /inbox/manifest.webmanifest, /inbox/icon-*.png
+//                                      what makes the inbox installable
 //
 // AUTH: one shared password (INBOX_PASSWORD) traded for an HMAC-signed,
 // HttpOnly cookie. Two people, one warehouse — per-user accounts would be
@@ -47,6 +53,7 @@ const orders = require("./orders");
 const notify = require("./notify");
 const broadcast = require("./broadcast");
 const T = require("./templates");
+const push = require("./push");
 
 const router = express.Router();
 
@@ -129,6 +136,25 @@ function normalizePhone(raw) {
 router.get("/inbox", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "inbox.html"));
 });
+
+// Installable app + notifications. The service worker lives at the site root
+// so its scope covers /inbox; it must never be cached stale, or a fixed bug
+// in it would stay on phones for a day.
+router.get("/inbox-sw.js", (_req, res) => {
+  res.set("Cache-Control", "no-cache");
+  res.type("application/javascript");
+  res.sendFile(path.join(__dirname, "public", "inbox-sw.js"));
+});
+router.get("/inbox/manifest.webmanifest", (_req, res) => {
+  res.type("application/manifest+json");
+  res.sendFile(path.join(__dirname, "public", "manifest.webmanifest"));
+});
+for (const f of ["icon-192.png", "icon-512.png", "icon-badge.png"]) {
+  router.get(`/inbox/${f}`, (_req, res) => {
+    res.set("Cache-Control", "public, max-age=604800");
+    res.sendFile(path.join(__dirname, "public", f));
+  });
+}
 
 // ============================================================================
 // AUTH
@@ -900,6 +926,48 @@ router.post("/api/inbox/contacts/import", requireAuth, express.json({ limit: "3m
       message: missing ? "Run the database update first: node scripts/migrate.js" : e.message,
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phone notifications (push.js does the work).
+// ---------------------------------------------------------------------------
+const pushMissing = (e, res) => {
+  const missing = /does not exist/.test(e.message);
+  res.status(missing ? 503 : 500).json({
+    error: missing ? "not_migrated" : "server",
+    message: missing ? "Run the database update first: node scripts/migrate.js" : e.message,
+  });
+};
+
+router.get("/api/inbox/push/key", requireAuth, async (_req, res) => {
+  try { res.json({ key: await push.publicKey(db) }); } catch (e) { pushMissing(e, res); }
+});
+
+router.post("/api/inbox/push/subscribe", requireAuth, express.json(), async (req, res) => {
+  try {
+    await push.subscribe(db, req.body?.subscription, String(req.body?.agent || "").slice(0, 40),
+      req.get("user-agent"));
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.message === "bad subscription") return res.status(400).json({ error: "bad_subscription" });
+    pushMissing(e, res);
+  }
+});
+
+router.post("/api/inbox/push/unsubscribe", requireAuth, express.json(), async (req, res) => {
+  try { await push.unsubscribe(db, req.body?.endpoint); res.json({ ok: true }); }
+  catch (e) { pushMissing(e, res); }
+});
+
+router.post("/api/inbox/push/test", requireAuth, express.json(), async (req, res) => {
+  const endpoint = String(req.body?.endpoint || "");
+  if (!endpoint) return res.status(400).json({ error: "no_endpoint" });
+  const r = await push.notifyAll(db, {
+    title: "ASB Inbox",
+    body: "Notifications are on. Customer messages will show up like this.",
+    url: "/inbox", tag: "asb-test", topic: "asbtest",
+  }, endpoint);
+  res.json({ ok: r.delivered === 1, ...r });
 });
 
 module.exports = router;

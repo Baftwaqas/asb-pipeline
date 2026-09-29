@@ -30,6 +30,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const db = require("./db");
+const push = require("./push");
 const bill = require("./bill");
 const { resolveCycle, upsertCustomer, findOpenOrder, loadOrderForBill } = require("./orders");
 const wa = require("./whatsapp");
@@ -408,7 +409,7 @@ async function saveInbound(msg, contact) {
     ? new Date(Number(msg.timestamp) * 1000)
     : new Date();
 
-  await db.query(
+  const saved = await db.query(
     `INSERT INTO whatsapp_messages
        (wamid, phone, direction, body_preview, msg_type, media_id, media_mime,
         profile_name, reply_to, payload, status, received_at, customer_id)
@@ -437,6 +438,14 @@ async function saveInbound(msg, contact) {
   }
 
   console.log(`[wa] INBOUND ${type} from ${from}: ${String(preview).slice(0, 80)}`);
+
+  // Ping the phones that switched inbox notifications on. Only for a message
+  // saved just now (Meta re-delivers webhooks; a repeat must not ping twice),
+  // and not awaited, so a slow push service never delays the webhook reply.
+  if (saved.rowCount === 1) {
+    push.newMessage(db, { from, name: contact?.profile?.name || null, preview, type })
+      .catch((e) => console.error("[push] inbound ping failed:", e.message));
+  }
   return { from, type, preview };
 }
 

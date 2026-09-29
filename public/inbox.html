@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ASB Inbox</title>
+<link rel="manifest" href="/inbox/manifest.webmanifest">
+<meta name="theme-color" content="#00733e">
+<link rel="icon" type="image/png" href="/inbox/icon-192.png">
+<link rel="apple-touch-icon" href="/inbox/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ASB Inbox">
 <style>
   /* ---------------------------------------------------------------
      One file, no CDN, no build. Runs on the free Render instance.
@@ -317,6 +324,7 @@
 
   /* ---------- rate-list broadcast ---------- */
   #bcPanel[hidden] { display: none; }
+  #notifBtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   #bcPanel {
     position: fixed; top: 0; right: 0; bottom: 0; z-index: 31;
     width: min(460px, 100vw); background: var(--panel); color: var(--ink);
@@ -368,6 +376,8 @@
     <div class="list-head">
       <h2>Chats</h2>
       <span class="pill" id="unreadPill" hidden>0</span>
+      <button class="ghost" id="notifBtn" title="Phone notifications for new customer messages" hidden>🔔 Alerts</button>
+      <button class="ghost" id="installBtn" title="Put ASB Inbox on this phone's home screen" hidden>Install</button>
       <button class="ghost" id="rateListBtn" title="Send the rate-list poster to customers">Rate list</button>
       <button class="ghost" id="filterBtn" aria-pressed="false">Unread</button>
       <button class="ghost" id="themeBtn" title="Switch light / dark">Theme</button>
@@ -633,6 +643,7 @@ $('loginForm').addEventListener('submit', async (e) => {
   if (!ok) { $('loginErr').textContent = data?.error || 'Could not sign in'; return; }
   $('pw').value = '';
   showApp();
+  pushSetup();
 });
 
 $('outBtn').addEventListener('click', async () => {
@@ -1692,6 +1703,117 @@ async function tick() {
 }
 
 // ===========================================================================
+// PHONE NOTIFICATIONS + INSTALL
+// The server pushes every new customer message to each device that switched
+// alerts on (push.js). The service worker (/inbox-sw.js) shows it even with
+// the phone locked; tapping it opens that customer's chat here.
+// ===========================================================================
+const P = { reg: null, sub: null, installEvt: null };
+const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+
+function b64ToBytes(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+}
+
+function notifButton() {
+  const b = $('notifBtn');
+  // iPhone only allows notifications for a web app added to the home screen,
+  // so the button still shows there and explains the one extra step.
+  b.hidden = !(pushSupported || isIOS);
+  const on = Boolean(P.sub) && Notification.permission === 'granted';
+  b.setAttribute('aria-pressed', String(on));
+  b.textContent = on ? '🔔 Alerts on' : '🔕 Alerts off';
+}
+
+async function pushSetup() {
+  if (!pushSupported) { notifButton(); return; }
+  try {
+    P.reg = await navigator.serviceWorker.register('/inbox-sw.js');
+    P.sub = await P.reg.pushManager.getSubscription();
+    // Re-send an existing subscription every time the inbox opens, so the
+    // server always has it (a fresh database, a second person's phone...).
+    if (P.sub && Notification.permission === 'granted') {
+      api('/api/inbox/push/subscribe', {
+        method: 'POST', body: JSON.stringify({ subscription: P.sub.toJSON(), agent: S.agent }),
+      }).catch(() => {});
+    }
+  } catch (e) { console.warn('push setup', e); }
+  notifButton();
+}
+
+async function alertsOn() {
+  if (!pushSupported || (isIOS && !isStandalone)) {
+    toast('On iPhone: tap Share → "Add to Home Screen", open ASB Inbox from the new icon, then tap Alerts again.', 9000);
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    toast('Notifications are blocked for this site. Allow them in the browser\'s site settings, then tap Alerts again.', 9000);
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { toast('Notifications were not allowed.'); return; }
+
+  const { ok, data } = await api('/api/inbox/push/key');
+  if (!ok) { toast(data?.message || 'Could not turn on alerts.', 6000); return; }
+  if (!P.reg) P.reg = await navigator.serviceWorker.register('/inbox-sw.js');
+  await navigator.serviceWorker.ready;
+  try {
+    P.sub = await P.reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(data.key) });
+  } catch (e) {
+    toast('This browser refused notifications: ' + e.message, 7000);
+    return;
+  }
+  const r = await api('/api/inbox/push/subscribe', {
+    method: 'POST', body: JSON.stringify({ subscription: P.sub.toJSON(), agent: S.agent }),
+  });
+  if (!r.ok) { toast(r.data?.message || 'Could not save alerts on the server.', 6000); return; }
+  notifButton();
+  const t = await api('/api/inbox/push/test', { method: 'POST', body: JSON.stringify({ endpoint: P.sub.endpoint }) });
+  toast(t.data?.ok ? 'Alerts on. A test notification is on its way.' : 'Alerts saved, but the test did not arrive. Try again in a minute.', 6000);
+}
+
+async function alertsOff() {
+  if (!confirm('Turn off notifications on this device?')) return;
+  const endpoint = P.sub?.endpoint;
+  try { await P.sub?.unsubscribe(); } catch (_) {}
+  P.sub = null;
+  if (endpoint) await api('/api/inbox/push/unsubscribe', { method: 'POST', body: JSON.stringify({ endpoint }) });
+  notifButton();
+  toast('Alerts off on this device.');
+}
+
+$('notifBtn').addEventListener('click', () => {
+  if (P.sub && Notification.permission === 'granted') alertsOff(); else alertsOn();
+});
+
+// Android/desktop Chrome offer an install prompt; keep it for the button.
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  P.installEvt = e;
+  $('installBtn').hidden = false;
+});
+$('installBtn').addEventListener('click', async () => {
+  if (!P.installEvt) return;
+  P.installEvt.prompt();
+  await P.installEvt.userChoice.catch(() => null);
+  P.installEvt = null;
+  $('installBtn').hidden = true;
+});
+addEventListener('appinstalled', () => { $('installBtn').hidden = true; });
+
+// A tapped notification: open that customer's chat.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'open-chat' && e.data.phone) { loadConvs(); openThread(e.data.phone); }
+  });
+}
+
+// ===========================================================================
 // BOOT
 // ===========================================================================
 (async function boot() {
@@ -1699,7 +1821,13 @@ async function tick() {
   $('who').value = S.agent === 'asb' ? '' : S.agent;
 
   const { data } = await api('/api/inbox/me');
-  if (data?.signedIn) showApp(); else showLogin();
+  if (data?.signedIn) {
+    showApp();
+    pushSetup();
+    // Opened from a notification: /inbox#923001234567
+    const m = location.hash.match(/^#(\d{8,15})$/);
+    if (m) { openThread(m[1]); history.replaceState(null, '', '/inbox'); }
+  } else showLogin();
 })();
 </script>
 </body>
