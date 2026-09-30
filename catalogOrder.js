@@ -136,9 +136,10 @@ async function lookupProducts(db, rids) {
   if (!keys.length) return [];
   const { rows } = await db.query(
     `SELECT sku, name_en, name_roman, unit::text AS unit, min_qty AS pack_size,
-            shopify_product_id, shopify_variant_id
+            shopify_product_id, shopify_variant_id, meta_retailer_id
        FROM products
-      WHERE sku = ANY($1) OR shopify_variant_id = ANY($1) OR shopify_product_id = ANY($1)`,
+      WHERE meta_retailer_id = ANY($1) OR sku = ANY($1)
+         OR shopify_variant_id = ANY($1) OR shopify_product_id = ANY($1)`,
     [keys]
   );
   return rows;
@@ -150,6 +151,7 @@ function match(rows, rid) {
   const nums = s.match(/\d{6,}/g) || [];
   const last = nums[nums.length - 1];
   return (
+    rows.find((r) => r.meta_retailer_id === s) ||
     rows.find((r) => r.sku === s || r.shopify_variant_id === s) ||
     (last && rows.find((r) => r.shopify_variant_id === last)) ||
     rows.find((r) => nums.includes(r.shopify_variant_id)) ||

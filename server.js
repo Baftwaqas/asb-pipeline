@@ -32,6 +32,7 @@ const crypto = require("crypto");
 const db = require("./db");
 const push = require("./push");
 const catalogOrder = require("./catalogOrder");
+const productSync = require("./productSync");
 const bill = require("./bill");
 const { resolveCycle, upsertCustomer, findOpenOrder, loadOrderForBill } = require("./orders");
 const wa = require("./whatsapp");
@@ -688,6 +689,19 @@ app.post("/webhooks/shopify", async (req, res) => {
   // ---- 3. Answer Shopify fast ----
   res.sendStatus(200);
 
+  // A product was created or edited in Shopify (a new price, a new unit):
+  // mirror it into products and pass the price on to the WhatsApp catalogue.
+  if (topic.startsWith("products/")) {
+    try {
+      await productSync.fromShopifyWebhook(db, order);
+      if (eventRowId) await db.markWebhookProcessed(eventRowId);
+    } catch (e) {
+      console.error(`[rates] product webhook failed for "${order.title}":`, e.message);
+      if (eventRowId) await db.markWebhookFailed(eventRowId, e.message);
+    }
+    return;
+  }
+
   // ---- 4. Persist, then notify ----
   try {
     const orderName = order.name || `#${order.id}`;
@@ -835,5 +849,10 @@ app.listen(PORT, async () => {
   // Read the Meta catalogue's product names (retailer id -> name), then write
   // names into saved catalogue orders that still show "item <id>" or the old
   // "(catalogue order)". Repeats every 6 hours so new products are picked up.
-  if (h.ok) catalogOrder.start(db);
+  // products.meta_retailer_id must exist before catalogue orders are read.
+  if (h.ok) {
+    productSync.ensureSchema(db)
+      .catch((e) => console.error("[rates] could not add products.meta_retailer_id:", e.message))
+      .finally(() => catalogOrder.start(db));
+  }
 });
