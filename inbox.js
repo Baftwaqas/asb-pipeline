@@ -970,6 +970,110 @@ router.post("/api/inbox/push/test", requireAuth, express.json(), async (req, res
   res.json({ ok: r.delivered === 1, ...r });
 });
 
+// ---------------------------------------------------------------------------
+// Rates: Shopify -> products table -> WhatsApp catalogue (productSync.js).
+//
+//   GET  /api/inbox/rates/meta       the catalogue as Meta has it, each item
+//                                    with the product it is linked to (if any)
+//   POST /api/inbox/rates/products   { products: [Shopify product JSON] }
+//                                    save them into products (same code path as
+//                                    the products/update webhook); push:true
+//                                    also sends linked ones to the catalogue
+//   POST /api/inbox/rates/link       { links: [{ shopify_variant_id, retailer_id }] }
+//                                    remember which catalogue item each product
+//                                    is, then send their prices to the catalogue
+//   POST /api/inbox/rates/meta       { updates: [{ retailer_id, asb_price,
+//                                    market_price, name?, in_stock? }] }
+//                                    direct catalogue edit (e.g. mark items that
+//                                    are not in today's list out of stock)
+// ---------------------------------------------------------------------------
+const productSync = require("./productSync");
+
+const ratesFail = (e, res) => {
+  console.error("[rates]", e.message);
+  if (/meta_retailer_id|does not exist/.test(e.message)) return pushMissing(e, res);
+  res.status(500).json({ error: e.message });
+};
+
+router.get("/api/inbox/rates/meta", requireAuth, async (_req, res) => {
+  try {
+    const catId = await productSync.catalogId(db);
+    if (!catId) return res.status(404).json({ error: "no_catalogue" });
+    const items = await productSync.metaItems(catId);
+    const { rows } = await db.query(
+      `SELECT meta_retailer_id, sku, name_en, shopify_variant_id, asb_price, market_price
+         FROM products WHERE meta_retailer_id IS NOT NULL`);
+    const byRid = new Map(rows.map((r) => [r.meta_retailer_id, r]));
+    res.json({ catalogId: catId, count: items.length,
+               items: items.map((i) => ({ ...i, linked: byRid.get(i.retailer_id) || null })) });
+  } catch (e) { ratesFail(e, res); }
+});
+
+router.post("/api/inbox/rates/products", requireAuth, express.json({ limit: "3mb" }), async (req, res) => {
+  const list = Array.isArray(req.body?.products) ? req.body.products : [];
+  if (!list.length) return res.status(400).json({ error: "no_products" });
+  try {
+    const saved = [];
+    const failed = [];
+    for (const p of list) {
+      try {
+        const row = await productSync.upsertFromShopify(db, p);
+        if (row) saved.push(row);
+      } catch (e) { failed.push({ title: p.title, error: e.message }); }
+    }
+    let pushed = 0;
+    if (req.body?.push) {
+      for (const row of saved) if (row.meta_retailer_id && await productSync.pushOne(db, row)) pushed++;
+    }
+    res.json({ saved: saved.length, failed, pushed });
+  } catch (e) { ratesFail(e, res); }
+});
+
+router.post("/api/inbox/rates/link", requireAuth, express.json({ limit: "1mb" }), async (req, res) => {
+  const links = Array.isArray(req.body?.links) ? req.body.links : [];
+  if (!links.length) return res.status(400).json({ error: "no_links" });
+  const linked = [];
+  const missing = [];
+  try {
+    await db.tx(async (client) => { for (const l of links) {
+      const rid = String(l.retailer_id || "").trim();
+      const vid = String(l.shopify_variant_id || "").trim();
+      if (!rid || !vid) continue;
+      // A catalogue item belongs to one product only: free it first.
+      await client.query(
+        `UPDATE products SET meta_retailer_id = NULL
+          WHERE meta_retailer_id = $1 AND shopify_variant_id <> $2`, [rid, vid]);
+      const { rows } = await client.query(
+        `UPDATE products SET meta_retailer_id = $1 WHERE shopify_variant_id = $2
+         RETURNING name_en, asb_price, market_price, is_active, meta_retailer_id`, [rid, vid]);
+      if (rows[0]) linked.push(rows[0]); else missing.push(vid);
+    } });
+  } catch (e) {
+    return ratesFail(e, res);
+  }
+
+  let meta = null;
+  if (req.body?.push !== false && linked.length) {
+    try {
+      const catId = await productSync.catalogId(db);
+      meta = await productSync.metaUpdate(catId, linked
+        .filter((r) => Number(r.asb_price) > 0)
+        .map((r) => ({ retailer_id: r.meta_retailer_id, asb_price: r.asb_price,
+                       market_price: r.market_price, in_stock: r.is_active })));
+    } catch (e) { meta = { error: e.message }; }
+  }
+  res.json({ linked: linked.length, missing, meta });
+});
+
+router.post("/api/inbox/rates/meta", requireAuth, express.json({ limit: "1mb" }), async (req, res) => {
+  const updates = Array.isArray(req.body?.updates) ? req.body.updates : [];
+  if (!updates.length) return res.status(400).json({ error: "no_updates" });
+  try {
+    const catId = await productSync.catalogId(db);
+    res.json(await productSync.metaUpdate(catId, updates));
+  } catch (e) { ratesFail(e, res); }
+});
+
 module.exports = router;
 module.exports.normalizePhone = normalizePhone;
 module.exports.logOutbound = logOutbound;
