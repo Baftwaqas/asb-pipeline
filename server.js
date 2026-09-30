@@ -31,6 +31,7 @@ const express = require("express");
 const crypto = require("crypto");
 const db = require("./db");
 const push = require("./push");
+const catalogOrder = require("./catalogOrder");
 const bill = require("./bill");
 const { resolveCycle, upsertCustomer, findOpenOrder, loadOrderForBill } = require("./orders");
 const wa = require("./whatsapp");
@@ -395,7 +396,9 @@ async function saveInbound(msg, contact) {
         (msg.location?.name ? ` ${msg.location.name}` : "");
       break;
     case "order":
-      preview = "(catalogue order)";
+      // A cart sent from the WhatsApp catalogue. Meta sends only product ids,
+      // so catalogOrder.js looks the names up and writes the items out.
+      preview = await catalogOrder.describe(db, msg.order);
       break;
     case "reaction":
       preview = `(reacted ${msg.reaction?.emoji || ""})`;
@@ -419,7 +422,7 @@ async function saveInbound(msg, contact) {
     [
       msg.id,
       from,
-      String(preview).slice(0, 500),
+      String(preview).slice(0, 1500),
       type,
       mediaId,
       mediaMime,
@@ -828,4 +831,21 @@ app.listen(PORT, async () => {
   // A rate-list broadcast interrupted by a restart carries on from where it
   // stopped. Every recipient is marked as sent, so nobody gets it twice.
   if (h.ok) broadcast.resumeAll(db, require("./inbox").logOutbound);
+
+  // Catalogue orders saved before catalogOrder.js existed only say
+  // "(catalogue order)". The full message is kept in `payload`, so write their
+  // items out now. Runs once per start and only touches those old rows.
+  if (h.ok) {
+    (async () => {
+      const { rows } = await db.query(
+        `SELECT wamid, payload FROM whatsapp_messages
+          WHERE msg_type = 'order' AND body_preview = '(catalogue order)'`);
+      for (const r of rows) {
+        const text = await catalogOrder.describe(db, r.payload?.order);
+        await db.query(`UPDATE whatsapp_messages SET body_preview = $2 WHERE wamid = $1`,
+          [r.wamid, text.slice(0, 1500)]);
+      }
+      if (rows.length) console.log(`[catalogue] filled in the items of ${rows.length} earlier catalogue order(s)`);
+    })().catch((e) => console.error("[catalogue] backfill failed:", e.message));
+  }
 });
