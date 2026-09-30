@@ -832,20 +832,8 @@ app.listen(PORT, async () => {
   // stopped. Every recipient is marked as sent, so nobody gets it twice.
   if (h.ok) broadcast.resumeAll(db, require("./inbox").logOutbound);
 
-  // Catalogue orders saved before catalogOrder.js existed only say
-  // "(catalogue order)". The full message is kept in `payload`, so write their
-  // items out now. Runs once per start and only touches those old rows.
-  if (h.ok) {
-    (async () => {
-      const { rows } = await db.query(
-        `SELECT wamid, payload FROM whatsapp_messages
-          WHERE msg_type = 'order' AND body_preview = '(catalogue order)'`);
-      for (const r of rows) {
-        const text = await catalogOrder.describe(db, r.payload?.order);
-        await db.query(`UPDATE whatsapp_messages SET body_preview = $2 WHERE wamid = $1`,
-          [r.wamid, text.slice(0, 1500)]);
-      }
-      if (rows.length) console.log(`[catalogue] filled in the items of ${rows.length} earlier catalogue order(s)`);
-    })().catch((e) => console.error("[catalogue] backfill failed:", e.message));
-  }
+  // Read the Meta catalogue's product names (retailer id -> name), then write
+  // names into saved catalogue orders that still show "item <id>" or the old
+  // "(catalogue order)". Repeats every 6 hours so new products are picked up.
+  if (h.ok) catalogOrder.start(db);
 });
