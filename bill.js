@@ -172,7 +172,21 @@ function orderedPhrase(ts) {
 
 /** Name the customer recognises: Urdu if we have it, English otherwise. */
 function productLabel(line) {
-  return (line.name_ur && line.name_ur.trim()) || line.name_en || line.sku;
+  const label = (line.name_ur && line.name_ur.trim()) || line.name_en || line.sku;
+  return keepLineLeftToRight(label);
+}
+
+// Urdu is written right-to-left. A bill line that STARTS with an Urdu name
+// makes WhatsApp lay the whole line out right-to-left, so the digits, the
+// "×" and the rupee amounts come out in the wrong order ("kg × Rs 730/kg =
+// Rs 730 1 · آڑو"). An invisible left-to-right mark (U+200E) before and after
+// the Urdu word keeps the line left-to-right with the Urdu word intact inside
+// it. The marks are zero-width, so nothing changes on screen except the order
+// now being right. Labels with no Urdu are returned untouched.
+const URDU = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const LRM = "\u200E";
+function keepLineLeftToRight(label) {
+  return URDU.test(label) ? `${LRM}${label}${LRM}` : label;
 }
 
 // ---------------------------------------------------------------------------
