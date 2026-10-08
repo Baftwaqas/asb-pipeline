@@ -15,9 +15,10 @@ commitments, verification, Rate Meter, settlement or trust logic.
 
 Database-enforced rules:
 
-- `community_intake` captured facts are **immutable** (trigger `community_intake_guard`); rows can't be deleted.
+- `community_intake` captured facts (including `id`) are **immutable** (trigger `community_intake_guard`); rows can't be deleted; a resolution, once made, is final.
+- Registry rows can't be deleted (deactivate instead). No Community table can be `TRUNCATE`d — including via `TRUNCATE webhook_events CASCADE`.
 - Allowed states: `received → resolved | review | retryable_error`, `retryable_error → resolved | review | retryable_error`, `review → received` (operator re-queue only). `resolved` is final in Phase 1.
-- `resolved` requires `resolved_variant_gid` and `resolved_at`; `review` requires `review_reason`.
+- `resolved` requires `resolved_variant_gid` and `resolved_at`; any other state requires them to be NULL; `review` requires `review_reason`.
 - A deactivated registry row must carry `deactivated_at`, `deactivated_by` and `deactivation_reason`.
 - `community_audit` rejects UPDATE and DELETE.
 
@@ -36,14 +37,15 @@ Every `community_intake` row is self-contained:
 | order `created_at` | `order_created_at` |
 | customer | `customer_phone` (normalised), `shopify_customer_id` |
 | the line as received | `line_payload` |
-| **the whole order as received** | `order_payload` + `order_payload_sha256` (SHA-256 of the raw request bytes) |
+| **the whole order as received** | `order_raw` (request body, byte for byte) + `order_payload_sha256` (its SHA-256, re-verifiable from `order_raw`) + `order_payload` (same order parsed, for querying) |
 | the delivery that captured it | `webhook_event_id`, `topic`, `received_at` |
 | why it was diverted | `classification`, `signals` |
 
 `webhook_events.payload` is a second copy, not the source of truth: the
 foreign key stops that row being deleted while intake references it, but the
 column itself is not write-protected (the inbox updates payloads of its own
-`source = 'inbox'` rows). Phase 2 must read `community_intake.order_payload`.
+`source = 'inbox'` rows). Phase 2 must read `community_intake.order_raw` /
+`order_payload`.
 Retention assumption: nothing in the codebase deletes `webhook_events` or
 `community_intake`; any future retention job must skip referenced events (the
 FK enforces it).
@@ -58,7 +60,10 @@ immutable. Order edits are a Phase 2/4 concern (events), not overwrites.
 `registered_variant` (active variant of an active product), `registered_product`
 (active product), `sku_prefix` (`ASB-COM-`), `vendor` (only if
 `COMMUNITY_VENDORS` is set). Only an exact registered variant id makes it
-`registered`; anything else is `suspect`. SKU never resolves a pack.
+`registered`; anything else is `suspect`. SKU never resolves a pack. A line
+already in `community_intake` (same order + line id) carries
+`already_captured` and stays Community on every later delivery, whatever the
+registry says by then.
 
 **Before the 200** (`community/intake.js`, one transaction, no network):
 HMAC → insert `webhook_events` (duplicate delivery → 200, stop) → orders:
@@ -71,7 +76,10 @@ grocery-only view** (`community/sanitize.js`): grocery lines only, no Shopify
 totals/refunds/fulfillments, plus an `asb_community_split` marker. That view is
 what `orders.source_payload` stores. Community-only order → no grocery order,
 no bill. `persistOrder` refuses (rolls back) any order still containing a
-Community line, and no improvised bill is sent in that case.
+Community line. If that happens because the registry changed between the
+pre-200 capture and the grocery write, the newly-Community lines are captured
+to `community_intake` and the grocery write is retried once with the remaining
+grocery lines; a second refusal sends nothing and marks the webhook failed.
 
 **Worker** (`community/worker.js`): validates quantity (= 1) and identity,
 resolves by exact registered variant id. Review reasons: `invalid_quantity`,
@@ -95,13 +103,17 @@ One sweep at a time per process; rows are row-locked (`SKIP LOCKED`).
 | Reconcile with Shopify (read-only token) | `npm run community:registry -- --from-shopify [--apply]` |
 | Health | `GET /healthz` → `community: { ready, environment, variants, review, pending }` |
 
-Every write command is a dry run without `--apply`, needs `--by` and a reason of
+Re-queue restarts the line's retry budget (attempts → 0); the previous count
+and error are kept in the audit row. Every write command is a dry run without `--apply`, needs `--by` and a reason of
 at least 10 characters, and writes a `community_audit` row. Deactivation never
 touches `community_intake`: pending lines of a deactivated product/variant go
 to `review` (`product_deactivated` / `variant_deactivated`), never to grocery.
 A product is only deactivatable once Shopify no longer marks it Community; if
 Shopify marks it Community again, it is re-activated automatically (audited,
-actor `system`).
+actor `system`). Registry writes lock the product row, so a deactivation and a
+concurrent webhook cannot interleave. The inbox picker and inbox orders apply
+the same rule as the classifier (Community SKU, registered product or variant,
+or the legacy `community-excluded` category all exclude).
 
 ### Safety mode
 
@@ -134,7 +146,7 @@ answers 503, and Shopify only retries for a limited time.
 - **Data**: leave 016 in place (harmless). Dropping it is only safe before any
   real Community order is captured:
   `DROP TABLE community_audit, community_intake, community_variants, community_products;`
-  `DROP FUNCTION community_intake_guard(), community_audit_guard();`
+  `DROP FUNCTION community_intake_guard(), community_audit_guard(), community_no_truncate(), community_registry_no_delete();`
   `DELETE FROM schema_migrations WHERE filename = '016_community_intake.sql';`
 
 ## 5. Rehearsal on a Neon branch (production untouched)

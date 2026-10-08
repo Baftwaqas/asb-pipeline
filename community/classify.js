@@ -13,6 +13,7 @@
 //                       (and its product is active)
 //   registered_product  line.product_id is an ACTIVE row in community_products
 //   sku_prefix          line.sku starts with "ASB-COM-"
+//   already_captured    this order line is already in community_intake
 //   vendor              line.vendor is listed in COMMUNITY_VENDORS (env, comma
 //                       separated; empty by default because today Community
 //                       and grocery products share the vendor
@@ -43,7 +44,7 @@ function communityVendors() {
  * Returns [{ line, community, classification, signals }] in the same order.
  * One query for the whole order.
  */
-async function classifyLines(q, lines) {
+async function classifyLines(q, lines, { orderId } = {}) {
   const list = Array.isArray(lines) ? lines : [];
   const variantIds = [...new Set(list.map((l) => numericId(l?.variant_id)).filter(Boolean))];
   const productIds = [...new Set(list.map((l) => numericId(l?.product_id)).filter(Boolean))];
@@ -67,6 +68,20 @@ async function classifyLines(q, lines) {
     regProducts = new Set(rows.filter((r) => r.k === "p").map((r) => r.id));
   }
 
+  // A line already captured to community_intake stays Community on every
+  // later delivery (orders/updated, re-sends) and in the persistOrder
+  // backstop, even if the registry changed since. Matched on order + line id
+  // across shops: fail closed.
+  let captured = new Set();
+  const lineIds = list.map((l) => (l?.id === undefined || l?.id === null ? null : String(l.id))).filter(Boolean);
+  if (orderId !== undefined && orderId !== null && lineIds.length) {
+    const { rows } = await q.query(
+      `SELECT shopify_line_item_id AS id FROM community_intake
+        WHERE shopify_order_id = $1 AND shopify_line_item_id = ANY($2::text[])`,
+      [String(orderId), lineIds]);
+    captured = new Set(rows.map((r) => r.id));
+  }
+
   const vendors = communityVendors();
 
   return list.map((line) => {
@@ -77,6 +92,7 @@ async function classifyLines(q, lines) {
     if (pid && regProducts.has(pid)) signals.push("registered_product");
     if (hasCommunitySku(line?.sku)) signals.push("sku_prefix");
     if (line?.vendor && vendors.includes(String(line.vendor).trim().toLowerCase())) signals.push("vendor");
+    if (line?.id !== undefined && line?.id !== null && captured.has(String(line.id))) signals.push("already_captured");
     return {
       line,
       community: signals.length > 0,
@@ -100,8 +116,8 @@ class CommunityLeakError extends Error {
   }
 }
 
-async function assertNoCommunityLines(q, lines) {
-  const out = await classifyLines(q, lines);
+async function assertNoCommunityLines(q, lines, { orderId } = {}) {
+  const out = await classifyLines(q, lines, { orderId });
   const leaked = out.filter((c) => c.community).map((c) => c.line);
   if (leaked.length) throw new CommunityLeakError(leaked);
 }

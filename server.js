@@ -177,7 +177,7 @@ async function resolveProduct(client, item) {
 // line either.
 async function persistOrder(order, phone) {
   return db.tx(async (client) => {
-    await assertNoCommunityLines(client, order.line_items || []);
+    await assertNoCommunityLines(client, order.line_items || [], { orderId: order.id });
 
     const cycle = await resolveCycle(
       client,
@@ -824,8 +824,30 @@ app.post("/webhooks/shopify", async (req, res) => {
 
     // --- save it ---
     let saved = null;
+    let recapturedLeak = false;
     try {
-      saved = await persistOrder(order, phone);
+      saved = await persistOrder(order, phone).catch(async (e) => {
+        if (e.code !== "ASB_COMMUNITY_LEAK") throw e;
+        // The registry changed between capture (before the 200) and now, so a
+        // line that was grocery then is Community now. Capture it to
+        // community_intake (never lose it), then persist only what is still
+        // grocery. No second chance: a further leak is refused below.
+        recapturedLeak = true;
+        const cap2 = await db.tx((c) => communityIntake.captureOrderLines(c, {
+          shop, topic, order: rawOrder, eventRowId, phone: normalizePhone(rawPhoneEarly),
+          orderRaw: Buffer.from(req.body).toString("utf8"),
+        }));
+        console.warn(`   ${orderName}: registry changed after capture - ${cap2.communityLines.length} Community line(s) now in community_intake`);
+        communityWorker.kick(db);
+        if (!cap2.groceryLines.length) return { communityOnly: true };
+        order = groceryOnlyOrder(rawOrder, { ...cap2, eventRowId });
+        return persistOrder(order, phone);
+      });
+      if (saved.communityOnly) {
+        console.log(`   ${orderName}: no grocery lines left - no grocery order, no grocery bill`);
+        if (eventRowId) await db.markWebhookProcessed(eventRowId);
+        return;
+      }
       if (saved.skipped) {
         console.log(`   Already saved as ${saved.orderNumber} - not sending again`);
         if (eventRowId) await db.markWebhookProcessed(eventRowId);
@@ -841,7 +863,7 @@ app.post("/webhooks/shopify", async (req, res) => {
       // The Community backstop refused the order (a Community line reached
       // the grocery writer). Send nothing: an improvised bill here could list
       // the wrong lines. The payload stays in webhook_events for review.
-      if (e.code === "ASB_COMMUNITY_LEAK") return;
+      if (e.code === "ASB_COMMUNITY_LEAK" || recapturedLeak) return;
       // Still send the confirmation - the customer matters more than our records,
       // and the raw payload is safe in webhook_events for a later backfill.
     }

@@ -86,7 +86,10 @@ test("intake keeps every order-time fact Phase 2 needs, self-contained", async (
   assert.equal(new Date(r.order_created_at).toISOString(), new Date(order.created_at).toISOString());
   assert.deepEqual(r.line_payload, line);
   assert.deepEqual(r.order_payload, order, "the whole order as received, inside the intake row itself");
+  assert.equal(r.order_raw, JSON.stringify(order), "the request body, byte for byte");
   assert.equal(r.order_payload_sha256, sha, "fingerprint of the raw bytes Shopify sent");
+  assert.equal(crypto.createHash("sha256").update(r.order_raw, "utf8").digest("hex"), r.order_payload_sha256,
+               "the fingerprint can be re-verified from stored data alone");
   assert.equal(r.webhook_event_id, ev.id);
   assert.deepEqual(ev.payload, order);
 });
@@ -97,12 +100,22 @@ test("captured facts are immutable, rows cannot be deleted, illegal transitions 
   await assert.rejects(db.query(`UPDATE community_intake SET sku = 'X' WHERE id = $1`, [r.id]), /immutable/);
   await assert.rejects(db.query(`UPDATE community_intake SET order_payload = '{}' WHERE id = $1`, [r.id]), /immutable/);
   await assert.rejects(db.query(`UPDATE community_intake SET quantity = 1, shopify_variant_id = '1' WHERE id = $1`, [r.id]), /immutable/);
+  await assert.rejects(db.query(`UPDATE community_intake SET order_raw = '{}' WHERE id = $1`, [r.id]), /immutable/);
+  await assert.rejects(db.query(`UPDATE community_intake SET id = id + 100000 WHERE id = $1`, [r.id]), /immutable/);
   await assert.rejects(db.query(`DELETE FROM community_intake WHERE id = $1`, [r.id]), /never deleted/);
+  await assert.rejects(db.query(`UPDATE community_intake SET resolved_variant_gid = 'x' WHERE id = $1`, [r.id]),
+                       /community_intake_unresolved_chk/, "no resolution on an unresolved row");
   await worker.runOnce(db);
   const [done] = await intakeFor(id);
   assert.equal(done.status, "resolved");
   await assert.rejects(db.query(`UPDATE community_intake SET status = 'received' WHERE id = $1`, [r.id]), /cannot move resolved -> received/);
   await assert.rejects(db.query(`UPDATE community_intake SET status = 'review', review_reason = 'x' WHERE id = $1`, [r.id]), /cannot move/);
+  await assert.rejects(db.query(`UPDATE community_intake SET resolved_variant_gid = 'gid://other' WHERE id = $1`, [r.id]), /is final/);
+  for (const t of ["community_intake", "community_audit", "community_products", "community_variants"]) {
+    await assert.rejects(db.query(`TRUNCATE ${t} CASCADE`), /cannot be truncated/, t);
+  }
+  await assert.rejects(db.query(`TRUNCATE webhook_events CASCADE`), /cannot be truncated/);
+  await assert.rejects(db.query(`DELETE FROM community_variants WHERE shopify_variant_id = '50595474014466'`), /never deleted/);
   // The webhook event an intake row points at cannot be deleted either.
   await assert.rejects(db.query(`DELETE FROM webhook_events WHERE id = $1`, [r.webhook_event_id]), /foreign key/);
 });
@@ -216,6 +229,8 @@ test("requeue is guarded, audited, and only sends a review row back to the Commu
   await worker.runOnce(db);
   const [again] = await intakeFor(id);
   assert.equal(again.status, "review", "cause not fixed -> back to review, never grocery");
+  assert.equal(again.attempts, 1, "re-queue restarts the retry budget (old count kept in the audit row)");
+  assert.equal(aud[0].before.attempts, 1);
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM order_items`)).rows[0].n, before.rows[0].n);
   // Only review rows can be re-queued.
   const { id: id2 } = await sendOrder([H.line(H.COMMUNITY.tomato10Draft, 1)]);
@@ -395,4 +410,104 @@ test("rehearsal passes end-to-end against a staging copy running the real server
     child?.kill("SIGTERM");
     await sdb.pool.end();
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// Second review pass fixes
+// ---------------------------------------------------------------------------
+
+test("a line already in intake stays Community on later deliveries, even after the registry changes", async () => {
+  const p = { id: 10377777777777, title: "Kaddu — Community Deal", status: "draft", product_type: "Community Internal",
+              vendor: "Apna Sasta Bazaar", tags: "asb-community-internal",
+              variants: [{ id: 50577777777771, sku: "ASB-COM-KADDU-5KG", title: "5 kg", price: "500.00" }] };
+  await registry.upsertProduct(db, p, "webhook");
+  const line = H.line({ variant_id: 50577777777771, product_id: 10377777777777, sku: "ASB-COM-KADDU-5KG",
+                        title: "Kaddu — Community Deal", price: "500.00" }, 1);
+  const first = await sendOrder([line]);
+  assert.equal((await intakeFor(first.id)).length, 1);
+  // Shopify is "fixed" and the product deactivated: no registry or SKU signal left.
+  await registry.upsertProduct(db, { ...p, product_type: "Vegetables", tags: "",
+                                     variants: [{ id: 50577777777771, sku: "ASB-VEG-KADDU", title: "5 kg", price: "500.00" }] }, "webhook");
+  await registry.deactivateProduct(db, { productId: "10377777777777", actor: "Waqas", reason: "test: kaddu is grocery now", apply: true });
+  const before = (await db.query(`SELECT count(*)::int AS n FROM order_items`)).rows[0].n;
+  const updated = { ...first.order, line_items: [{ ...line, sku: "ASB-VEG-KADDU" }] };
+  const hook = nextHook();
+  assert.equal(await H.postShopify(base, updated, { id: hook, topic: "orders/updated" }), 200);
+  await H.waitWebhookDone(db, "shopify", hook);
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM order_items`)).rows[0].n, before, "never grocery");
+  assert.equal((await db.query(`SELECT 1 FROM orders WHERE shopify_order_id = $1`, [String(first.id)])).rows.length, 0);
+});
+
+test("registry changes between capture and persist: the line is re-captured, grocery continues, nothing lost", async () => {
+  const intakeMod = require(path.join(ROOT, "community", "intake.js"));
+  const original = intakeMod.captureWebhook;
+  const newPack = { id: 10366666666666, title: "Bhindi — Community Deal", status: "draft", product_type: "Community Internal",
+                    vendor: "Apna Sasta Bazaar", tags: "asb-community-internal",
+                    variants: [{ id: 50566666666661, sku: "ASB-VEG-066", title: "3 kg", price: "450.00" }] };
+  // The race: the registry learns about this product right AFTER the
+  // pre-200 capture classified its line as grocery.
+  intakeMod.captureWebhook = async (...a) => {
+    const r = await original(...a);
+    if (r.kind === "order" && r.groceryLines.some((l) => String(l.variant_id) === "50566666666661")) {
+      await registry.upsertProduct(db, newPack, "webhook");
+    }
+    return r;
+  };
+  try {
+    const sendsBefore = sent.length;
+    const racer = H.line({ variant_id: 50566666666661, product_id: 10366666666666, sku: "ASB-VEG-066",
+                           title: "Bhindi — Community Deal", price: "450.00" }, 1);
+    const { id, hook } = await sendOrder([H.line(H.GROCERY.mango, 1), racer], { phone: "+92 345 3030303" });
+    assert.equal((await db.query(`SELECT status FROM webhook_events WHERE event_id = $1`, [hook])).rows[0].status, "processed");
+    const rows = await intakeFor(id);
+    assert.equal(rows.length, 1, "the late Community line was captured, not lost");
+    assert.equal(rows[0].shopify_variant_id, "50566666666661");
+    const items = (await db.query(`SELECT p.sku FROM order_items oi JOIN orders o ON o.id = oi.order_id
+                                     JOIN products p ON p.id = oi.product_id WHERE o.shopify_order_id = $1`, [String(id)])).rows;
+    assert.deepEqual(items, [{ sku: "ASB-FRT-001" }], "grocery continued with the grocery line only");
+    assert.equal(sent.length, sendsBefore + 1, "one grocery bill");
+    assert.equal((await db.query(`SELECT 1 FROM products WHERE shopify_variant_id = '50566666666661'`)).rows.length, 0, "no stub");
+  } finally {
+    intakeMod.captureWebhook = original;
+  }
+});
+
+test("inbox orders use the classifier's rule (registered PRODUCT is enough)", async () => {
+  // A products row for an unregistered variant of a registered Community product
+  // (the shape of the 4-5 Oct stubs), category NOT community-excluded.
+  await db.query(`INSERT INTO products (sku, name_en, category, unit, shopify_product_id, shopify_variant_id, is_active, asb_price)
+                  VALUES ('SHP-50595499999999', 'Payaz pack stub', 'sabziyaan', 'kg', '10341692014850', '50595499999999', true, 700)`);
+  const orders = require(path.join(ROOT, "orders.js"));
+  await assert.rejects(db.tx((c) => orders.saveInboxOrder(c, {
+    phone: "923009990001", name: "Inbox", orderedAt: new Date("2026-10-08T05:00:00Z"),
+    lines: [{ sku: "SHP-50595499999999", packs: 1 }], enteredBy: "test" })), /Community pack/);
+});
+
+test("operator deactivation and a webhook re-registration serialise (no interleaving)", async () => {
+  const p = { id: 10355555555555, title: "Arvi — Community Deal", status: "draft", product_type: "Community Internal",
+              vendor: "Apna Sasta Bazaar", tags: "asb-community-internal",
+              variants: [{ id: 50555555555551, sku: "ASB-COM-ARVI-5KG", title: "5 kg", price: "600.00" }] };
+  await registry.upsertProduct(db, p, "webhook");
+  const plain = { ...p, product_type: "Vegetables", tags: "", variants: [{ ...p.variants[0], sku: "ASB-VEG-ARVI" }] };
+  await registry.upsertProduct(db, plain, "webhook");                 // signals lost -> deactivatable
+  const c = await db.pool.connect();
+  try {
+    await c.query("BEGIN");
+    await registry.upsertProduct(c, p, "webhook");                     // Shopify marks it Community again (locks the row)
+    const op = registry.deactivateProduct(db, { productId: "10355555555555", actor: "Waqas",
+                                                reason: "racing the webhook on purpose", apply: true });
+    await new Promise((r) => setTimeout(r, 250));
+    await c.query("COMMIT");
+    await assert.rejects(op, /still marked Community/, "the operator sees the committed webhook, not a stale row");
+  } finally {
+    c.release();
+  }
+  const row = (await db.query(`SELECT is_active, signals_ok FROM community_products WHERE shopify_product_id = '10355555555555'`)).rows[0];
+  assert.deepEqual(row, { is_active: true, signals_ok: true });
+});
+
+test("community:review tolerates odd --stuck-min / --limit input", async () => {
+  await review.attentionRows(db, { stuckMin: "2.5", limit: "abc" });
+  await review.attentionRows(db, { stuckMin: "x" });
 });

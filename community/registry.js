@@ -69,9 +69,10 @@ async function isRegisteredProduct(q, productId) {
   return rows.length > 0;
 }
 
-async function productRow(q, productId) {
+async function productRow(q, productId, { lock = false } = {}) {
   const { rows } = await q.query(
-    `SELECT * FROM community_products WHERE shopify_product_id = $1`, [numericId(productId)]);
+    `SELECT * FROM community_products WHERE shopify_product_id = $1 ${lock ? "FOR UPDATE" : ""}`,
+    [numericId(productId)]);
   return rows[0] || null;
 }
 
@@ -82,12 +83,17 @@ async function productRow(q, productId) {
  * `q` is anything with .query (a pool, the db module, or a transaction client).
  * Returns { registered: boolean, signals: string[] }.
  */
-async function upsertProduct(q, p, via, { markMissingAbsent = true } = {}) {
+async function upsertProduct(q, p, via, opts = {}) {
+  // Always one transaction with the product row locked, so an operator's
+  // deactivation and a webhook's re-registration serialise instead of
+  // interleaving (the db module has .tx; a transaction client does not).
+  if (typeof q.tx === "function") return q.tx((c) => upsertProduct(c, p, via, opts));
+  const { markMissingAbsent = true } = opts;
   const pid = numericId(p?.id);
   if (!pid) return { registered: false, signals: [] };
 
   const signals = productSignals(p);
-  const existing = await productRow(q, pid);
+  const existing = await productRow(q, pid, { lock: true });
   const already = Boolean(existing);       // registered at all (active or deactivated)
   if (!signals.length && !already) return { registered: false, signals };
 
@@ -104,6 +110,15 @@ async function upsertProduct(q, p, via, { markMissingAbsent = true } = {}) {
         signals_ok, registered_via, last_synced_at, deleted_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), NULL)
      ON CONFLICT (shopify_product_id) DO UPDATE SET
+       -- Community signals in Shopify always win over a deactivation (fail
+       -- closed); the audit row for that is written below.
+       is_active           = community_products.is_active OR EXCLUDED.signals_ok,
+       deactivated_at      = CASE WHEN community_products.is_active OR NOT EXCLUDED.signals_ok
+                                  THEN community_products.deactivated_at END,
+       deactivated_by      = CASE WHEN community_products.is_active OR NOT EXCLUDED.signals_ok
+                                  THEN community_products.deactivated_by END,
+       deactivation_reason = CASE WHEN community_products.is_active OR NOT EXCLUDED.signals_ok
+                                  THEN community_products.deactivation_reason END,
        title          = EXCLUDED.title,
        shopify_status = EXCLUDED.shopify_status,
        product_type   = EXCLUDED.product_type,
@@ -150,10 +165,6 @@ async function upsertProduct(q, p, via, { markMissingAbsent = true } = {}) {
   // again: Community wins (fail closed). Recorded in the audit log.
   let reactivated = false;
   if (existing && !existing.is_active && signals.length) {
-    await q.query(
-      `UPDATE community_products
-          SET is_active = TRUE, deactivated_at = NULL, deactivated_by = NULL, deactivation_reason = NULL
-        WHERE shopify_product_id = $1`, [pid]);
     await audit(q, {
       actor: "system", action: "auto_reactivate_product", targetType: "product", targetId: pid,
       reason: `Shopify marks it Community again (${signals.join("+")}) via ${via}`,

@@ -31,7 +31,8 @@
 --
 -- Rollback (only before any real Community order is captured):
 --   DROP TABLE community_audit, community_intake, community_variants, community_products;
---   DROP FUNCTION community_intake_guard(), community_audit_guard();
+--   DROP FUNCTION community_intake_guard(), community_audit_guard(),
+--                 community_no_truncate(), community_registry_no_delete();
 --   DELETE FROM schema_migrations WHERE filename = '016_community_intake.sql';
 -- ============================================================================
 
@@ -91,6 +92,17 @@ CREATE TABLE community_variants (
 );
 
 CREATE INDEX idx_community_variants_product ON community_variants (shopify_product_id);
+
+-- Registry rows are never deleted (deactivate instead - scripts/community-registry.js).
+CREATE FUNCTION community_registry_no_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'ASB_GUARD: % rows are never deleted - deactivate them instead', TG_TABLE_NAME;
+END $$;
+
+CREATE TRIGGER trg_community_products_no_delete
+  BEFORE DELETE ON community_products FOR EACH ROW EXECUTE FUNCTION community_registry_no_delete();
+CREATE TRIGGER trg_community_variants_no_delete
+  BEFORE DELETE ON community_variants FOR EACH ROW EXECUTE FUNCTION community_registry_no_delete();
 CREATE INDEX idx_community_variants_sku     ON community_variants (sku);
 
 -- ---------------------------------------------------------------------------
@@ -122,8 +134,9 @@ CREATE TABLE community_intake (
   shopify_customer_id    TEXT,
   order_created_at       TIMESTAMPTZ,                   -- Shopify order created_at
   line_payload           JSONB NOT NULL,                -- this line exactly as received
-  order_payload          JSONB NOT NULL,                -- the whole order exactly as received
-  order_payload_sha256   TEXT NOT NULL,                 -- of the raw request body
+  order_raw              TEXT NOT NULL,                 -- the request body, byte-for-byte (UTF-8 JSON)
+  order_payload          JSONB NOT NULL,                -- the same order, parsed (for querying)
+  order_payload_sha256   TEXT NOT NULL,                 -- SHA-256 of order_raw
 
   -- ---- why it was diverted away from grocery (immutable) ----------------
   classification         TEXT NOT NULL,                 -- registered | suspect
@@ -150,6 +163,9 @@ CREATE TABLE community_intake (
     CHECK (classification IN ('registered', 'suspect')),
   CONSTRAINT community_intake_resolved_chk
     CHECK (status <> 'resolved' OR (resolved_variant_gid IS NOT NULL AND resolved_at IS NOT NULL)),
+  CONSTRAINT community_intake_unresolved_chk
+    CHECK (status = 'resolved' OR (resolved_variant_gid IS NULL AND resolved_product_id IS NULL
+                                   AND resolved_at IS NULL)),
   CONSTRAINT community_intake_review_chk
     CHECK (status <> 'review' OR review_reason IS NOT NULL),
   CONSTRAINT community_intake_attempts_chk
@@ -164,18 +180,18 @@ BEGIN
     RAISE EXCEPTION 'ASB_GUARD: community_intake rows are never deleted (id %)', OLD.id;
   END IF;
 
-  IF (NEW.shop, NEW.shopify_order_id, NEW.shopify_line_item_id, NEW.shopify_order_name,
+  IF (NEW.id, NEW.shop, NEW.shopify_order_id, NEW.shopify_line_item_id, NEW.shopify_order_name,
       NEW.webhook_event_id, NEW.topic, NEW.shopify_product_id, NEW.shopify_variant_id,
       NEW.sku, NEW.vendor, NEW.title, NEW.variant_title, NEW.quantity, NEW.unit_price,
       NEW.currency, NEW.customer_phone, NEW.shopify_customer_id, NEW.order_created_at,
-      NEW.line_payload, NEW.order_payload, NEW.order_payload_sha256,
+      NEW.line_payload, NEW.order_raw, NEW.order_payload, NEW.order_payload_sha256,
       NEW.classification, NEW.signals, NEW.received_at)
      IS DISTINCT FROM
-     (OLD.shop, OLD.shopify_order_id, OLD.shopify_line_item_id, OLD.shopify_order_name,
+     (OLD.id, OLD.shop, OLD.shopify_order_id, OLD.shopify_line_item_id, OLD.shopify_order_name,
       OLD.webhook_event_id, OLD.topic, OLD.shopify_product_id, OLD.shopify_variant_id,
       OLD.sku, OLD.vendor, OLD.title, OLD.variant_title, OLD.quantity, OLD.unit_price,
       OLD.currency, OLD.customer_phone, OLD.shopify_customer_id, OLD.order_created_at,
-      OLD.line_payload, OLD.order_payload, OLD.order_payload_sha256,
+      OLD.line_payload, OLD.order_raw, OLD.order_payload, OLD.order_payload_sha256,
       OLD.classification, OLD.signals, OLD.received_at) THEN
     RAISE EXCEPTION 'ASB_GUARD: captured order facts on community_intake % are immutable', OLD.id;
   END IF;
@@ -188,6 +204,12 @@ BEGIN
     RAISE EXCEPTION 'ASB_GUARD: community_intake % cannot move % -> %', OLD.id, OLD.status, NEW.status;
   END IF;
 
+  -- A resolution, once made, is final in Phase 1.
+  IF OLD.status = 'resolved' AND (NEW.resolved_variant_gid, NEW.resolved_product_id, NEW.resolved_at)
+       IS DISTINCT FROM (OLD.resolved_variant_gid, OLD.resolved_product_id, OLD.resolved_at) THEN
+    RAISE EXCEPTION 'ASB_GUARD: resolution of community_intake % is final', OLD.id;
+  END IF;
+
   NEW.updated_at := now();
   RETURN NEW;
 END $$;
@@ -195,6 +217,17 @@ END $$;
 CREATE TRIGGER trg_community_intake_guard
   BEFORE UPDATE OR DELETE ON community_intake
   FOR EACH ROW EXECUTE FUNCTION community_intake_guard();
+
+-- Row triggers do not fire on TRUNCATE (including TRUNCATE ... CASCADE from
+-- webhook_events), so every Community table also refuses TRUNCATE outright.
+CREATE FUNCTION community_no_truncate() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'ASB_GUARD: % cannot be truncated', TG_TABLE_NAME;
+END $$;
+
+CREATE TRIGGER trg_community_intake_no_truncate
+  BEFORE TRUNCATE ON community_intake
+  FOR EACH STATEMENT EXECUTE FUNCTION community_no_truncate();
 
 -- The worker's queue: only unfinished rows are indexed.
 CREATE INDEX idx_community_intake_pending ON community_intake (next_attempt_at)
@@ -237,5 +270,12 @@ END $$;
 CREATE TRIGGER trg_community_audit_guard
   BEFORE UPDATE OR DELETE ON community_audit
   FOR EACH ROW EXECUTE FUNCTION community_audit_guard();
+
+CREATE TRIGGER trg_community_audit_no_truncate
+  BEFORE TRUNCATE ON community_audit FOR EACH STATEMENT EXECUTE FUNCTION community_no_truncate();
+CREATE TRIGGER trg_community_products_no_truncate
+  BEFORE TRUNCATE ON community_products FOR EACH STATEMENT EXECUTE FUNCTION community_no_truncate();
+CREATE TRIGGER trg_community_variants_no_truncate
+  BEFORE TRUNCATE ON community_variants FOR EACH STATEMENT EXECUTE FUNCTION community_no_truncate();
 
 COMMIT;

@@ -143,11 +143,13 @@ async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy
             COALESCE(cp.ceiling_price, p.asb_price)   AS ceiling,
             COALESCE(cp.market_price,  p.market_price) AS market,
             (cp.ceiling_price IS NOT NULL)             AS already_published,
-            (p.category = 'community-excluded' OR EXISTS (
-               SELECT 1 FROM community_variants cv
-                 JOIN community_products cp USING (shopify_product_id)
-                WHERE cv.shopify_variant_id = p.shopify_variant_id
-                  AND cv.is_active AND cp.is_active)) AS is_community
+            -- Same rule as community/classify.js: any Community signal.
+            (p.category = 'community-excluded' OR p.sku LIKE 'ASB-COM-%'
+             OR EXISTS (SELECT 1 FROM community_products cp
+                         WHERE cp.is_active AND cp.shopify_product_id = p.shopify_product_id)
+             OR EXISTS (SELECT 1 FROM community_variants cv
+                          JOIN community_products cp USING (shopify_product_id)
+                         WHERE cv.shopify_variant_id = p.shopify_variant_id AND cp.is_active)) AS is_community
        FROM products p
        LEFT JOIN cycle_prices cp ON cp.product_id = p.id AND cp.cycle_id = $2
       WHERE p.sku = ANY($1)`,

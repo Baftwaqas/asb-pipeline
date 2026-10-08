@@ -35,7 +35,7 @@ async function attentionRows(q, { all = false, status, order, stuckMin = 10, lim
   if (status) where.push(`i.status = ${p(status)}`);
   else if (!all) {
     where.push(`(i.status IN ('review','retryable_error')
-                 OR (i.status = 'received' AND i.received_at < now() - make_interval(mins => ${p(stuckMin)})))`);
+                 OR (i.status = 'received' AND i.received_at < now() - make_interval(mins => ${p(Math.max(0, Math.floor(Number(stuckMin) || 0)))})))`);
   }
   if (order) {
     const o = String(order).replace(/^#/, "");
@@ -51,7 +51,7 @@ async function attentionRows(q, { all = false, status, order, stuckMin = 10, lim
        FROM community_intake i
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
       ORDER BY i.received_at, i.id
-      LIMIT ${p(limit)}`, params);
+      LIMIT ${p(Math.max(1, Math.floor(Number(limit) || 200)))}`, params);
   return rows;
 }
 
@@ -75,19 +75,22 @@ async function requeue(db, { id, actor, reason, apply = false }) {
   registry.requireWho(actor, reason);
   const run = async (q) => {
     const r = (await q.query(
-      `SELECT id, status, review_reason, attempts, shopify_order_name, sku
+      `SELECT id, status, review_reason, attempts, last_error, shopify_order_name, sku
          FROM community_intake WHERE id = $1 ${apply ? "FOR UPDATE" : ""}`, [id])).rows[0];
     if (!r) throw new registry.GuardError(`intake row ${id} does not exist`);
     if (r.status !== "review") {
       throw new registry.GuardError(`intake row ${id} is '${r.status}' - only 'review' rows can be re-queued`);
     }
     const plan = { action: "requeue_intake", id: r.id, order: r.shopify_order_name, sku: r.sku,
-                   from: { status: r.status, reason: r.review_reason, attempts: r.attempts },
-                   to: { status: "received" },
+                   from: { status: r.status, reason: r.review_reason, attempts: r.attempts, last_error: r.last_error },
+                   to: { status: "received", attempts: 0 },
                    effect: "the Community worker re-checks it; if the cause is not fixed it returns to review" };
     if (!apply) return { applied: false, plan };
     await q.query(
-      `UPDATE community_intake SET status = 'received', review_reason = NULL, next_attempt_at = now()
+      // attempts restart at 0 so a re-queued row gets the full retry budget;
+      // the previous count and error are kept in the audit row.
+      `UPDATE community_intake
+          SET status = 'received', review_reason = NULL, attempts = 0, last_error = NULL, next_attempt_at = now()
         WHERE id = $1`, [r.id]);
     await registry.audit(q, { actor, action: "requeue_intake", targetType: "intake", targetId: r.id, reason,
                               before: plan.from, after: plan.to });
@@ -124,7 +127,7 @@ async function main() {
     }
     const rows = await attentionRows(db, {
       all: args.includes("--all"), status: val("--status"), order: val("--order"),
-      stuckMin: Number(val("--stuck-min") || 10), limit: Number(val("--limit") || 200),
+      stuckMin: val("--stuck-min") ?? 10, limit: Math.max(1, Math.floor(Number(val("--limit")) || 200)),
     });
     const sum = await summary(db);
     if (args.includes("--json")) { console.log(JSON.stringify({ summary: sum, rows }, null, 2)); return; }

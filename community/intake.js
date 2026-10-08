@@ -32,11 +32,10 @@ const registry = require("./registry");
  *   { duplicate: false, eventRowId, kind: 'order', groceryLines, communityLines, inserted }
  */
 async function captureWebhook(db, { shop, deliveryId, topic, payload, phone, rawBody }) {
-  // Fingerprint of the bytes Shopify actually sent (falls back to the parsed
-  // payload when called without the raw body, e.g. from a script).
-  const payloadSha256 = crypto.createHash("sha256")
-    .update(rawBody || Buffer.from(JSON.stringify(payload || {})))
-    .digest("hex");
+  // The bytes Shopify actually sent, kept verbatim on every intake row with
+  // their SHA-256 (falls back to the serialised payload when called without
+  // the raw body, e.g. from a script).
+  const orderRaw = rawBody ? Buffer.from(rawBody).toString("utf8") : JSON.stringify(payload || {});
   return db.tx(async (client) => {
     const ins = await client.query(
       `INSERT INTO webhook_events (source, event_id, topic, payload)
@@ -59,7 +58,7 @@ async function captureWebhook(db, { shop, deliveryId, topic, payload, phone, raw
       return { duplicate: false, eventRowId, kind: "product", registry: r };
     }
 
-    const cap = await captureOrderLines(client, { shop, topic, order: payload, eventRowId, phone, payloadSha256 });
+    const cap = await captureOrderLines(client, { shop, topic, order: payload, eventRowId, phone, orderRaw });
     return { duplicate: false, eventRowId, kind: "order", ...cap };
   });
 }
@@ -72,8 +71,10 @@ function intOrNull(v) {
 }
 
 /** Classify an order's lines and store the Community ones. Runs inside a transaction. */
-async function captureOrderLines(client, { shop, topic, order, eventRowId, phone, payloadSha256 }) {
-  const classified = await classifyLines(client, order?.line_items || []);
+async function captureOrderLines(client, { shop, topic, order, eventRowId, phone, orderRaw }) {
+  const raw = orderRaw || JSON.stringify(order);
+  const sha = crypto.createHash("sha256").update(raw, "utf8").digest("hex");
+  const classified = await classifyLines(client, order?.line_items || [], { orderId: order?.id });
   const groceryLines = [];
   const communityLines = [];
   let inserted = 0;
@@ -95,9 +96,9 @@ async function captureOrderLines(client, { shop, topic, order, eventRowId, phone
          (shop, shopify_order_id, shopify_line_item_id, shopify_order_name, webhook_event_id, topic,
           shopify_product_id, shopify_variant_id, sku, vendor, title, variant_title, quantity,
           unit_price, currency, customer_phone, shopify_customer_id, order_created_at,
-          classification, signals, line_payload, order_payload, order_payload_sha256)
+          classification, signals, line_payload, order_raw, order_payload, order_payload_sha256)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
-               $19, $20, $21, $22, $23)
+               $19, $20, $21, $22, $23, $24)
        ON CONFLICT ON CONSTRAINT community_intake_line_key DO NOTHING
        RETURNING id`,
       [
@@ -122,8 +123,9 @@ async function captureOrderLines(client, { shop, topic, order, eventRowId, phone
         c.classification,
         c.signals,
         l,
+        raw,
         order,
-        payloadSha256 || crypto.createHash("sha256").update(JSON.stringify(order)).digest("hex"),
+        sha,
       ]
     );
     inserted += r.rowCount;
