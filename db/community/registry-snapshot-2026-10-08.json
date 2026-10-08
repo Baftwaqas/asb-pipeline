@@ -1,0 +1,287 @@
+{
+  "_comment": "Shopify Community products as read from the Admin API (store 0du4xf-6j.myshopify.com) on 2026-10-08 by query: product_type:'Community Internal' OR tag:asb-community-internal OR sku:ASB-COM-*. 8 products, 28 variants. Apply with: node scripts/community-registry.js --snapshot db/community/registry-snapshot-2026-10-08.json --apply",
+  "captured_at": "2026-10-08",
+  "shop": "0du4xf-6j.myshopify.com",
+  "products": [
+    {
+      "id": "10341680578818",
+      "title": "ASB Community Bulk Deals — DEMO 5 Oct 2026",
+      "status": "archived",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595412640002",
+          "sku": "ASB-COM-DEMO-ONION-5KG",
+          "title": "Onion 5 kg",
+          "price": "700.00"
+        },
+        {
+          "id": "50595412672770",
+          "sku": "ASB-COM-DEMO-ONION-10KG",
+          "title": "Onion 10 kg",
+          "price": "1300.00"
+        },
+        {
+          "id": "50595412705538",
+          "sku": "ASB-COM-DEMO-POTATO-5KG",
+          "title": "White Potato 5 kg",
+          "price": "190.00"
+        },
+        {
+          "id": "50595412738306",
+          "sku": "ASB-COM-DEMO-POTATO-10KG",
+          "title": "White Potato 10 kg",
+          "price": "330.00"
+        },
+        {
+          "id": "50595412771074",
+          "sku": "ASB-COM-DEMO-TOMATO-5KG",
+          "title": "Tomato 5 kg",
+          "price": "700.00"
+        },
+        {
+          "id": "50595412803842",
+          "sku": "ASB-COM-DEMO-TOMATO-10KG",
+          "title": "Tomato 10 kg",
+          "price": "1300.00"
+        },
+        {
+          "id": "50595412836610",
+          "sku": "ASB-COM-DEMO-MIX-3KG",
+          "title": "Chicken Mix Boti 3 kg",
+          "price": "1500.00"
+        },
+        {
+          "id": "50595412869378",
+          "sku": "ASB-COM-DEMO-MIX-5KG",
+          "title": "Chicken Mix Boti 5 kg",
+          "price": "2400.00"
+        },
+        {
+          "id": "50595412902146",
+          "sku": "ASB-COM-DEMO-BONELESS-3KG",
+          "title": "Chicken Boneless 3 kg",
+          "price": "2400.00"
+        },
+        {
+          "id": "50595412934914",
+          "sku": "ASB-COM-DEMO-BONELESS-5KG",
+          "title": "Chicken Boneless 5 kg",
+          "price": "3900.00"
+        },
+        {
+          "id": "50595412967682",
+          "sku": "ASB-COM-DEMO-TORI-5KG",
+          "title": "Tori 5 kg",
+          "price": "600.00"
+        },
+        {
+          "id": "50595413000450",
+          "sku": "ASB-COM-DEMO-TORI-10KG",
+          "title": "Tori 10 kg",
+          "price": "1100.00"
+        },
+        {
+          "id": "50595413033218",
+          "sku": "ASB-COM-DEMO-KARELA-5KG",
+          "title": "Karela 5 kg",
+          "price": "650.00"
+        },
+        {
+          "id": "50595413065986",
+          "sku": "ASB-COM-DEMO-KARELA-10KG",
+          "title": "Karela 10 kg",
+          "price": "1200.00"
+        }
+      ]
+    },
+    {
+      "id": "10341692014850",
+      "title": "Payaz — Community Deal",
+      "status": "draft",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595473817858",
+          "sku": "ASB-COM-DEMO-ONION-5KG",
+          "title": "5 kg",
+          "price": "700.00"
+        },
+        {
+          "id": "50595473850626",
+          "sku": "ASB-COM-DEMO-ONION-10KG",
+          "title": "10 kg",
+          "price": "1300.00"
+        }
+      ]
+    },
+    {
+      "id": "10341692080386",
+      "title": "Aloo White — Community Deal",
+      "status": "draft",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595473916162",
+          "sku": "ASB-COM-DEMO-POTATO-5KG",
+          "title": "5 kg",
+          "price": "190.00"
+        },
+        {
+          "id": "50595473948930",
+          "sku": "ASB-COM-DEMO-POTATO-10KG",
+          "title": "10 kg",
+          "price": "330.00"
+        }
+      ]
+    },
+    {
+      "id": "10341692113154",
+      "title": "Tamatar — Community Deal",
+      "status": "draft",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595473981698",
+          "sku": "ASB-COM-DEMO-TOMATO-5KG",
+          "title": "5 kg",
+          "price": "700.00"
+        },
+        {
+          "id": "50595474014466",
+          "sku": "ASB-COM-DEMO-TOMATO-10KG",
+          "title": "10 kg",
+          "price": "1300.00"
+        }
+      ]
+    },
+    {
+      "id": "10341692211458",
+      "title": "Chicken Mix Boti — Community Deal",
+      "status": "draft",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595474309378",
+          "sku": "ASB-COM-DEMO-MIX-3KG",
+          "title": "3 kg",
+          "price": "1500.00"
+        },
+        {
+          "id": "50595474342146",
+          "sku": "ASB-COM-DEMO-MIX-5KG",
+          "title": "5 kg",
+          "price": "2400.00"
+        }
+      ]
+    },
+    {
+      "id": "10341692276994",
+      "title": "Chicken Boneless — Community Deal",
+      "status": "draft",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595475554562",
+          "sku": "ASB-COM-DEMO-BONELESS-3KG",
+          "title": "3 kg",
+          "price": "2400.00"
+        },
+        {
+          "id": "50595475587330",
+          "sku": "ASB-COM-DEMO-BONELESS-5KG",
+          "title": "5 kg",
+          "price": "3900.00"
+        }
+      ]
+    },
+    {
+      "id": "10341692342530",
+      "title": "Tori — Community Deal",
+      "status": "draft",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595475718402",
+          "sku": "ASB-COM-DEMO-TORI-5KG",
+          "title": "5 kg",
+          "price": "600.00"
+        },
+        {
+          "id": "50595475751170",
+          "sku": "ASB-COM-DEMO-TORI-10KG",
+          "title": "10 kg",
+          "price": "1100.00"
+        }
+      ]
+    },
+    {
+      "id": "10341692408066",
+      "title": "Karela — Community Deal",
+      "status": "draft",
+      "product_type": "Community Internal",
+      "vendor": "Apna Sasta Bazaar",
+      "tags": [
+        "asb-community-internal",
+        "community-demo",
+        "do-not-merchandise"
+      ],
+      "variants": [
+        {
+          "id": "50595477192962",
+          "sku": "ASB-COM-DEMO-KARELA-5KG",
+          "title": "5 kg",
+          "price": "650.00"
+        },
+        {
+          "id": "50595477225730",
+          "sku": "ASB-COM-DEMO-KARELA-10KG",
+          "title": "10 kg",
+          "price": "1200.00"
+        }
+      ]
+    }
+  ]
+}
