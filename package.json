@@ -6,6 +6,9 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test --test-concurrency=1 test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "community:review": "node scripts/community-review.js",
+    "community:registry": "node scripts/community-registry.js",
+    "community:rehearsal": "node scripts/community-rehearsal.js"
   }
 }

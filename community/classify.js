@@ -9,8 +9,9 @@
 // worker's job, and only by exact registered variant id.
 //
 // Signals (any one is enough to divert):
-//   registered_variant  line.variant_id is in community_variants
-//   registered_product  line.product_id is in community_products
+//   registered_variant  line.variant_id is an ACTIVE row in community_variants
+//                       (and its product is active)
+//   registered_product  line.product_id is an ACTIVE row in community_products
 //   sku_prefix          line.sku starts with "ASB-COM-"
 //   vendor              line.vendor is listed in COMMUNITY_VENDORS (env, comma
 //                       separated; empty by default because today Community
@@ -51,11 +52,15 @@ async function classifyLines(q, lines) {
   let regProducts = new Set();
   if (variantIds.length || productIds.length) {
     const { rows } = await q.query(
-      `SELECT 'v' AS k, shopify_variant_id AS id FROM community_variants
-        WHERE shopify_variant_id = ANY($1::text[])
+      // Only ACTIVE registrations count. An operator-deactivated product or
+      // variant stops classifying future lines by registry; other signals
+      // (ASB-COM- SKU, vendor) still divert them.
+      `SELECT 'v' AS k, v.shopify_variant_id AS id
+         FROM community_variants v JOIN community_products p USING (shopify_product_id)
+        WHERE v.shopify_variant_id = ANY($1::text[]) AND v.is_active AND p.is_active
        UNION ALL
        SELECT 'p', shopify_product_id FROM community_products
-        WHERE shopify_product_id = ANY($2::text[])`,
+        WHERE shopify_product_id = ANY($2::text[]) AND is_active`,
       [variantIds, productIds]
     );
     regVariants = new Set(rows.filter((r) => r.k === "v").map((r) => r.id));

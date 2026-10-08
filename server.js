@@ -41,6 +41,7 @@ const broadcast = require("./broadcast");
 const communityIntake = require("./community/intake");
 const communityWorker = require("./community/worker");
 const { assertNoCommunityLines } = require("./community/classify");
+const { groceryOnlyOrder } = require("./community/sanitize");
 
 const app = express();
 app.set("trust proxy", 1); // Render sits behind a proxy
@@ -171,10 +172,10 @@ async function resolveProduct(client, item) {
 // ever does arrive, the whole write is refused (rolled back) rather than
 // creating a products stub, an order_items row or a cycle_prices row.
 //
-// `sourcePayload` is the raw Shopify order kept on orders.source_payload. It
-// defaults to `order`; the webhook passes the ORIGINAL order (all lines) while
-// `order.line_items` holds only the grocery lines.
-async function persistOrder(order, phone, { sourcePayload } = {}) {
+// For a mixed cart `order` is the sanitized grocery-only view
+// (community/sanitize.js), so orders.source_payload never holds a Community
+// line either.
+async function persistOrder(order, phone) {
   return db.tx(async (client) => {
     await assertNoCommunityLines(client, order.line_items || []);
 
@@ -228,7 +229,7 @@ async function persistOrder(order, phone, { sourcePayload } = {}) {
           addr.address2 || null,
           addr.address1 || null,
           order.note || null,
-          sourcePayload || order,
+          order,
           // When the customer ordered, per Shopify. A retried webhook can
           // arrive hours later; the bill must show the real order time.
           order.created_at || null,
@@ -504,7 +505,10 @@ app.get("/healthz", async (req, res) => {
   if (h.ok) {
     try {
       const { rows } = await db.query(
-        `SELECT (SELECT count(*) FROM community_variants)::int AS variants,
+        // environment: 'rehearsal' only on a staging copy whose operator set
+        // app_settings asb_environment (scripts/community-rehearsal.js checks it).
+        `SELECT coalesce((SELECT value FROM app_settings WHERE key = 'asb_environment'), 'production') AS environment,
+                (SELECT count(*) FROM community_variants)::int AS variants,
                 (SELECT count(*) FROM community_intake WHERE status = 'review')::int AS review,
                 (SELECT count(*) FROM community_intake
                   WHERE status IN ('received','retryable_error'))::int AS pending`);
@@ -731,6 +735,7 @@ app.post("/webhooks/shopify", async (req, res) => {
       topic,
       payload: order,
       phone: normalizePhone(rawPhoneEarly),
+      rawBody: req.body,
     });
   } catch (e) {
     console.error(`Shopify webhook ${deliveryId} (${topic}) NOT captured - answering 503 so Shopify retries:`, e.message);
@@ -780,7 +785,7 @@ app.post("/webhooks/shopify", async (req, res) => {
   const hasCommunity = cap.kind === "order" && cap.communityLines.length > 0;
   const rawOrder = order;
   if (hasCommunity) {
-    order = { ...rawOrder, line_items: cap.groceryLines };
+    order = groceryOnlyOrder(rawOrder, { ...cap, eventRowId });
     if (!cap.groceryLines.length) {
       console.log(`   ${rawOrder.name || rawOrder.id}: Community-only order - no grocery order created, no grocery bill sent`);
       if (eventRowId) await db.markWebhookProcessed(eventRowId);
@@ -800,8 +805,8 @@ app.post("/webhooks/shopify", async (req, res) => {
       .map((i) => `${i.title} x${i.quantity}`)
       .join(", ");
 
-    // With Community lines removed, Shopify's total_price would include them,
-    // so the grocery-only fallback total is summed from the grocery lines.
+    // A mixed cart's grocery view carries no Shopify totals (they included the
+    // Community packs), so the fallback total is summed from the grocery lines.
     const totalPKR = Math.round(
       hasCommunity
         ? (order.line_items || []).reduce((s, i) => s + Number(i.price || 0) * Number(i.quantity || 1), 0)
@@ -820,7 +825,7 @@ app.post("/webhooks/shopify", async (req, res) => {
     // --- save it ---
     let saved = null;
     try {
-      saved = await persistOrder(order, phone, { sourcePayload: rawOrder });
+      saved = await persistOrder(order, phone);
       if (saved.skipped) {
         console.log(`   Already saved as ${saved.orderNumber} - not sending again`);
         if (eventRowId) await db.markWebhookProcessed(eventRowId);

@@ -16,6 +16,16 @@
 //   node scripts/community-registry.js --from-shopify
 //   node scripts/community-registry.js --from-shopify --apply
 //
+//   # deactivate / reactivate a mistaken registration (guarded, audited)
+//   node scripts/community-registry.js --deactivate-product <id> --by "Waqas" --reason "..." [--apply]
+//   node scripts/community-registry.js --deactivate-variant <id> --by "Waqas" --reason "..." [--apply]
+//   node scripts/community-registry.js --reactivate-product <id> --by "Waqas" --reason "..." [--apply]
+//   node scripts/community-registry.js --reactivate-variant <id> --by "Waqas" --reason "..." [--apply]
+//
+// Deactivation never touches community_intake: lines already captured stay
+// Community and go to review. A product can only be deactivated once Shopify
+// no longer marks it Community (fix it in Shopify first).
+//
 // --from-shopify reads (a) every product that carries a Community signal and
 // (b) every product already in the registry, so a product that LOST its
 // signals is re-read and flagged (signals_ok = false) instead of silently
@@ -126,16 +136,55 @@ async function apply(db, products, via) {
   });
 }
 
+function argValue(args, flag) {
+  const i = args.indexOf(flag);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+async function operatorAction(db, args, APPLY) {
+  const by = argValue(args, "--by");
+  const reason = argValue(args, "--reason");
+  let r;
+  if (args.includes("--deactivate-product")) {
+    r = await registry.deactivateProduct(db, { productId: argValue(args, "--deactivate-product"), actor: by, reason, apply: APPLY });
+  } else if (args.includes("--deactivate-variant")) {
+    r = await registry.deactivateVariant(db, { variantId: argValue(args, "--deactivate-variant"), actor: by, reason, apply: APPLY });
+  } else if (args.includes("--reactivate-product")) {
+    r = await registry.reactivate(db, { kind: "product", id: argValue(args, "--reactivate-product"), actor: by, reason, apply: APPLY });
+  } else {
+    r = await registry.reactivate(db, { kind: "variant", id: argValue(args, "--reactivate-variant"), actor: by, reason, apply: APPLY });
+  }
+  console.log(JSON.stringify(r.plan, null, 2));
+  console.log(r.applied ? "\n[community-registry] APPLIED and recorded in community_audit."
+                        : "\n[community-registry] dry run - nothing written. Re-run with --apply.");
+}
+
+const OPERATOR_FLAGS = ["--deactivate-product", "--deactivate-variant", "--reactivate-product", "--reactivate-variant"];
+
 async function main() {
   const args = process.argv.slice(2);
   const APPLY = args.includes("--apply");
   const snapIdx = args.indexOf("--snapshot");
   const fromShopify = args.includes("--from-shopify");
-  if ((snapIdx < 0) === !fromShopify) {
-    console.error("Use exactly one of --snapshot <file> or --from-shopify. Add --apply to write.");
+  const operator = OPERATOR_FLAGS.filter((f) => args.includes(f));
+  const modes = (snapIdx >= 0 ? 1 : 0) + (fromShopify ? 1 : 0) + operator.length;
+  if (modes !== 1) {
+    console.error("Use exactly one of --snapshot <file>, --from-shopify, " + OPERATOR_FLAGS.join(", ") +
+                  ". Add --apply to write.");
     process.exit(2);
   }
   const db = require("../db");
+
+  if (operator.length) {
+    try {
+      await operatorAction(db, args, APPLY);
+    } catch (e) {
+      console.error(`[community-registry] REFUSED: ${e.message}`);
+      process.exitCode = 3;
+    }
+    await db.shutdown();
+    return;
+  }
 
   let products;
   let via;

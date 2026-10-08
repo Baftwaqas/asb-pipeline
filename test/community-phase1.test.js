@@ -153,9 +153,18 @@ test("mixed cart: grocery lines continue, Community line isolated, bill shows gr
     `SELECT oi.name_snapshot, oi.qty_ordered::float AS q FROM order_items oi JOIN orders o ON o.id = oi.order_id
       WHERE o.shopify_order_id = $1`, [String(id)])).rows;
   assert.deepEqual(items, [{ name_snapshot: H.GROCERY.aloo.title, q: 3 }]);
-  // The raw order (all lines) is still kept on the grocery order for audit.
+  // The grocery order stores ONLY the sanitized grocery view: no Community
+  // line, no Shopify totals (they included the pack), a split marker.
   const o = (await db.query(`SELECT source_payload FROM orders WHERE shopify_order_id = $1`, [String(id)])).rows[0];
-  assert.equal(o.source_payload.line_items.length, 2);
+  const sp = o.source_payload;
+  assert.deepEqual(sp.line_items.map((l) => l.sku), ["ASB-VEG-001"]);
+  for (const k of ["total_price", "subtotal_price", "total_line_items_price", "refunds", "fulfillments"]) {
+    assert.ok(!(k in sp), `${k} must not be stored on a mixed grocery order`);
+  }
+  assert.doesNotMatch(JSON.stringify(sp), /ASB-COM-|50595474014466|10341692113154/,
+                     "no Community identity anywhere in source_payload");
+  assert.equal(sp.asb_community_split.removed_line_item_ids.length, 1);
+  assert.equal(sp.asb_community_split.community_intake_ids.length, 1);
   const intake = await intakeFor(id);
   assert.equal(intake.length, 1);
   assert.equal(intake[0].sku, "ASB-COM-DEMO-TOMATO-10KG");

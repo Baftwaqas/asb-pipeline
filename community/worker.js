@@ -39,6 +39,7 @@ async function resolveLine(q, row) {
 
   const { rows } = await q.query(
     `SELECT v.shopify_variant_id, v.variant_gid, v.shopify_product_id, v.sku, v.is_present,
+            v.is_active AS variant_active, p.is_active AS product_active,
             p.signals_ok, p.shopify_status, p.deleted_at
        FROM community_variants v
        JOIN community_products p ON p.shopify_product_id = v.shopify_product_id
@@ -48,6 +49,8 @@ async function resolveLine(q, row) {
   const v = rows[0];
   if (!v) return review(row.signals?.includes("sku_prefix") ? "unknown_variant_with_community_sku" : "unknown_variant");
   if (row.shopify_product_id && row.shopify_product_id !== v.shopify_product_id) return review("product_mismatch");
+  if (!v.product_active) return review("product_deactivated");
+  if (!v.variant_active) return review("variant_deactivated");
   if (!v.signals_ok) return review("registry_config_conflict");
   if (v.deleted_at || v.shopify_status === "deleted") return review("product_deleted");
   if (v.shopify_status === "archived") return review("product_archived");

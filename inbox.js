@@ -504,7 +504,9 @@ router.get("/api/inbox/catalogue", requireAuth, async (_req, res) => {
           -- Community packs are never offered in the grocery picker.
           AND category <> 'community-excluded'
           AND NOT EXISTS (SELECT 1 FROM community_variants cv
-                           WHERE cv.shopify_variant_id = products.shopify_variant_id)
+                            JOIN community_products cp USING (shopify_product_id)
+                           WHERE cv.shopify_variant_id = products.shopify_variant_id
+                             AND cv.is_active AND cp.is_active)
         ORDER BY category, sort_order, name_en`
     );
     // Labels come from bill.js so the panel says "aadha kg" and "Rs 320/kg"

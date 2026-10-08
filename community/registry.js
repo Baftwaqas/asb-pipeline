@@ -60,12 +60,19 @@ function productSignals(p) {
   return out;
 }
 
+/** Registered AND active (an operator-deactivated product no longer counts). */
 async function isRegisteredProduct(q, productId) {
   const id = numericId(productId);
   if (!id) return false;
   const { rows } = await q.query(
-    `SELECT 1 FROM community_products WHERE shopify_product_id = $1`, [id]);
+    `SELECT 1 FROM community_products WHERE shopify_product_id = $1 AND is_active`, [id]);
   return rows.length > 0;
+}
+
+async function productRow(q, productId) {
+  const { rows } = await q.query(
+    `SELECT * FROM community_products WHERE shopify_product_id = $1`, [numericId(productId)]);
+  return rows[0] || null;
 }
 
 /**
@@ -80,7 +87,8 @@ async function upsertProduct(q, p, via, { markMissingAbsent = true } = {}) {
   if (!pid) return { registered: false, signals: [] };
 
   const signals = productSignals(p);
-  const already = await isRegisteredProduct(q, pid);
+  const existing = await productRow(q, pid);
+  const already = Boolean(existing);       // registered at all (active or deactivated)
   if (!signals.length && !already) return { registered: false, signals };
 
   // A payload without variants is partial (it cannot be a whole Shopify
@@ -138,7 +146,24 @@ async function upsertProduct(q, p, via, { markMissingAbsent = true } = {}) {
     [pid, seen]
   );
 
-  return { registered: true, signals };
+  // An operator deactivated this product, but Shopify marks it Community
+  // again: Community wins (fail closed). Recorded in the audit log.
+  let reactivated = false;
+  if (existing && !existing.is_active && signals.length) {
+    await q.query(
+      `UPDATE community_products
+          SET is_active = TRUE, deactivated_at = NULL, deactivated_by = NULL, deactivation_reason = NULL
+        WHERE shopify_product_id = $1`, [pid]);
+    await audit(q, {
+      actor: "system", action: "auto_reactivate_product", targetType: "product", targetId: pid,
+      reason: `Shopify marks it Community again (${signals.join("+")}) via ${via}`,
+      before: { is_active: false, deactivated_by: existing.deactivated_by, deactivation_reason: existing.deactivation_reason },
+      after: { is_active: true },
+    });
+    reactivated = true;
+  }
+
+  return { registered: true, signals, reactivated };
 }
 
 /** products/delete carries only { id }. Keep the rows; mark them deleted. */
@@ -175,7 +200,145 @@ async function isCommunityProduct(q, p) {
   return isRegisteredProduct(q, p?.id);
 }
 
+// ---------------------------------------------------------------------------
+// Operator actions (scripts/community-registry.js). Every one is
+//   * dry-run unless apply === true,
+//   * refused without an actor and a reason,
+//   * written with an append-only community_audit row,
+//   * NEVER touches community_intake: rows already captured stay Community.
+//     Their pending lines go to review (product_deactivated /
+//     variant_deactivated) - they can never become grocery.
+// ---------------------------------------------------------------------------
+
+class GuardError extends Error {
+  constructor(msg) { super(msg); this.name = "GuardError"; this.code = "ASB_COMMUNITY_GUARD"; }
+}
+
+async function audit(q, { actor, action, targetType, targetId, reason, before, after }) {
+  await q.query(
+    `INSERT INTO community_audit (actor, action, target_type, target_id, reason, before, after)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [actor, action, targetType, String(targetId), reason, before || null, after || null]);
+}
+
+function requireWho(actor, reason) {
+  if (!actor || !String(actor).trim()) throw new GuardError("--by <name> is required");
+  if (!reason || String(reason).trim().length < 10) {
+    throw new GuardError("--reason is required (at least 10 characters, say why)");
+  }
+}
+
+/** What an operator action would affect: the registry rows and the intake rows by status. */
+async function impact(q, { productId, variantId }) {
+  const where = variantId ? `shopify_variant_id = $1` : `shopify_product_id = $1 OR shopify_variant_id IN
+                   (SELECT shopify_variant_id FROM community_variants WHERE shopify_product_id = $1)`;
+  const id = variantId || productId;
+  const { rows } = await q.query(
+    `SELECT status, count(*)::int AS n FROM community_intake WHERE ${where} GROUP BY status ORDER BY status`, [id]);
+  return Object.fromEntries(rows.map((r) => [r.status, r.n]));
+}
+
+/**
+ * Deactivate a product registered by mistake. Allowed only once Shopify no
+ * longer marks it Community (signals_ok = false): otherwise the next product
+ * webhook would rightly re-register it, so the fix belongs in Shopify first.
+ */
+async function deactivateProduct(db, { productId, actor, reason, apply = false }) {
+  requireWho(actor, reason);
+  const pid = numericId(productId);
+  const run = async (q) => {
+    const p = (await q.query(
+      `SELECT * FROM community_products WHERE shopify_product_id = $1 ${apply ? "FOR UPDATE" : ""}`, [pid])).rows[0];
+    if (!p) throw new GuardError(`product ${pid} is not in the Community registry`);
+    if (!p.is_active) throw new GuardError(`product ${pid} is already deactivated (by ${p.deactivated_by})`);
+    if (p.signals_ok) {
+      throw new GuardError(
+        `product ${pid} ("${p.title}") is still marked Community in Shopify ` +
+        `(type "${p.product_type}", tags ${JSON.stringify(p.tags)}). Remove the Community product type, ` +
+        `the asb-community-internal tag and any ASB-COM- SKU in Shopify first; the products/update webhook ` +
+        `(or --from-shopify --apply) then records signals_ok = false.`);
+    }
+    const intake = await impact(q, { productId: pid });
+    const plan = { action: "deactivate_product", product: { id: pid, title: p.title, status: p.shopify_status },
+                   intake_rows_unchanged: intake,
+                   effect: "future lines of this product are no longer Community BY REGISTRY; " +
+                           "pending intake rows go to review (product_deactivated), never to grocery" };
+    if (!apply) return { applied: false, plan };
+    await q.query(
+      `UPDATE community_products
+          SET is_active = FALSE, deactivated_at = now(), deactivated_by = $2, deactivation_reason = $3
+        WHERE shopify_product_id = $1`, [pid, actor, reason]);
+    await audit(q, { actor, action: "deactivate_product", targetType: "product", targetId: pid, reason,
+                     before: { is_active: true }, after: { is_active: false }, });
+    return { applied: true, plan };
+  };
+  return apply ? db.tx(run) : run(db);
+}
+
+/**
+ * Deactivate one variant (e.g. a pack that must stop resolving). While its
+ * product stays registered, lines for it are still Community and go to review
+ * (variant_deactivated).
+ */
+async function deactivateVariant(db, { variantId, actor, reason, apply = false }) {
+  requireWho(actor, reason);
+  const vid = numericId(variantId);
+  const run = async (q) => {
+    const v = (await q.query(
+      `SELECT v.*, p.title AS product_title, p.is_active AS product_active
+         FROM community_variants v JOIN community_products p USING (shopify_product_id)
+        WHERE v.shopify_variant_id = $1 ${apply ? "FOR UPDATE OF v" : ""}`, [vid])).rows[0];
+    if (!v) throw new GuardError(`variant ${vid} is not in the Community registry`);
+    if (!v.is_active) throw new GuardError(`variant ${vid} is already deactivated (by ${v.deactivated_by})`);
+    const intake = await impact(q, { variantId: vid });
+    const plan = { action: "deactivate_variant",
+                   variant: { id: vid, sku: v.sku, title: v.variant_title, product: v.product_title },
+                   intake_rows_unchanged: intake,
+                   effect: v.product_active
+                     ? "lines for this variant stay Community (product still registered) and go to review (variant_deactivated)"
+                     : "product already deactivated; this variant no longer counts as Community by registry" };
+    if (!apply) return { applied: false, plan };
+    await q.query(
+      `UPDATE community_variants
+          SET is_active = FALSE, deactivated_at = now(), deactivated_by = $2, deactivation_reason = $3
+        WHERE shopify_variant_id = $1`, [vid, actor, reason]);
+    await audit(q, { actor, action: "deactivate_variant", targetType: "variant", targetId: vid, reason,
+                     before: { is_active: true }, after: { is_active: false } });
+    return { applied: true, plan };
+  };
+  return apply ? db.tx(run) : run(db);
+}
+
+async function reactivate(db, { kind, id, actor, reason, apply = false }) {
+  requireWho(actor, reason);
+  const table = kind === "product" ? "community_products" : "community_variants";
+  const key = kind === "product" ? "shopify_product_id" : "shopify_variant_id";
+  const nid = numericId(id);
+  const run = async (q) => {
+    const r = (await q.query(`SELECT * FROM ${table} WHERE ${key} = $1 ${apply ? "FOR UPDATE" : ""}`, [nid])).rows[0];
+    if (!r) throw new GuardError(`${kind} ${nid} is not in the Community registry`);
+    if (r.is_active) throw new GuardError(`${kind} ${nid} is already active`);
+    const plan = { action: `reactivate_${kind}`, id: nid,
+                   effect: "Community again by registry; intake rows in review are NOT re-queued automatically" };
+    if (!apply) return { applied: false, plan };
+    await q.query(
+      `UPDATE ${table} SET is_active = TRUE, deactivated_at = NULL, deactivated_by = NULL, deactivation_reason = NULL
+        WHERE ${key} = $1`, [nid]);
+    await audit(q, { actor, action: `reactivate_${kind}`, targetType: kind, targetId: nid, reason,
+                     before: { is_active: false, deactivated_by: r.deactivated_by, deactivation_reason: r.deactivation_reason },
+                     after: { is_active: true } });
+    return { applied: true, plan };
+  };
+  return apply ? db.tx(run) : run(db);
+}
+
 module.exports = {
+  GuardError,
+  audit,
+  requireWho,
+  deactivateProduct,
+  deactivateVariant,
+  reactivate,
   COMMUNITY_SKU_PREFIX,
   numericId,
   productGid,
