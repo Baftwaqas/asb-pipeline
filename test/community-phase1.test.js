@@ -32,7 +32,7 @@ before(async () => {
   await db.query(H.FIXTURE_SQL);
   // Bootstrap the registry from the checked-in snapshot, exactly as production would.
   const snap = JSON.parse(fs.readFileSync(path.join(ROOT, "db/community/registry-snapshot-2026-10-08.json"), "utf8"));
-  await registryScript.apply(db, snap.products, "snapshot");
+  await registryScript.bootstrapSnapshot(db, snap.products, { file: "registry-snapshot-2026-10-08.json", apply: true });
   server = mod.app.listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://127.0.0.1:${server.address().port}`;

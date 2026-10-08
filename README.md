@@ -39,9 +39,11 @@ Deploy order: migration 016 → registry snapshot → code (never code first).
 | `COMMUNITY_INTAKE_WORKER` | `off` = safety mode: lines are still isolated and captured, but not processed (default on) |
 | `COMMUNITY_INTAKE_SWEEP_MS` | sweeper interval, default 60000 |
 | `COMMUNITY_INTAKE_MAX_ATTEMPTS` | failed attempts before a line goes to review, default 8 |
-| `COMMUNITY_VENDORS` | optional comma list of Shopify vendors that mark a line Community (empty by default) |
-| `SHOPIFY_SHOP_DOMAIN` | fallback shop id when a webhook has no `X-Shopify-Shop-Domain`; also used by registry reconcile |
+| `SHOPIFY_SHOP_DOMAIN` | **set to `0du4xf-6j.myshopify.com`**. Shop identity when a webhook lacks `X-Shopify-Shop-Domain` (with neither, the webhook is refused with 503); also used by registry reconcile |
 | `SHOPIFY_ADMIN_TOKEN` | read_products token, **only** for `npm run community:registry -- --from-shopify` |
+| `SHOPIFY_API_VERSION` | Admin GraphQL version for registry reconcile; default `2026-10` — **set `SHOPIFY_API_VERSION=2026-10` explicitly in production** |
+
+Shopify topics handled: `orders/create`, `products/create`, `products/update`, `products/delete`. Every other topic (and a missing topic) is recorded as `ignored` and never touches grocery.
 
 Operator commands: `npm run community:review`, `npm run community:registry`, `npm run community:rehearsal`.
 

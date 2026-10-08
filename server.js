@@ -498,9 +498,12 @@ app.get("/healthz", async (req, res) => {
         (process.env.INBOX_COOKIE_SECRET || process.env.VERIFY_TOKEN)
     ),
   };
-  // Community (migration 016): without its tables every Shopify webhook
-  // answers 503, so the service is not ready. Review rows are surfaced here
-  // because nothing else alerts on them yet.
+  // Community (migration 016). Ready only when the tables exist AND the
+  // registry is usable: at least one active product and at least one variant
+  // the worker could actually resolve (active variant of an active,
+  // non-archived, non-deleted product that Shopify still marks Community).
+  // Tables alone, or an empty registry, are NOT ready. Review rows are
+  // surfaced here because nothing else alerts on them yet.
   let community = { ready: false };
   if (h.ok) {
     try {
@@ -508,11 +511,23 @@ app.get("/healthz", async (req, res) => {
         // environment: 'rehearsal' only on a staging copy whose operator set
         // app_settings asb_environment (scripts/community-rehearsal.js checks it).
         `SELECT coalesce((SELECT value FROM app_settings WHERE key = 'asb_environment'), 'production') AS environment,
-                (SELECT count(*) FROM community_variants)::int AS variants,
+                (SELECT count(*) FROM community_products)::int                     AS products,
+                (SELECT count(*) FROM community_products WHERE is_active)::int     AS products_active,
+                (SELECT count(*) FROM community_variants)::int                     AS variants,
+                (SELECT count(*) FROM community_variants v
+                   JOIN community_products p USING (shopify_product_id)
+                  WHERE v.is_active AND p.is_active)::int                          AS variants_active,
+                (SELECT count(*) FROM community_variants v
+                   JOIN community_products p USING (shopify_product_id)
+                  WHERE v.is_active AND v.is_present AND p.is_active AND p.signals_ok
+                    AND p.deleted_at IS NULL
+                    AND coalesce(p.shopify_status, '') NOT IN ('archived', 'deleted'))::int AS variants_resolvable,
                 (SELECT count(*) FROM community_intake WHERE status = 'review')::int AS review,
                 (SELECT count(*) FROM community_intake
                   WHERE status IN ('received','retryable_error'))::int AS pending`);
-      community = { ready: true, ...rows[0] };
+      const c = rows[0];
+      const usable = c.products_active > 0 && c.variants_resolvable > 0;
+      community = { ready: usable, ...(usable ? {} : { reason: "registry_empty_or_unusable" }), ...c };
     } catch (e) {
       community = { ready: false, error: e.message };
     }
@@ -698,7 +713,9 @@ app.post("/webhooks/shopify", async (req, res) => {
   const deliveryId =
     req.get("X-Shopify-Webhook-Id") ||
     crypto.createHash("sha256").update(req.body).digest("hex").slice(0, 40);
-  const topic = req.get("X-Shopify-Topic") || "orders/create";
+  // No default: a delivery without a topic is NOT assumed to be an order.
+  const topic = req.get("X-Shopify-Topic") || null;
+  const kind = communityIntake.topicKind(topic);   // 'order' | 'product' | 'ignored'
 
   let order;
   try {
@@ -706,6 +723,27 @@ app.post("/webhooks/shopify", async (req, res) => {
   } catch (e) {
     console.error("Shopify webhook body is not JSON:", e.message);
     return res.sendStatus(400);
+  }
+
+  // ---- 2a. Topic allowlist ----
+  // Phase 1 handles exactly orders/create (commerce) and products/create,
+  // products/update, products/delete. Anything else - orders/updated,
+  // orders/edited, orders/cancelled, customers/*, fulfillments/*, a missing or
+  // unknown topic - is recorded for audit as 'ignored' and acknowledged. It
+  // never reaches persistOrder(), never merges grocery quantities and never
+  // sends a bill. (On main every non-product topic was treated as an order.)
+  if (kind === "ignored") {
+    try {
+      await db.query(
+        `INSERT INTO webhook_events (source, event_id, topic, payload, status, processed_at, error_detail)
+         VALUES ('shopify', $1, $2, $3, 'ignored', now(), $4)
+         ON CONFLICT (source, event_id) DO NOTHING`,
+        [String(deliveryId), topic, order, `topic ${topic || "(missing)"} is not handled in Phase 1`]);
+    } catch (e) {
+      console.error(`Could not record ignored Shopify topic ${topic}:`, e.message);
+    }
+    console.log(`Shopify webhook ${deliveryId}: topic "${topic || "(missing)"}" ignored (Phase 1 allowlist)`);
+    return res.sendStatus(200);
   }
 
   // ---- 2b. Capture BEFORE answering ----
@@ -719,10 +757,13 @@ app.post("/webhooks/shopify", async (req, res) => {
   //
   // KNOWN LIMITATION (unchanged, out of Phase 1 scope): grocery persistence
   // and the WhatsApp bill still run AFTER the 200, as before.
-  const shop =
-    req.get("X-Shopify-Shop-Domain") || process.env.SHOPIFY_SHOP_DOMAIN || "unknown-shop";
-  if (!req.get("X-Shopify-Shop-Domain")) {
-    console.warn(`Shopify webhook ${deliveryId} has no X-Shopify-Shop-Domain - intake keyed under "${shop}"`);
+  // Shop identity is part of the intake key, so it is never invented: the
+  // Shopify header, else the configured SHOPIFY_SHOP_DOMAIN, else refuse.
+  const shop = req.get("X-Shopify-Shop-Domain") || process.env.SHOPIFY_SHOP_DOMAIN || null;
+  if (!shop) {
+    console.error(`Shopify webhook ${deliveryId} (${topic}) has no X-Shopify-Shop-Domain and SHOPIFY_SHOP_DOMAIN ` +
+      `is not set - NOT captured, answering 503`);
+    return res.sendStatus(503);
   }
   const rawPhoneEarly =
     order.shipping_address?.phone || order.customer?.phone || order.phone || null;
@@ -755,7 +796,7 @@ app.post("/webhooks/shopify", async (req, res) => {
   // mirror it into products and pass the price on to the WhatsApp catalogue.
   // Community products were registered in step 2b and are refused by
   // productSync, so they never reach `products` or the Meta catalogue.
-  if (topic.startsWith("products/")) {
+  if (kind === "product") {
     try {
       // products/delete carries only { id }: nothing to mirror. (On main this
       // was already a no-op; skipping it also keeps the registry's "deleted"

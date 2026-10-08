@@ -252,8 +252,9 @@ CREATE TABLE community_audit (
   actor        TEXT NOT NULL,                           -- who ran the command, or 'system'
   action       TEXT NOT NULL,                           -- deactivate_product | reactivate_product |
                                                         -- deactivate_variant | reactivate_variant |
-                                                        -- auto_reactivate_product | requeue_intake
-  target_type  TEXT NOT NULL CHECK (target_type IN ('product', 'variant', 'intake')),
+                                                        -- auto_reactivate_product | requeue_intake |
+                                                        -- bootstrap_snapshot | force_bootstrap_snapshot
+  target_type  TEXT NOT NULL CHECK (target_type IN ('product', 'variant', 'intake', 'registry')),
   target_id    TEXT NOT NULL,
   reason       TEXT NOT NULL,
   before       JSONB,

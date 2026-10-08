@@ -7,12 +7,18 @@
 //
 // DRY RUN BY DEFAULT. Nothing is written without --apply.
 //
-//   # one-time bootstrap from the checked-in snapshot (no Shopify access needed)
+//   # ONE-TIME bootstrap from the dated snapshot (no Shopify access needed).
+//   # Refused when the registry already holds anything: the snapshot is
+//   # bootstrap/recovery material, not ongoing reconciliation.
 //   node scripts/community-registry.js --snapshot db/community/registry-snapshot-2026-10-08.json
 //   node scripts/community-registry.js --snapshot db/community/registry-snapshot-2026-10-08.json --apply
+//   # recovery only - re-apply over a populated registry (audited):
+//   node scripts/community-registry.js --snapshot <file> --force-bootstrap --by "Waqas" --reason "..." --apply
+//
+//   # ongoing refresh is ALWAYS --from-shopify (below).
 //
 //   # reconcile against live Shopify (needs SHOPIFY_SHOP_DOMAIN, SHOPIFY_ADMIN_TOKEN
-//   # with read_products; SHOPIFY_API_VERSION optional)
+//   # with read_products; set SHOPIFY_API_VERSION=2026-10 explicitly in production)
 //   node scripts/community-registry.js --from-shopify
 //   node scripts/community-registry.js --from-shopify --apply
 //
@@ -39,6 +45,11 @@ const registry = require("../community/registry");
 
 const COMMUNITY_QUERY = "product_type:'Community Internal' OR tag:asb-community-internal OR sku:ASB-COM-*";
 
+// Admin GraphQL API version used when SHOPIFY_API_VERSION is not set. Set it
+// explicitly in production (SHOPIFY_API_VERSION=2026-10) so an upgrade of this
+// default can never change behaviour silently.
+const DEFAULT_API_VERSION = "2026-10";
+
 const PRODUCT_FIELDS = `
   id legacyResourceId title status productType vendor tags
   variants(first: 100) { nodes { id legacyResourceId sku title price } }`;
@@ -64,7 +75,7 @@ function fromGraphqlProduct(n) {
 async function shopifyGraphql(fetchImpl, env, query, variables) {
   const domain = env.SHOPIFY_SHOP_DOMAIN;
   const token = env.SHOPIFY_ADMIN_TOKEN;
-  const version = env.SHOPIFY_API_VERSION || "2025-10";
+  const version = env.SHOPIFY_API_VERSION || DEFAULT_API_VERSION;
   if (!domain || !token) throw new Error("SHOPIFY_SHOP_DOMAIN and SHOPIFY_ADMIN_TOKEN are required for --from-shopify");
   const res = await fetchImpl(`https://${domain}/admin/api/${version}/graphql.json`, {
     method: "POST",
@@ -136,6 +147,49 @@ async function apply(db, products, via) {
   });
 }
 
+/**
+ * Apply a dated snapshot as the registry's FIRST content. Refused when either
+ * registry table already has rows (a stale snapshot would overwrite newer
+ * webhook/reconcile data), unless force is given - which needs an actor, a
+ * reason and apply, and is audited. Checked under a table lock, so a webhook
+ * cannot register something between the check and the write.
+ */
+async function bootstrapSnapshot(db, products, { file, apply: doApply = false, force = false, actor, reason } = {}) {
+  if (force) {
+    registry.requireWho(actor, reason);
+    if (!doApply) throw new registry.GuardError("--force-bootstrap needs --apply (there is no forced dry run)");
+  }
+  const run = async (c) => {
+    if (doApply) await c.query(`LOCK TABLE community_products, community_variants IN SHARE ROW EXCLUSIVE MODE`);
+    const before = (await c.query(
+      `SELECT (SELECT count(*) FROM community_products)::int AS products,
+              (SELECT count(*) FROM community_variants)::int AS variants`)).rows[0];
+    const populated = before.products > 0 || before.variants > 0;
+    if (populated && !force) {
+      throw new registry.GuardError(
+        `registry already holds ${before.products} products / ${before.variants} variants - the snapshot is ` +
+        `bootstrap-only and could overwrite newer data. Use --from-shopify to refresh; ` +
+        `--force-bootstrap --by --reason --apply only for recovery.`);
+    }
+    if (!doApply) return { applied: false, before };
+    let registered = 0;
+    for (const p of products) {
+      const r = await registry.upsertProduct(c, p, "snapshot");
+      if (r.registered) registered++;
+    }
+    const after = (await c.query(
+      `SELECT (SELECT count(*) FROM community_products)::int AS products,
+              (SELECT count(*) FROM community_variants)::int AS variants`)).rows[0];
+    await registry.audit(c, {
+      actor: actor || "cli", action: force ? "force_bootstrap_snapshot" : "bootstrap_snapshot",
+      targetType: "registry", targetId: file || "snapshot",
+      reason: reason || "initial registry bootstrap from dated snapshot", before, after,
+    });
+    return { applied: true, registered, before, after };
+  };
+  return doApply ? db.tx(run) : run(db);
+}
+
 function argValue(args, flag) {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
@@ -191,7 +245,24 @@ async function main() {
   if (snapIdx >= 0) {
     const file = args[snapIdx + 1];
     products = JSON.parse(fs.readFileSync(file, "utf8")).products;
-    via = "snapshot";
+    console.log(`[community-registry] ${products.length} product(s) from snapshot ${file}:`);
+    for (const l of await plan(db, products)) console.log(l);
+    try {
+      const r = await bootstrapSnapshot(db, products, {
+        file, apply: APPLY, force: args.includes("--force-bootstrap"),
+        actor: argValue(args, "--by"), reason: argValue(args, "--reason"),
+      });
+      console.log(r.applied
+        ? `\n[community-registry] bootstrap applied (audited): ${r.before.products}/${r.before.variants} -> ` +
+          `${r.after.products} products / ${r.after.variants} variants.`
+        : `\n[community-registry] dry run - registry currently ${r.before.products} products / ` +
+          `${r.before.variants} variants; bootstrap allowed. Re-run with --apply.`);
+    } catch (e) {
+      console.error(`\n[community-registry] REFUSED: ${e.message}`);
+      process.exitCode = 3;
+    }
+    await db.shutdown();
+    return;
   } else {
     const { rows } = await db.query(`SELECT shopify_product_id FROM community_products`);
     products = await fetchShopifyProducts(fetch, process.env, rows.map((r) => r.shopify_product_id));
@@ -218,4 +289,5 @@ if (require.main === module) {
   main().catch((e) => { console.error("[community-registry] failed:", e.message); process.exit(1); });
 }
 
-module.exports = { fromGraphqlProduct, fetchShopifyProducts, plan, apply, COMMUNITY_QUERY };
+module.exports = { fromGraphqlProduct, fetchShopifyProducts, plan, apply, bootstrapSnapshot,
+                   COMMUNITY_QUERY, DEFAULT_API_VERSION };

@@ -21,6 +21,17 @@
 "use strict";
 
 const crypto = require("crypto");
+
+// The ONLY Shopify topics Phase 1 acts on. Everything else is ignored.
+const ORDER_TOPICS = new Set(["orders/create"]);
+const PRODUCT_TOPICS = new Set(["products/create", "products/update", "products/delete"]);
+
+/** 'order' | 'product' | 'ignored' (missing and unknown topics are ignored). */
+function topicKind(topic) {
+  if (ORDER_TOPICS.has(topic)) return "order";
+  if (PRODUCT_TOPICS.has(topic)) return "product";
+  return "ignored";
+}
 const { classifyLines } = require("./classify");
 const registry = require("./registry");
 
@@ -32,6 +43,9 @@ const registry = require("./registry");
  *   { duplicate: false, eventRowId, kind: 'order', groceryLines, communityLines, inserted }
  */
 async function captureWebhook(db, { shop, deliveryId, topic, payload, phone, rawBody }) {
+  const kind = topicKind(topic);
+  if (kind === "ignored") throw new Error(`topic ${topic || "(missing)"} is not handled in Phase 1`);
+  if (!shop) throw new Error("no shop identity (X-Shopify-Shop-Domain / SHOPIFY_SHOP_DOMAIN) - refusing to capture");
   // The bytes Shopify actually sent, kept verbatim on every intake row with
   // their SHA-256 (falls back to the serialised payload when called without
   // the raw body, e.g. from a script).
@@ -53,7 +67,7 @@ async function captureWebhook(db, { shop, deliveryId, topic, payload, phone, raw
     }
     const eventRowId = ins.rows[0].id;
 
-    if (String(topic || "").startsWith("products/")) {
+    if (kind === "product") {
       const r = await registry.syncFromProductWebhook(client, topic, payload);
       return { duplicate: false, eventRowId, kind: "product", registry: r };
     }
@@ -72,6 +86,7 @@ function intOrNull(v) {
 
 /** Classify an order's lines and store the Community ones. Runs inside a transaction. */
 async function captureOrderLines(client, { shop, topic, order, eventRowId, phone, orderRaw }) {
+  if (!shop) throw new Error("no shop identity - refusing to capture");
   const raw = orderRaw || JSON.stringify(order);
   const sha = crypto.createHash("sha256").update(raw, "utf8").digest("hex");
   const classified = await classifyLines(client, order?.line_items || [], { orderId: order?.id });
@@ -145,4 +160,4 @@ async function captureOrderLines(client, { shop, topic, order, eventRowId, phone
   return { groceryLines, communityLines, inserted };
 }
 
-module.exports = { captureWebhook, captureOrderLines };
+module.exports = { captureWebhook, captureOrderLines, topicKind, ORDER_TOPICS, PRODUCT_TOPICS };

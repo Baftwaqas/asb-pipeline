@@ -75,18 +75,20 @@ function stubOutside(repoDir) {
   return sent;
 }
 
+// topic: null / shop: null omit that header entirely.
 function shopifyHeaders(body, { topic, id, shop = SHOP }) {
   const hmac = crypto.createHmac("sha256", SHOPIFY_SECRET).update(body).digest("base64");
-  return {
+  const h = {
     "Content-Type": "application/json",
     "X-Shopify-Hmac-Sha256": hmac,
-    "X-Shopify-Topic": topic,
     "X-Shopify-Webhook-Id": id,
-    "X-Shopify-Shop-Domain": shop,
   };
+  if (topic !== null) h["X-Shopify-Topic"] = topic;
+  if (shop !== null) h["X-Shopify-Shop-Domain"] = shop;
+  return h;
 }
 
-async function postShopify(base, payload, { topic = "orders/create", id, shop } = {}) {
+async function postShopify(base, payload, { topic = "orders/create", id, shop = SHOP } = {}) {
   const body = Buffer.from(JSON.stringify(payload));
   const res = await fetch(`${base}/webhooks/shopify`, {
     method: "POST", headers: shopifyHeaders(body, { topic, id, shop }), body,

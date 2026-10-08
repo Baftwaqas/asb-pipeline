@@ -58,17 +58,34 @@ immutable. Order edits are a Phase 2/4 concern (events), not overwrites.
 
 **Classification** (`community/classify.js`) — any signal diverts a line:
 `registered_variant` (active variant of an active product), `registered_product`
-(active product), `sku_prefix` (`ASB-COM-`), `vendor` (only if
-`COMMUNITY_VENDORS` is set). Only an exact registered variant id makes it
+(active product), `sku_prefix` (`ASB-COM-`), `already_captured`. **Vendor is
+never a signal** (Community and grocery share "Apna Sasta Bazaar"); it is only
+stored on the intake row as evidence. Only an exact registered variant id makes it
 `registered`; anything else is `suspect`. SKU never resolves a pack. A line
 already in `community_intake` (same order + line id) carries
 `already_captured` and stays Community on every later delivery, whatever the
 registry says by then.
 
+**Topic allowlist.** Phase 1 acts on exactly these Shopify topics:
+
+| Topic | Handling |
+|---|---|
+| `orders/create` | Community capture + grocery pipeline |
+| `products/create`, `products/update`, `products/delete` | registry refresh + productSync (Community refused) |
+| anything else — `orders/updated`, `orders/edited`, `orders/cancelled`, `orders/paid`, `customers/*`, `fulfillments/*`, unknown, or **missing** | recorded in `webhook_events` with status `ignored`, answered 200; never reaches `persistOrder`, never merges quantities, never sends a bill |
+
+A missing `X-Shopify-Topic` is no longer assumed to be `orders/create`.
+
+**Shop identity.** `X-Shopify-Shop-Domain`, else the configured
+`SHOPIFY_SHOP_DOMAIN`. If neither exists the delivery is answered 503 and
+nothing is written — no record is ever stored under an invented shop. Set
+`SHOPIFY_SHOP_DOMAIN=0du4xf-6j.myshopify.com` in production as the fallback.
+
 **Before the 200** (`community/intake.js`, one transaction, no network):
-HMAC → insert `webhook_events` (duplicate delivery → 200, stop) → orders:
-classify + insert intake rows / products: refresh registry → COMMIT → 200.
-Any failure → 503, nothing written, Shopify retries.
+HMAC → topic allowlist → shop identity → insert `webhook_events` (duplicate
+delivery → 200, stop) → `orders/create`: classify + insert intake rows /
+`products/*`: refresh registry → COMMIT → 200. Any failure → 503, nothing
+written, Shopify retries.
 
 **After the 200** (unchanged grocery code): grocery-only order → exactly as on
 `main`. Mixed order → the grocery pipeline receives an **allow-listed
@@ -99,9 +116,31 @@ One sweep at a time per process; rows are row-locked (`SKIP LOCKED`).
 | Deactivate a mistaken product (after removing its Community type/tag/SKU in Shopify) | `npm run community:registry -- --deactivate-product <id> --by "Waqas" --reason "..." [--apply]` |
 | Withdraw one pack | `npm run community:registry -- --deactivate-variant <id> --by ... --reason ... [--apply]` |
 | Undo | `--reactivate-product <id>` / `--reactivate-variant <id>` (same flags) |
-| Bootstrap registry | `npm run community:registry -- --snapshot db/community/registry-snapshot-2026-10-08.json [--apply]` |
-| Reconcile with Shopify (read-only token) | `npm run community:registry -- --from-shopify [--apply]` |
-| Health | `GET /healthz` → `community: { ready, environment, variants, review, pending }` |
+| Bootstrap an EMPTY registry (once) | `npm run community:registry -- --snapshot db/community/registry-snapshot-2026-10-08.json [--apply]` |
+| Recovery only: re-apply a snapshot over a populated registry | `... --snapshot <file> --force-bootstrap --by "Waqas" --reason "..." --apply` (audited) |
+| Ongoing refresh (read-only token) | `npm run community:registry -- --from-shopify [--apply]` |
+| Health | `GET /healthz` → `community: { ready, reason?, environment, products, products_active, variants, variants_active, variants_resolvable, review, pending }` |
+
+**Snapshot rule.** The dated snapshot is bootstrap/recovery material, not
+reconciliation. `--snapshot` (dry run or `--apply`) is refused when
+`community_products` or `community_variants` already has any row, because a
+stale snapshot would overwrite newer webhook/reconcile data. The only override
+is `--force-bootstrap`, which requires `--by`, `--reason` and `--apply` and
+writes a `force_bootstrap_snapshot` audit row with the before/after counts.
+Normal ongoing refresh is always `--from-shopify`.
+
+**Readiness rule.** `/healthz` reports `community.ready: true` only when the
+016 tables exist **and** there is at least one active product and at least one
+resolvable variant (active variant of an active, non-archived, non-deleted
+product that Shopify still marks Community). Tables alone or an empty /
+unusable registry → `ready: false`, `reason: registry_empty_or_unusable`, and
+the endpoint answers 503.
+
+**Operating rule — new Community product.**
+1. Create it in Shopify as **Draft** (Community product type, `asb-community-internal` tag, `ASB-COM-` SKUs).
+2. Confirm the registry has it: the `products/create`/`products/update` webhook, or `npm run community:registry -- --from-shopify --apply`.
+3. Verify every exact variant id/SKU in the registry (`npm run community:review` registry line; `community_variants`).
+4. Only then make the product purchasable.
 
 Re-queue restarts the line's retry budget (attempts → 0); the previous count
 and error are kept in the audit row. Every write command is a dry run without `--apply`, needs `--by` and a reason of
@@ -130,9 +169,9 @@ approval:
 
 1. `node scripts/migrate.js --dry` → expect exactly `016_community_intake.sql` outstanding.
 2. `node scripts/migrate.js` (additive; `lock_timeout` 5 s — re-run if it times out).
-3. `npm run community:registry -- --snapshot db/community/registry-snapshot-2026-10-08.json` (dry), then `--apply`; expect 8 products / 28 variants.
-4. Deploy the code with `COMMUNITY_INTAKE_WORKER=off` (safety mode) for the first hour.
-5. Check: boot log `[community] registry: 28 Community variants`; `/healthz` `community.ready: true`; one normal grocery order end-to-end; `npm run community:review` clean.
+3. `npm run community:registry -- --snapshot db/community/registry-snapshot-2026-10-08.json` (dry), then `--apply`; expect 8 products / 28 variants. (Refused if the registry is not empty — by design.)
+4. Set `SHOPIFY_SHOP_DOMAIN=0du4xf-6j.myshopify.com` and `SHOPIFY_API_VERSION=2026-10`, then deploy the code with `COMMUNITY_INTAKE_WORKER=off` (safety mode) for the first hour.
+5. Check: boot log `[community] registry: 28 Community variants`; `/healthz` `community.ready: true` with `products_active: 8`, `variants_active: 28`, `variants_resolvable: 14`; one normal grocery order end-to-end; `npm run community:review` clean.
 6. Set `COMMUNITY_INTAKE_WORKER=on` (or leave off until Community goes live).
 
 Never deploy the code before step 2: without the tables every Shopify webhook
@@ -156,7 +195,7 @@ answers 503, and Shopify only retries for a limited time.
 3. Run steps 1–3 of section 4 with `DATABASE_URL` = the branch.
 4. Start the branch code locally or as a separate Render service pointing at the branch, with **`WHATSAPP_TOKEN` unset** and its own `SHOPIFY_WEBHOOK_SECRET`.
 5. `REHEARSAL_BASE_URL=<that app> DATABASE_URL=<branch> SHOPIFY_WEBHOOK_SECRET=<its secret> npm run community:rehearsal`
-   — refuses unless the database **and** the app report `rehearsal` and the app has no WhatsApp token. Sends synthetic grocery-only, Community-only, mixed, unknown-variant, quantity-2 and duplicate orders and checks 16 conditions.
+   — refuses unless the database **and** the app report `rehearsal` and the app has no WhatsApp token. Sends synthetic grocery-only, Community-only, mixed, unknown-variant, quantity-2 and duplicate orders and checks 19 conditions (incl. an ignored orders/updated).
 6. `npm run community:review` against the branch; inspect `/healthz`.
 7. Delete the Neon branch.
 

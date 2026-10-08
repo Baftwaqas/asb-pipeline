@@ -14,10 +14,10 @@
 //   registered_product  line.product_id is an ACTIVE row in community_products
 //   sku_prefix          line.sku starts with "ASB-COM-"
 //   already_captured    this order line is already in community_intake
-//   vendor              line.vendor is listed in COMMUNITY_VENDORS (env, comma
-//                       separated; empty by default because today Community
-//                       and grocery products share the vendor
-//                       "Apna Sasta Bazaar")
+//
+// Vendor is NOT a signal: Community and grocery products share the vendor
+// "Apna Sasta Bazaar", so it cannot separate them. It is still stored on the
+// intake row as order evidence.
 //
 //   classification = 'registered'  when the variant id itself is registered
 //                  = 'suspect'     when only weaker signals fired (unknown
@@ -31,13 +31,6 @@
 "use strict";
 
 const { numericId, hasCommunitySku } = require("./registry");
-
-function communityVendors() {
-  return String(process.env.COMMUNITY_VENDORS || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-}
 
 /**
  * q: anything with .query. lines: Shopify line_items.
@@ -55,7 +48,7 @@ async function classifyLines(q, lines, { orderId } = {}) {
     const { rows } = await q.query(
       // Only ACTIVE registrations count. An operator-deactivated product or
       // variant stops classifying future lines by registry; other signals
-      // (ASB-COM- SKU, vendor) still divert them.
+      // (ASB-COM- SKU, already captured) still divert them.
       `SELECT 'v' AS k, v.shopify_variant_id AS id
          FROM community_variants v JOIN community_products p USING (shopify_product_id)
         WHERE v.shopify_variant_id = ANY($1::text[]) AND v.is_active AND p.is_active
@@ -82,7 +75,6 @@ async function classifyLines(q, lines, { orderId } = {}) {
     captured = new Set(rows.map((r) => r.id));
   }
 
-  const vendors = communityVendors();
 
   return list.map((line) => {
     const signals = [];
@@ -91,7 +83,6 @@ async function classifyLines(q, lines, { orderId } = {}) {
     if (vid && regVariants.has(vid)) signals.push("registered_variant");
     if (pid && regProducts.has(pid)) signals.push("registered_product");
     if (hasCommunitySku(line?.sku)) signals.push("sku_prefix");
-    if (line?.vendor && vendors.includes(String(line.vendor).trim().toLowerCase())) signals.push("vendor");
     if (line?.id !== undefined && line?.id !== null && captured.has(String(line.id))) signals.push("already_captured");
     return {
       line,
@@ -122,4 +113,4 @@ async function assertNoCommunityLines(q, lines, { orderId } = {}) {
   if (leaked.length) throw new CommunityLeakError(leaked);
 }
 
-module.exports = { classifyLines, assertNoCommunityLines, CommunityLeakError, communityVendors };
+module.exports = { classifyLines, assertNoCommunityLines, CommunityLeakError };

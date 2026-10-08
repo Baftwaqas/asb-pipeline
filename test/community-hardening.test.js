@@ -24,7 +24,7 @@ const nextHook = () => `hard-hook-${process.pid}-${++hookSeq}`;
 
 async function loadSnapshot(q) {
   const snap = JSON.parse(fs.readFileSync(path.join(ROOT, "db/community/registry-snapshot-2026-10-08.json"), "utf8"));
-  await registryScript.apply(q, snap.products, "snapshot");
+  await registryScript.bootstrapSnapshot(q, snap.products, { file: "registry-snapshot-2026-10-08.json", apply: true });
 }
 
 before(async () => {
@@ -126,7 +126,7 @@ test("a later delivery of the same order never rewrites the first capture", asyn
   const [before] = await intakeFor(first.id);
   const changed = { ...first.order, note: "edited later", line_items: [{ ...line, quantity: 3 }] };
   const hook2 = nextHook();
-  assert.equal(await H.postShopify(base, changed, { id: hook2, topic: "orders/updated" }), 200);
+  assert.equal(await H.postShopify(base, changed, { id: hook2, topic: "orders/create" }), 200);
   await H.waitWebhookDone(db, "shopify", hook2);
   const rows = await intakeFor(first.id);
   assert.equal(rows.length, 1);
@@ -433,7 +433,7 @@ test("a line already in intake stays Community on later deliveries, even after t
   const before = (await db.query(`SELECT count(*)::int AS n FROM order_items`)).rows[0].n;
   const updated = { ...first.order, line_items: [{ ...line, sku: "ASB-VEG-KADDU" }] };
   const hook = nextHook();
-  assert.equal(await H.postShopify(base, updated, { id: hook, topic: "orders/updated" }), 200);
+  assert.equal(await H.postShopify(base, updated, { id: hook, topic: "orders/create" }), 200);
   await H.waitWebhookDone(db, "shopify", hook);
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM order_items`)).rows[0].n, before, "never grocery");
   assert.equal((await db.query(`SELECT 1 FROM orders WHERE shopify_order_id = $1`, [String(first.id)])).rows.length, 0);

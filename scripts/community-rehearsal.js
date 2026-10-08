@@ -45,7 +45,7 @@ async function guard(db, base) {
     throw new RehearsalRefused("app has a WhatsApp token - unset WHATSAPP_TOKEN on staging so no customer can be messaged");
   }
   if (!h?.community?.ready) throw new RehearsalRefused(`app reports Community not ready: ${JSON.stringify(h.community)}`);
-  if (!(h.community.variants > 0)) throw new RehearsalRefused("registry is empty - load the snapshot first");
+  if (!(h.community.variants_resolvable > 0)) throw new RehearsalRefused("registry has no resolvable variant - load the snapshot first");
   return h;
 }
 
@@ -81,10 +81,10 @@ async function rehearse({ db, base, secret, log = console.log }) {
     shipping_address: { first_name: "Rehearsal", phone, address1: "Test", address2: "Test" },
     line_items: lines.map(([b, q]) => ({ id: lineId(), quantity: q, vendor: "Apna Sasta Bazaar", ...b })),
   });
-  const send = async (o, hook) => {
+  const send = async (o, hook, topic = "orders/create") => {
     const body = Buffer.from(JSON.stringify(o));
     const res = await fetch(`${base}/webhooks/shopify`, { method: "POST", body, headers: {
-      "Content-Type": "application/json", "X-Shopify-Hmac-Sha256": sign(body), "X-Shopify-Topic": "orders/create",
+      "Content-Type": "application/json", "X-Shopify-Hmac-Sha256": sign(body), "X-Shopify-Topic": topic,
       "X-Shopify-Webhook-Id": hook, "X-Shopify-Shop-Domain": shop } });
     return res.status;
   };
@@ -153,6 +153,17 @@ async function rehearse({ db, base, secret, log = console.log }) {
   check("F redelivery answered 200", (await send(B, hB)) === 200, "");
   const fb = (await db.query(`SELECT count(*)::int AS n FROM community_intake WHERE shopify_order_id=$1`, [String(B.id)])).rows[0].n;
   check("F redelivery stored nothing new", fb === 1, `intake rows ${fb}`);
+
+  // H. orders/updated for grocery order A: ignored, nothing changes
+  const qtyA = async () => (await db.query(
+    `SELECT coalesce(sum(oi.qty_ordered),0)::float AS q FROM orders o JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.shopify_order_id = $1`, [String(A.id)])).rows[0].q;
+  const qBefore = await qtyA();
+  const hH = `reh-${run}-H`;
+  check("H orders/updated answered 200", (await send({ ...A, line_items: A.line_items.map((l) => ({ ...l, quantity: 9 })) }, hH, "orders/updated")) === 200, "");
+  const hEv = (await db.query(`SELECT status FROM webhook_events WHERE source='shopify' AND event_id=$1`, [hH])).rows[0];
+  check("H orders/updated recorded as ignored", hEv?.status === "ignored", JSON.stringify(hEv));
+  check("H grocery order A unchanged", (await qtyA()) === qBefore, `qty ${qBefore}`);
 
   // G. global: no Community SKU anywhere in grocery tables for this run
   const leak = (await db.query(
