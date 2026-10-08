@@ -38,6 +38,9 @@ const { resolveCycle, upsertCustomer, findOpenOrder, loadOrderForBill } = requir
 const wa = require("./whatsapp");
 const notify = require("./notify");
 const broadcast = require("./broadcast");
+const communityIntake = require("./community/intake");
+const communityWorker = require("./community/worker");
+const { assertNoCommunityLines } = require("./community/classify");
 
 const app = express();
 app.set("trust proxy", 1); // Render sits behind a proxy
@@ -162,8 +165,19 @@ async function resolveProduct(client, item) {
 // the same customer orders twice before lock, the second order's
 // items are merged into the first rather than rejected.
 // ------------------------------------------------------------
-async function persistOrder(order, phone) {
+//
+// Community lines never reach this function: the webhook diverts them to
+// community_intake first. assertNoCommunityLines() is the backstop - if one
+// ever does arrive, the whole write is refused (rolled back) rather than
+// creating a products stub, an order_items row or a cycle_prices row.
+//
+// `sourcePayload` is the raw Shopify order kept on orders.source_payload. It
+// defaults to `order`; the webhook passes the ORIGINAL order (all lines) while
+// `order.line_items` holds only the grocery lines.
+async function persistOrder(order, phone, { sourcePayload } = {}) {
   return db.tx(async (client) => {
+    await assertNoCommunityLines(client, order.line_items || []);
+
     const cycle = await resolveCycle(
       client,
       order.created_at ? new Date(order.created_at) : new Date()
@@ -214,7 +228,7 @@ async function persistOrder(order, phone) {
           addr.address2 || null,
           addr.address1 || null,
           order.note || null,
-          order,
+          sourcePayload || order,
           // When the customer ordered, per Shopify. A retried webhook can
           // arrive hours later; the bill must show the real order time.
           order.created_at || null,
@@ -630,9 +644,10 @@ app.post("/webhooks/whatsapp", async (req, res) => {
 //
 // Order of operations matters here:
 //   1. verify HMAC          - is this really Shopify?
-//   2. record the webhook   - have we seen this delivery before?
+//   2. capture (one tx)     - dedupe row + Community intake/registry;
+//                             fails -> 503, Shopify retries
 //   3. answer 200           - stop Shopify retrying
-//   4. persist + send       - the slow part, after the ack
+//   4. persist + send       - grocery lines only, the slow part, after the ack
 // ------------------------------------------------------------
 app.post("/webhooks/shopify", async (req, res) => {
   // ---- 1. Verify the HMAC signature ----
@@ -673,24 +688,49 @@ app.post("/webhooks/shopify", async (req, res) => {
     return res.sendStatus(400);
   }
 
-  let eventRowId;
+  // ---- 2b. Capture BEFORE answering ----
+  // One transaction: the webhook_events dedupe row, plus (orders) one
+  // community_intake row per Community line, or (products) a refresh of the
+  // Community registry. No network calls. Only after it commits may Shopify
+  // get its 200 - so a Community line is never acknowledged without being
+  // stored. If it fails, answer 503 and let Shopify retry: without the
+  // registry we cannot tell a Community line from a grocery line, and
+  // guessing "grocery" is exactly the 4-5 Oct contamination.
+  //
+  // KNOWN LIMITATION (unchanged, out of Phase 1 scope): grocery persistence
+  // and the WhatsApp bill still run AFTER the 200, as before.
+  const shop =
+    req.get("X-Shopify-Shop-Domain") || process.env.SHOPIFY_SHOP_DOMAIN || "unknown-shop";
+  const rawPhoneEarly =
+    order.shipping_address?.phone || order.customer?.phone || order.phone || null;
+
+  let cap;
   try {
-    const rec = await db.recordWebhook("shopify", deliveryId, topic, order);
-    eventRowId = rec.id;
-    if (!rec.isNew) {
-      console.log(`Duplicate Shopify delivery ${deliveryId} ignored`);
-      return res.sendStatus(200);
-    }
+    cap = await communityIntake.captureWebhook(db, {
+      shop,
+      deliveryId,
+      topic,
+      payload: order,
+      phone: normalizePhone(rawPhoneEarly),
+    });
   } catch (e) {
-    console.error("Could not record webhook:", e.message);
-    // Fall through - better to process an order twice than lose it.
+    console.error(`Shopify webhook ${deliveryId} (${topic}) NOT captured - answering 503 so Shopify retries:`, e.message);
+    return res.sendStatus(503);
   }
 
-  // ---- 3. Answer Shopify fast ----
+  const eventRowId = cap.eventRowId;
+  if (cap.duplicate) {
+    console.log(`Duplicate Shopify delivery ${deliveryId} ignored`);
+    return res.sendStatus(200);
+  }
+
+  // ---- 3. Answer Shopify ----
   res.sendStatus(200);
 
   // A product was created or edited in Shopify (a new price, a new unit):
   // mirror it into products and pass the price on to the WhatsApp catalogue.
+  // Community products were registered in step 2b and are refused by
+  // productSync, so they never reach `products` or the Meta catalogue.
   if (topic.startsWith("products/")) {
     try {
       await productSync.fromShopifyWebhook(db, order);
@@ -702,7 +742,30 @@ app.post("/webhooks/shopify", async (req, res) => {
     return;
   }
 
+  if (cap.kind === "order" && cap.communityLines.length) {
+    console.log(
+      `   COMMUNITY: ${order.name || order.id} - ${cap.communityLines.length} line(s) captured to community_intake ` +
+        `(${cap.inserted} new): ` +
+        cap.communityLines.map((c) => `${c.line.title} x${c.line.quantity} [${c.classification}: ${c.signals.join("+")}]`).join(", ")
+    );
+    communityWorker.kick(db);
+  }
+
   // ---- 4. Persist, then notify ----
+  // From here on the grocery pipeline sees ONLY grocery lines. An order whose
+  // lines were all Community creates no grocery order and sends no grocery
+  // bill. An order with no Community lines is handled exactly as before.
+  const hasCommunity = cap.kind === "order" && cap.communityLines.length > 0;
+  const rawOrder = order;
+  if (hasCommunity) {
+    order = { ...rawOrder, line_items: cap.groceryLines };
+    if (!cap.groceryLines.length) {
+      console.log(`   ${rawOrder.name || rawOrder.id}: Community-only order - no grocery order created, no grocery bill sent`);
+      if (eventRowId) await db.markWebhookProcessed(eventRowId);
+      return;
+    }
+  }
+
   try {
     const orderName = order.name || `#${order.id}`;
     const firstName =
@@ -715,7 +778,13 @@ app.post("/webhooks/shopify", async (req, res) => {
       .map((i) => `${i.title} x${i.quantity}`)
       .join(", ");
 
-    const totalPKR = Math.round(Number(order.total_price || 0)).toLocaleString("en-PK");
+    // With Community lines removed, Shopify's total_price would include them,
+    // so the grocery-only fallback total is summed from the grocery lines.
+    const totalPKR = Math.round(
+      hasCommunity
+        ? (order.line_items || []).reduce((s, i) => s + Number(i.price || 0) * Number(i.quantity || 1), 0)
+        : Number(order.total_price || 0)
+    ).toLocaleString("en-PK");
 
     console.log(`NEW ORDER ${orderName} from ${firstName}, phone: ${rawPhone} -> ${phone}`);
     console.log(`   Items: ${items} | Max bill: Rs ${totalPKR}`);
@@ -729,7 +798,7 @@ app.post("/webhooks/shopify", async (req, res) => {
     // --- save it ---
     let saved = null;
     try {
-      saved = await persistOrder(order, phone);
+      saved = await persistOrder(order, phone, { sourcePayload: rawOrder });
       if (saved.skipped) {
         console.log(`   Already saved as ${saved.orderNumber} - not sending again`);
         if (eventRowId) await db.markWebhookProcessed(eventRowId);
@@ -819,7 +888,11 @@ app.post("/webhooks/shopify", async (req, res) => {
 });
 
 // ------------------------------------------------------------
-app.listen(PORT, async () => {
+// Started only when run directly (`node server.js`, as Render does). Tests
+// require() this file to drive the routes without opening the port or
+// starting the background timers.
+function start() {
+return app.listen(PORT, async () => {
   console.log(`ASB Pipeline listening on port ${PORT} (Graph ${wa.graphVersion})`);
 
   // Fail loudly at boot rather than silently at the first message.
@@ -855,4 +928,34 @@ app.listen(PORT, async () => {
       .catch((e) => console.error("[rates] could not add products.meta_retailer_id:", e.message))
       .finally(() => catalogOrder.start(db));
   }
+
+  // Community isolation needs migration 016 and a bootstrapped registry.
+  // Without the tables every Shopify webhook answers 503 (Shopify retries for
+  // 48h, nothing is lost) - so say so loudly at boot.
+  if (h.ok) {
+    try {
+      const { rows } = await db.query(
+        `SELECT to_regclass('community_intake') IS NOT NULL AS intake,
+                to_regclass('community_variants') IS NOT NULL AS registry`);
+      if (!rows[0].intake || !rows[0].registry) {
+        console.error("[community] migration 016 NOT applied - Shopify webhooks will answer 503 until it is. " +
+          "Run: node scripts/migrate.js");
+      } else {
+        const n = (await db.query(`SELECT count(*)::int AS n FROM community_variants`)).rows[0].n;
+        if (!n) console.warn("[community] registry is EMPTY - Community lines will only be caught by SKU and go to review. " +
+          "Run: node scripts/community-registry.js --snapshot db/community/registry-snapshot-2026-10-08.json --apply");
+        else console.log(`[community] registry: ${n} Community variants`);
+        // Intake sweeper: finishes any community_intake row left in
+        // 'received' or 'retryable_error' (a crash, a deploy, a failed attempt).
+        communityWorker.start(db);
+      }
+    } catch (e) {
+      console.error("[community] boot check failed:", e.message);
+    }
+  }
 });
+}
+
+if (require.main === module) start();
+
+module.exports = { app, start, persistOrder, resolveProduct, normalizePhone };

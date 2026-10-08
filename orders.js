@@ -142,7 +142,10 @@ async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy
     `SELECT p.id, p.sku, p.name_en, p.name_ur, p.unit::text AS unit, p.is_active,
             COALESCE(cp.ceiling_price, p.asb_price)   AS ceiling,
             COALESCE(cp.market_price,  p.market_price) AS market,
-            (cp.ceiling_price IS NOT NULL)             AS already_published
+            (cp.ceiling_price IS NOT NULL)             AS already_published,
+            (p.category = 'community-excluded' OR EXISTS (
+               SELECT 1 FROM community_variants cv
+                WHERE cv.shopify_variant_id = p.shopify_variant_id)) AS is_community
        FROM products p
        LEFT JOIN cycle_prices cp ON cp.product_id = p.id AND cp.cycle_id = $2
       WHERE p.sku = ANY($1)`,
@@ -152,6 +155,8 @@ async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy
   for (const l of lines) {
     const p = bySku.get(l.sku);
     if (!p) throw userError(`Unknown product ${l.sku}`);
+    // Community packs are not grocery: never typed into a grocery order.
+    if (p.is_community) throw userError(`${p.name_en} is a Community pack, not a grocery item`);
     if (!p.is_active || !(Number(p.ceiling) > 0)) {
       throw userError(`${p.name_en} is not for sale right now (no price in Shopify)`);
     }

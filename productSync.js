@@ -26,6 +26,8 @@
 
 "use strict";
 
+const communityRegistry = require("./community/registry");
+
 const GRAPH_VERSION = process.env.GRAPH_VERSION || "v25.0";
 const BASE = process.env.GRAPH_BASE || `https://graph.facebook.com/${GRAPH_VERSION}`;
 const TOKEN = process.env.WHATSAPP_TOKEN || "";
@@ -91,9 +93,19 @@ const CATEGORY = (productType) =>
  * Write one Shopify product (webhook/REST shape, or the same shape posted by
  * the inbox) into products. Only the first variant is used: every ASB product
  * has a single "Default Title" variant.
- * Returns the saved row, or null when the product has no variant.
+ * Returns the saved row, or null when the product has no variant or is a
+ * Community product (see community/registry.js).
  */
 async function upsertFromShopify(db, p) {
+  // Community products never enter `products` (the grocery catalogue, the
+  // inbox order panel, the Meta catalogue). They are kept in the Community
+  // registry instead - registering here too covers products posted by the
+  // inbox rates screen, which do not pass through the webhook.
+  if (await communityRegistry.isCommunityProduct(db, p)) {
+    await communityRegistry.upsertProduct(db, p, "product_sync");
+    console.log(`[rates] "${p.title}" is a Community product - kept out of products and the catalogue`);
+    return null;
+  }
   const v = (p.variants || [])[0];
   if (!v || !v.id) return null;
   const parsed = parseTitle(p.title);
