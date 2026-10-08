@@ -30,6 +30,10 @@
 
 BEGIN;
 
+-- The foreign key to webhook_events briefly locks that (busy) table. Give up
+-- rather than queue behind live traffic; re-run later if this times out.
+SET LOCAL lock_timeout = '5s';
+
 -- ---------------------------------------------------------------------------
 -- Registry: products
 -- ---------------------------------------------------------------------------

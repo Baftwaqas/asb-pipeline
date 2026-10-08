@@ -415,3 +415,54 @@ test("registry reconcile from Shopify (mocked Admin API) is dry-run safe and fla
   const plan = await registryScript.plan(db, products);
   assert.ok(plan.some((l) => l.includes("10341692080386") && l.includes("DELETED")));
 });
+
+test("products/delete keeps the registry's deleted mark; later lines -> review product_deleted", async () => {
+  const hook = nextHook();
+  assert.equal(await H.postShopify(base, { id: 10341692276994 }, { id: hook, topic: "products/delete" }), 200);
+  assert.equal(await H.waitWebhookDone(db, "shopify", hook), "processed");
+  const p = (await db.query(`SELECT shopify_status, deleted_at IS NOT NULL AS deleted, title, product_type
+                               FROM community_products WHERE shopify_product_id = '10341692276994'`)).rows[0];
+  assert.deepEqual(p, { shopify_status: "deleted", deleted: true, title: "Chicken Boneless — Community Deal", product_type: "Community Internal" });
+  const boneless = { variant_id: 50595475554562, product_id: 10341692276994, sku: "ASB-COM-DEMO-BONELESS-3KG", title: "Chicken Boneless — Community Deal", price: "2400.00" };
+  const { id, hook: h2 } = await sendOrder([H.line(boneless, 1)]);
+  await H.waitWebhookDone(db, "shopify", h2);
+  await worker.runOnce(db);
+  const [r] = await intakeFor(id);
+  assert.equal(r.status, "review");
+  assert.equal(r.review_reason, "product_deleted");
+});
+
+test("inbox rates path with a partial Community product never marks other variants absent", async () => {
+  const productSync = require(path.join(ROOT, "productSync.js"));
+  const before = await groceryCounts();
+  const row = await productSync.upsertFromShopify(db, {
+    id: 10341692113154, title: "Tamatar — Community Deal", status: "draft", product_type: "Community Internal",
+    tags: ["asb-community-internal"], variants: [{ id: 50595473981698, sku: "ASB-COM-DEMO-TOMATO-5KG", price: "700.00" }],
+  });
+  assert.equal(row, null);
+  const v = (await db.query(`SELECT is_present FROM community_variants WHERE shopify_variant_id = '50595474014466'`)).rows[0];
+  assert.equal(v.is_present, true, "the 10 kg variant was not in the inbox payload but must stay present");
+  assert.deepEqual(await groceryCounts(), before);
+});
+
+test("concurrent sweeps (webhook kick + timer) process each row exactly once", async () => {
+  const a = await sendOrder([H.line(H.COMMUNITY.onion5Draft, 1)], { phone: "+92 345 0000003" });
+  const b = await sendOrder([H.line(H.COMMUNITY.tomato10Draft, 1)], { phone: "+92 345 0000004" });
+  await H.waitWebhookDone(db, "shopify", a.hook);
+  await H.waitWebhookDone(db, "shopify", b.hook);
+  await Promise.all([worker.sweep(db), worker.sweep(db), worker.runOnce(db), worker.runOnce(db)]);
+  for (const o of [a, b]) {
+    const [r] = await intakeFor(o.id);
+    assert.equal(r.status, "resolved");
+    assert.equal(r.attempts, 1, "processed once, not once per sweep");
+  }
+});
+
+test("/healthz reports Community readiness and the review backlog", async () => {
+  const res = await fetch(`${base}/healthz`);
+  const body = await res.json();
+  assert.equal(body.community.ready, true);
+  assert.ok(body.community.variants >= 28);
+  assert.ok(body.community.review >= 1);
+  assert.equal(res.status, 200);
+});

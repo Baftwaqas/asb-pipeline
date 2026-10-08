@@ -75,13 +75,19 @@ async function isRegisteredProduct(q, productId) {
  * `q` is anything with .query (a pool, the db module, or a transaction client).
  * Returns { registered: boolean, signals: string[] }.
  */
-async function upsertProduct(q, p, via) {
+async function upsertProduct(q, p, via, { markMissingAbsent = true } = {}) {
   const pid = numericId(p?.id);
   if (!pid) return { registered: false, signals: [] };
 
   const signals = productSignals(p);
   const already = await isRegisteredProduct(q, pid);
   if (!signals.length && !already) return { registered: false, signals };
+
+  // A payload without variants is partial (it cannot be a whole Shopify
+  // product): never let it overwrite what the registry knows.
+  if (!Array.isArray(p.variants) || !p.variants.length) {
+    return { registered: already, signals, partial: true };
+  }
 
   const status = p.status ? String(p.status).toLowerCase() : null;
   await q.query(
@@ -126,7 +132,7 @@ async function upsertProduct(q, p, via) {
 
   // Variants Shopify no longer lists for this product stay registered (an old
   // cart can still check them out) but are marked absent.
-  await q.query(
+  if (markMissingAbsent) await q.query(
     `UPDATE community_variants SET is_present = FALSE, last_synced_at = now()
       WHERE shopify_product_id = $1 AND is_present AND NOT (shopify_variant_id = ANY($2::text[]))`,
     [pid, seen]

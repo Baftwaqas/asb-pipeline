@@ -35,7 +35,9 @@ Deploy order (each step is safe with the code before it):
 
 1. `node scripts/migrate.js --dry`, then `node scripts/migrate.js` — applies `016_community_intake.sql` (additive: 3 new tables).
 2. `node scripts/community-registry.js --snapshot db/community/registry-snapshot-2026-10-08.json` (dry run), then add `--apply`.
-3. Deploy the code. Boot logs `[community] registry: N Community variants`.
+3. Deploy the code. Boot logs `[community] registry: N Community variants`; `/healthz` shows `community.ready: true`.
+
+Never deploy the code before step 1: without the 016 tables every Shopify webhook answers 503, `/healthz` is 503, and Shopify only retries for a limited time.
 
 | Name | What it is |
 |------|-----------|

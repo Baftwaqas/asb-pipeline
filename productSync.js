@@ -101,13 +101,16 @@ async function upsertFromShopify(db, p) {
   // inbox order panel, the Meta catalogue). They are kept in the Community
   // registry instead - registering here too covers products posted by the
   // inbox rates screen, which do not pass through the webhook.
+  const v = (p.variants || [])[0];
+  if (!v || !v.id) return null;
   if (await communityRegistry.isCommunityProduct(db, p)) {
-    await communityRegistry.upsertProduct(db, p, "product_sync");
+    // The inbox may post a subset of a product's variants, so this path never
+    // marks unlisted variants absent (only webhooks/reconcile, which carry the
+    // full product, do).
+    await communityRegistry.upsertProduct(db, p, "product_sync", { markMissingAbsent: false });
     console.log(`[rates] "${p.title}" is a Community product - kept out of products and the catalogue`);
     return null;
   }
-  const v = (p.variants || [])[0];
-  if (!v || !v.id) return null;
   const parsed = parseTitle(p.title);
   const price = v.price == null ? null : Number(v.price);
   const market = v.compare_at_price == null || v.compare_at_price === "" ? null : Number(v.compare_at_price);

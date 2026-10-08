@@ -135,10 +135,30 @@ async function runOnce(db, { limit = 50, resolve } = {}) {
   return tally;
 }
 
+// One sweep at a time per process. A kick that arrives while a sweep is
+// running asks for one more sweep afterwards instead of starting a second
+// one - so a burst of Community orders costs one sweep, not one per order,
+// and the 5-connection pool stays free for the pre-200 captures.
+let sweeping = null;
+let again = false;
+function sweep(db) {
+  if (sweeping) { again = true; return sweeping; }
+  sweeping = (async () => {
+    try {
+      do { again = false; await runOnce(db); } while (again);
+    } catch (e) {
+      console.error("[community] sweep failed:", e.message);
+    } finally {
+      sweeping = null;
+    }
+  })();
+  return sweeping;
+}
+
 /** Fire-and-forget nudge after a webhook captured Community lines. */
 function kick(db) {
   if (!enabled()) return;
-  setImmediate(() => runOnce(db).catch((e) => console.error("[community] kick failed:", e.message)));
+  setImmediate(() => sweep(db));
 }
 
 function enabled() {
@@ -151,12 +171,10 @@ function start(db, { intervalMs = Number(process.env.COMMUNITY_INTAKE_SWEEP_MS |
     console.log("[community] intake worker disabled (COMMUNITY_INTAKE_WORKER=off)");
     return null;
   }
-  const t = setInterval(() => {
-    runOnce(db).catch((e) => console.error("[community] sweep failed:", e.message));
-  }, intervalMs);
+  const t = setInterval(() => sweep(db), intervalMs);
   t.unref();
   console.log(`[community] intake sweeper every ${Math.round(intervalMs / 1000)}s`);
   return t;
 }
 
-module.exports = { resolveLine, processOne, runOnce, kick, start, MAX_ATTEMPTS };
+module.exports = { resolveLine, processOne, runOnce, sweep, kick, start, MAX_ATTEMPTS };

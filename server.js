@@ -497,9 +497,25 @@ app.get("/healthz", async (req, res) => {
         (process.env.INBOX_COOKIE_SECRET || process.env.VERIFY_TOKEN)
     ),
   };
+  // Community (migration 016): without its tables every Shopify webhook
+  // answers 503, so the service is not ready. Review rows are surfaced here
+  // because nothing else alerts on them yet.
+  let community = { ready: false };
+  if (h.ok) {
+    try {
+      const { rows } = await db.query(
+        `SELECT (SELECT count(*) FROM community_variants)::int AS variants,
+                (SELECT count(*) FROM community_intake WHERE status = 'review')::int AS review,
+                (SELECT count(*) FROM community_intake
+                  WHERE status IN ('received','retryable_error'))::int AS pending`);
+      community = { ready: true, ...rows[0] };
+    } catch (e) {
+      community = { ready: false, error: e.message };
+    }
+  }
   const ready = h.ok && h.migrated && config.whatsappToken &&
-    config.phoneNumberId && config.appSecret;
-  res.status(ready ? 200 : 503).json({ ...h, config, ready });
+    config.phoneNumberId && config.appSecret && community.ready;
+  res.status(ready ? 200 : 503).json({ ...h, config, community, ready });
 });
 
 // ------------------------------------------------------------
@@ -701,6 +717,9 @@ app.post("/webhooks/shopify", async (req, res) => {
   // and the WhatsApp bill still run AFTER the 200, as before.
   const shop =
     req.get("X-Shopify-Shop-Domain") || process.env.SHOPIFY_SHOP_DOMAIN || "unknown-shop";
+  if (!req.get("X-Shopify-Shop-Domain")) {
+    console.warn(`Shopify webhook ${deliveryId} has no X-Shopify-Shop-Domain - intake keyed under "${shop}"`);
+  }
   const rawPhoneEarly =
     order.shipping_address?.phone || order.customer?.phone || order.phone || null;
 
@@ -733,7 +752,10 @@ app.post("/webhooks/shopify", async (req, res) => {
   // productSync, so they never reach `products` or the Meta catalogue.
   if (topic.startsWith("products/")) {
     try {
-      await productSync.fromShopifyWebhook(db, order);
+      // products/delete carries only { id }: nothing to mirror. (On main this
+      // was already a no-op; skipping it also keeps the registry's "deleted"
+      // mark from being overwritten by an empty payload.)
+      if (topic !== "products/delete") await productSync.fromShopifyWebhook(db, order);
       if (eventRowId) await db.markWebhookProcessed(eventRowId);
     } catch (e) {
       console.error(`[rates] product webhook failed for "${order.title}":`, e.message);
@@ -811,6 +833,10 @@ app.post("/webhooks/shopify", async (req, res) => {
     } catch (e) {
       console.error(`   DB write failed for ${orderName}:`, e.message);
       if (eventRowId) await db.markWebhookFailed(eventRowId, e.message);
+      // The Community backstop refused the order (a Community line reached
+      // the grocery writer). Send nothing: an improvised bill here could list
+      // the wrong lines. The payload stays in webhook_events for review.
+      if (e.code === "ASB_COMMUNITY_LEAK") return;
       // Still send the confirmation - the customer matters more than our records,
       // and the raw payload is safe in webhook_events for a later backfill.
     }
@@ -930,8 +956,8 @@ return app.listen(PORT, async () => {
   }
 
   // Community isolation needs migration 016 and a bootstrapped registry.
-  // Without the tables every Shopify webhook answers 503 (Shopify retries for
-  // 48h, nothing is lost) - so say so loudly at boot.
+  // Without the tables every Shopify webhook answers 503 and Shopify only
+  // retries for a limited time - so say so loudly at boot (and /healthz is 503).
   if (h.ok) {
     try {
       const { rows } = await db.query(
@@ -945,14 +971,15 @@ return app.listen(PORT, async () => {
         if (!n) console.warn("[community] registry is EMPTY - Community lines will only be caught by SKU and go to review. " +
           "Run: node scripts/community-registry.js --snapshot db/community/registry-snapshot-2026-10-08.json --apply");
         else console.log(`[community] registry: ${n} Community variants`);
-        // Intake sweeper: finishes any community_intake row left in
-        // 'received' or 'retryable_error' (a crash, a deploy, a failed attempt).
-        communityWorker.start(db);
       }
     } catch (e) {
       console.error("[community] boot check failed:", e.message);
     }
   }
+  // Intake sweeper: finishes any community_intake row left in 'received' or
+  // 'retryable_error' (a crash, a deploy, a failed attempt). Started even if
+  // the boot check failed (e.g. Neon still waking) - each sweep tolerates errors.
+  communityWorker.start(db);
 });
 }
 
