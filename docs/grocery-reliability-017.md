@@ -86,8 +86,9 @@ Each step needs Waqas's approval. Nothing here touches production; real WhatsApp
 7. **Guard.** `community:rehearsal` refuses unless:
    - the database is marked as a rehearsal copy;
    - Meta calls go to a local host (or there is no token at all);
-   - push is suppressed;
-   - the worker is enabled.
+   - `/healthz` reports the 017 grocery pipeline as available;
+   - `grocery.worker_enabled === true`, `grocery.bills_enabled === true` and `grocery.alert_push === true` (strict: a missing or non-`true` value refuses, and the error names every missing switch);
+   - push is suppressed (`grocery.push_suppressed`).
 8. **Run.** `npm run community:rehearsal`. It covers A–H plus I (same order, new delivery ID), J (changed content) and K (source states).
    - Then check that bills went to the fake Graph with `wamid.FAKE…`, and that alerts are recorded but none were `sent`.
 9. **Operator tools.** Try `grocery:review`: resend, hold/release, and `link-receipt --attempt`, using synthetic signed receipts.

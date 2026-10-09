@@ -49,13 +49,22 @@ async function guard(db, base) {
   }
   if (!h?.community?.ready) throw new RehearsalRefused(`app reports Community not ready: ${JSON.stringify(h.community)}`);
   if (!(h.community.variants_resolvable > 0)) throw new RehearsalRefused("registry has no resolvable variant - load the snapshot first");
-  // Migration 017: the staging copy must have run the backfill and activated
-  // the worker (scripts/grocery-backfill.js, scripts/grocery-activate.js).
-  if (h.grocery && h.grocery.available && !h.grocery.worker_enabled) {
-    throw new RehearsalRefused(`grocery worker not enabled on staging (${JSON.stringify(h.grocery)})`);
+  // Migration 017: a full rehearsal exercises the worker, real bill sending
+  // (to the fake Graph) and alert push - so every one of them must be ON, and
+  // push must be suppressed so real ASB phones are never notified from a copy
+  // of production. Strict checks: a missing field refuses.
+  const g = h.grocery;
+  if (!g || g.available !== true) {
+    throw new RehearsalRefused(`app does not report the 017 grocery pipeline as available (${JSON.stringify(g)})`);
   }
-  // Real ASB phones must never be notified from a copy of production.
-  if (h.grocery && h.grocery.available && !h.grocery.push_suppressed) {
+  const missing = [];
+  if (g.worker_enabled !== true) missing.push("worker_enabled (GROCERY_SOURCE_WORKER=on + backfill marker + grocery:activate --worker)");
+  if (g.bills_enabled !== true) missing.push("bills_enabled (GROCERY_BILL_SEND=on + grocery:activate --bills)");
+  if (g.alert_push !== true) missing.push("alert_push (GROCERY_ALERT_PUSH=on)");
+  if (missing.length) {
+    throw new RehearsalRefused(`grocery switches not all on for a full 017 rehearsal - missing: ${missing.join("; ")}`);
+  }
+  if (!g.push_suppressed) {
     throw new RehearsalRefused("push notifications are NOT suppressed on staging (mark the database as rehearsal or set PUSH_DISABLED=1)");
   }
   return h;

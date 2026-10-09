@@ -1101,17 +1101,72 @@ test("rehearsal guard refuses a real Graph host with a token, and unsuppressed p
   const rehearsal = require(path.join(ROOT, "scripts", "community-rehearsal.js"));
   const fakeDb = { query: async () => ({ rows: [{ value: "rehearsal" }] }) };
   const realFetch = global.fetch;
+  const ALL_ON = { available: true, worker_enabled: true, bills_enabled: true, alert_push: true, push_suppressed: "rehearsal_environment" };
   const health = (over) => ({ community: { environment: "rehearsal", ready: true, variants_resolvable: 14 },
     config: { whatsappToken: true, graphHost: "graph.facebook.com" },
-    grocery: { available: true, worker_enabled: true, push_suppressed: "rehearsal_environment" }, ...over });
+    grocery: { ...ALL_ON }, ...over });
   try {
     global.fetch = async () => new Response(JSON.stringify(health({})));
     await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /WhatsApp token and Meta calls go to graph.facebook.com/);
     global.fetch = async () => new Response(JSON.stringify(health({ config: { whatsappToken: true, graphHost: "127.0.0.1" },
-      grocery: { available: true, worker_enabled: true, push_suppressed: false } })));
+      grocery: { ...ALL_ON, push_suppressed: false } })));
     await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /push notifications are NOT suppressed/);
     global.fetch = async () => new Response(JSON.stringify(health({ config: { whatsappToken: true, graphHost: "127.0.0.1" } })));
     await rehearsal.guard(fakeDb, "http://x");
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("rehearsal guard: a full 017 rehearsal needs worker, bills AND alert push on (strictly true) plus push suppressed", async () => {
+  const rehearsal = require(path.join(ROOT, "scripts", "community-rehearsal.js"));
+  const fakeDb = { query: async () => ({ rows: [{ value: "rehearsal" }] }) };
+  const realFetch = global.fetch;
+  const ALL_ON = { available: true, worker_enabled: true, bills_enabled: true, alert_push: true, push_suppressed: "PUSH_DISABLED" };
+  const withGrocery = (grocery) => ({ community: { environment: "rehearsal", ready: true, variants_resolvable: 14 },
+    config: { whatsappToken: true, graphHost: "127.0.0.1" }, grocery });
+  const serve = (grocery) => { global.fetch = async () => new Response(JSON.stringify(withGrocery(grocery))); };
+  try {
+    // Worker on, bills off -> refused.
+    serve({ ...ALL_ON, bills_enabled: false });
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), (e) => {
+      assert.ok(e instanceof rehearsal.RehearsalRefused);
+      assert.match(e.message, /missing: bills_enabled/);
+      assert.doesNotMatch(e.message, /worker_enabled|alert_push/);
+      return true;
+    });
+    // Alert push off -> refused.
+    serve({ ...ALL_ON, alert_push: false });
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), (e) => {
+      assert.ok(e instanceof rehearsal.RehearsalRefused);
+      assert.match(e.message, /missing: alert_push/);
+      assert.doesNotMatch(e.message, /worker_enabled|bills_enabled/);
+      return true;
+    });
+    // Worker off (bills/alerts on) -> refused.
+    serve({ ...ALL_ON, worker_enabled: false });
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /missing: worker_enabled/);
+    // Strict: truthy-but-not-true, or an absent field, refuses.
+    serve({ ...ALL_ON, bills_enabled: "yes" });
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /missing: bills_enabled/);
+    const { alert_push, ...noAlertField } = ALL_ON;
+    serve(noAlertField);
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /missing: alert_push/);
+    // Everything off -> all three named.
+    serve({ ...ALL_ON, worker_enabled: false, bills_enabled: false, alert_push: false });
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /worker_enabled.*bills_enabled.*alert_push/);
+    // All switches on but push not suppressed -> refused.
+    serve({ ...ALL_ON, push_suppressed: false });
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /push notifications are NOT suppressed/);
+    // No 017 grocery block, or grocery not available -> refused.
+    serve(undefined);
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /017 grocery pipeline as available/);
+    serve({ ...ALL_ON, available: false });
+    await assert.rejects(rehearsal.guard(fakeDb, "http://x"), /017 grocery pipeline as available/);
+    // All four conditions met -> passes.
+    serve(ALL_ON);
+    const h = await rehearsal.guard(fakeDb, "http://x");
+    assert.equal(h.grocery.bills_enabled, true);
   } finally {
     global.fetch = realFetch;
   }
