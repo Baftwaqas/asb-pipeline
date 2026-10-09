@@ -9,16 +9,35 @@ const H = require("./support/harness");
 const ROOT = path.join(__dirname, "..");
 
 let db;
-let url;
 
 before(async () => {
-  url = await H.createDatabase("asb_t_customer_identity_018", ROOT);
+  const url = await H.createDatabase("asb_t_customer_identity_018", ROOT);
   db = new Pool({ connectionString: url });
+
+  // Real grocery products needed by writeGroceryOrder().
+  await db.query(H.FIXTURE_SQL);
 });
 
 after(async () => {
   await db?.end();
 });
+
+async function writeOrder(order, phone) {
+  const { writeGroceryOrder } = require("../grocery/write");
+  const c = await db.connect();
+
+  try {
+    await c.query("BEGIN");
+    const result = await writeGroceryOrder(c, order, phone);
+    await c.query("COMMIT");
+    return result;
+  } catch (e) {
+    await c.query("ROLLBACK");
+    throw e;
+  } finally {
+    c.release();
+  }
+}
 
 test("018: Shopify customer id is non-unique metadata, while phone remains unique identity", async () => {
   const uniqueShopify = await db.query(`
@@ -59,41 +78,63 @@ test("018: Shopify customer id is non-unique metadata, while phone remains uniqu
   assert.ok(phoneUnique.rows.length >= 1, "phone must remain uniquely constrained");
 });
 
-test("018: same Shopify customer id with different phones creates two ASB customers", async () => {
-  const { upsertCustomer } = require("../orders");
+test("018: same Shopify customer id with different phones allows both grocery orders to apply", async () => {
+  const shopifyCustomerId = 8800000000001;
 
-  const shopifyId = "8800000000001";
-
-  const a = await upsertCustomer(db, {
-    phone: "923001110001",
-    name: "Customer A",
-    shopifyCustomerId: shopifyId,
+  const orderA = H.shopifyOrder({
+    id: 9818000000001,
+    name: "#T018-A",
+    lines: [H.line(H.GROCERY.aloo, 1)],
+    phone: "+92 300 1110001",
   });
 
-  const b = await upsertCustomer(db, {
-    phone: "923001110002",
-    name: "Customer B",
-    shopifyCustomerId: shopifyId,
+  const orderB = H.shopifyOrder({
+    id: 9818000000002,
+    name: "#T018-B",
+    lines: [H.line(H.GROCERY.mango, 1)],
+    phone: "+92 300 1110002",
   });
 
-  assert.notEqual(a.id, b.id);
+  // Same real Shopify account, two different ASB phone identities.
+  orderA.customer.id = shopifyCustomerId;
+  orderB.customer.id = shopifyCustomerId;
 
-  const rows = (
+  const a = await writeOrder(orderA, "923001110001");
+  const b = await writeOrder(orderB, "923001110002");
+
+  assert.equal(a.alreadyPersisted, false);
+  assert.equal(b.alreadyPersisted, false);
+  assert.notEqual(a.orderId, b.orderId);
+  assert.notEqual(a.customerId, b.customerId);
+
+  const customers = (
     await db.query(
       `SELECT id, phone, shopify_customer_id
          FROM customers
         WHERE shopify_customer_id = $1
         ORDER BY phone`,
-      [shopifyId]
+      [String(shopifyCustomerId)]
     )
   ).rows;
 
-  assert.equal(rows.length, 2);
+  assert.equal(customers.length, 2);
   assert.deepEqual(
-    rows.map((r) => r.phone),
+    customers.map((r) => r.phone),
     ["923001110001", "923001110002"]
   );
-  assert.ok(rows.every((r) => r.shopify_customer_id === shopifyId));
+
+  const orders = (
+    await db.query(
+      `SELECT shopify_order_id, customer_id
+         FROM orders
+        WHERE shopify_order_id = ANY($1)
+        ORDER BY shopify_order_id`,
+      [[String(orderA.id), String(orderB.id)]]
+    )
+  ).rows;
+
+  assert.equal(orders.length, 2);
+  assert.notEqual(orders[0].customer_id, orders[1].customer_id);
 });
 
 test("018: same phone still resolves to exactly one ASB customer", async () => {
@@ -126,6 +167,8 @@ test("018: same phone still resolves to exactly one ASB customer", async () => {
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].id, first.id);
+
+  // Existing identity metadata is not silently replaced by a later order.
   assert.equal(rows[0].shopify_customer_id, "8800000000002");
 });
 
