@@ -42,4 +42,29 @@ async function sendOrderBill(db, phone, composed) {
   return { result, via: "template", template: t.name };
 }
 
-module.exports = { sendOrderBill, windowOpen };
+/**
+ * Send a FROZEN bill snapshot (migration 017) on an already-chosen channel.
+ * No database work, no re-composition: exactly the stored text, or exactly
+ * the stored template parameters. Returns the structured transport result
+ * (whatsapp.js). A result without `outcome` (an older client or a test stub)
+ * is accepted only with a wamid; anything else is treated as ambiguous.
+ */
+async function sendBillSnapshot(snapshot, channel) {
+  let r;
+  try {
+    r = channel === "text"
+      ? await wa.sendText(snapshot.phone, snapshot.rich_text)
+      : await wa.sendTemplate(snapshot.phone, snapshot.template_name, snapshot.template_params,
+                              { lang: snapshot.template_lang });
+  } catch (e) {
+    r = { outcome: "ambiguous", retryable: false, phase: "request", errorMessage: e.message };
+  }
+  if (!r || !r.outcome) {
+    const ok = Boolean(r?.ok && r?.wamid);
+    r = { ...(r || {}), outcome: ok ? "accepted" : "ambiguous", retryable: false, retryVia: null,
+          phase: "response", wamid: r?.wamid || null };
+  }
+  return r;
+}
+
+module.exports = { sendOrderBill, sendBillSnapshot, windowOpen };

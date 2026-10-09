@@ -9,6 +9,9 @@
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "community:review": "node scripts/community-review.js",
     "community:registry": "node scripts/community-registry.js",
-    "community:rehearsal": "node scripts/community-rehearsal.js"
+    "community:rehearsal": "node scripts/community-rehearsal.js",
+    "grocery:backfill": "node scripts/grocery-backfill.js",
+    "grocery:activate": "node scripts/grocery-activate.js",
+    "grocery:review": "node scripts/grocery-review.js"
   }
 }

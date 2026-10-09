@@ -100,7 +100,16 @@ async function main() {
                               (SELECT count(*) FROM community_products)::int AS products`)).rows[0]
     : null;
 
-  process.stdout.write("\n@@RESULT@@" + JSON.stringify({ dump, community }) + "\n");
+  const has017 = (await db.query(`SELECT to_regclass('shopify_order_sources') IS NOT NULL AS t`)).rows[0].t;
+  const grocery017 = has017
+    ? (await db.query(`SELECT (SELECT jsonb_object_agg(status, n) FROM (SELECT status, count(*)::int n FROM shopify_order_sources GROUP BY status) a) AS sources,
+                              (SELECT jsonb_object_agg(bill_state, n) FROM (SELECT bill_state, count(*)::int n FROM shopify_order_sources GROUP BY bill_state) b) AS bills,
+                              (SELECT count(*)::int FROM shopify_order_bill_attempts) AS attempts,
+                              (SELECT count(*)::int FROM shopify_order_source_duplicates) AS duplicates,
+                              (SELECT count(*)::int FROM grocery_alerts) AS alerts`)).rows[0]
+    : null;
+
+  process.stdout.write("\n@@RESULT@@" + JSON.stringify({ dump, community, grocery017 }) + "\n");
   await db.shutdown();
   process.exit(0);
 }

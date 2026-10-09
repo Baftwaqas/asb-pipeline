@@ -33,19 +33,71 @@ const BASE =
   process.env.GRAPH_BASE || `https://graph.facebook.com/${GRAPH_VERSION}`;
 
 // ---------------------------------------------------------------------------
-// Low-level POST to the messages endpoint.
+// Low-level POST to the messages endpoint — a STRUCTURED transport result.
 //
-// Meta's errors are the useful part, so they are always returned rather than
-// thrown. Callers log them against the order; nothing here crashes a webhook.
+// Never throws. Every result says what is actually known about the send:
+//
+//   outcome   'accepted'  HTTP 2xx with a message id (wamid)
+//             'not_sent'  definitely nothing left the app, or Meta definitely
+//                         refused delivery in a way that sent nothing and is
+//                         safe to retry (131047: the 24h window is shut - retry
+//                         as a TEMPLATE on the next attempt)
+//             'refused'   Meta answered 4xx with a Graph error object
+//             'ambiguous' the request may have reached Meta but no definite
+//                         answer came back (timeout, reset, 5xx, unreadable body)
+//   retryable whether an AUTOMATIC retry is safe (only when nothing was sent)
+//   retryVia  'template' when only a template can succeed (131047)
+//   phase     'precheck' | 'connect' | 'request' | 'response'
+//
+// The legacy fields { ok, wamid, data, code } are kept for every older caller
+// (inbox, broadcast): ok is true only for 'accepted'.
 // ---------------------------------------------------------------------------
+const SEND_TIMEOUT_MS = Number(process.env.WA_SEND_TIMEOUT_MS || 20000);
+// Errors raised before any request byte can have reached Meta.
+const CONNECT_CODES = new Set([
+  "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT",
+  "CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN",
+]);
+// Graph rate limits: Meta answered and sent nothing; retrying later is safe.
+const RATE_LIMIT_CODES = new Set([4, 80007, 130429, 131056]);
+// Outside the 24h customer-service window: free text refused, nothing sent.
+const WINDOW_CLOSED_CODE = 131047;
+
+function result(r, t0) {
+  const out = {
+    outcome: r.outcome,
+    retryable: Boolean(r.retryable),
+    retryVia: r.retryVia || null,
+    wamid: r.wamid || null,
+    httpStatus: r.httpStatus ?? null,
+    metaCode: r.metaCode ?? null,
+    metaSubcode: r.metaSubcode ?? null,
+    metaMessage: r.metaMessage ?? null,
+    fbtraceId: r.fbtraceId ?? null,
+    phase: r.phase,
+    errorCode: r.errorCode ?? null,
+    errorMessage: r.errorMessage ?? null,
+    durationMs: Date.now() - t0,
+  };
+  // legacy shape
+  out.ok = out.outcome === "accepted";
+  out.data = r.data || (out.errorMessage || out.metaMessage ? { error: { message: out.errorMessage || out.metaMessage, code: out.metaCode } } : {});
+  out.code = out.metaCode;
+  return out;
+}
+
 async function postMessage(body) {
+  const t0 = Date.now();
   if (!PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
     const msg = "PHONE_NUMBER_ID or WHATSAPP_TOKEN is not set";
     console.error(`[wa] ${msg}`);
-    return { ok: false, wamid: null, data: { error: { message: msg } } };
+    return result({ outcome: "not_sent", retryable: false, phase: "precheck", errorCode: "config_missing", errorMessage: msg }, t0);
   }
 
-  let res, data;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+  let res;
   try {
     res = await fetch(`${BASE}/${PHONE_NUMBER_ID}/messages`, {
       method: "POST",
@@ -54,27 +106,62 @@ async function postMessage(body) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
-    data = await res.json();
   } catch (e) {
-    // Network-level failure — Render cold start, DNS, Meta having a moment.
-    console.error("[wa] transport error:", e.message);
-    return { ok: false, wamid: null, data: { error: { message: e.message } } };
+    clearTimeout(timer);
+    const code = e?.cause?.code || e?.code || e?.name || null;
+    const connect = CONNECT_CODES.has(code);
+    console.error(`[wa] transport error (${code || "?"}): ${e.message}`);
+    return result({
+      outcome: connect ? "not_sent" : "ambiguous", retryable: connect,
+      phase: connect ? "connect" : "request", errorCode: code, errorMessage: e.message,
+    }, t0);
   }
 
-  const wamid = data?.messages?.[0]?.id || null;
+  let text = null;
+  try {
+    text = await res.text();
+  } catch (e) {
+    clearTimeout(timer);
+    console.error(`[wa] response body unreadable (HTTP ${res.status}): ${e.message}`);
+    return result({ outcome: "ambiguous", phase: "response", httpStatus: res.status,
+                    errorCode: e?.cause?.code || e?.name || null, errorMessage: e.message }, t0);
+  }
+  clearTimeout(timer);
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (_) { data = null; }
 
-  if (!res.ok) {
-    const err = data?.error || {};
+  if (res.status >= 200 && res.status < 300) {
+    const wamid = data?.messages?.[0]?.id || null;
+    if (wamid) {
+      console.log(`[wa] send OK ${wamid}`);
+      return result({ outcome: "accepted", phase: "response", httpStatus: res.status, wamid, data }, t0);
+    }
+    console.error(`[wa] HTTP ${res.status} without a message id - outcome AMBIGUOUS`);
+    return result({ outcome: "ambiguous", phase: "response", httpStatus: res.status, data: data || {},
+                    errorMessage: "2xx without messages[0].id" }, t0);
+  }
+
+  const err = data && typeof data.error === "object" && data.error ? data.error : null;
+  if (res.status >= 400 && res.status < 500 && err) {
+    const code = Number(err.code);
     console.error(
       `[wa] send FAILED (${err.code}/${err.error_subcode || "-"}): ${err.message}` +
         (err.error_data?.details ? ` — ${err.error_data.details}` : "")
     );
-  } else {
-    console.log(`[wa] send OK ${wamid}`);
+    const common = { phase: "response", httpStatus: res.status, metaCode: Number.isFinite(code) ? code : null,
+                     metaSubcode: err.error_subcode ?? null, metaMessage: err.message || null,
+                     fbtraceId: err.fbtrace_id || null, data };
+    if (code === WINDOW_CLOSED_CODE) return result({ ...common, outcome: "not_sent", retryable: true, retryVia: "template" }, t0);
+    if (RATE_LIMIT_CODES.has(code)) return result({ ...common, outcome: "refused", retryable: true }, t0);
+    return result({ ...common, outcome: "refused", retryable: false }, t0);
   }
 
-  return { ok: res.ok, wamid, data, code: data?.error?.code || null };
+  console.error(`[wa] HTTP ${res.status} without a Graph error object - outcome AMBIGUOUS`);
+  return result({ outcome: "ambiguous", phase: "response", httpStatus: res.status, data: data || {},
+                  metaCode: err ? Number(err.code) || null : null, metaMessage: err?.message || null,
+                  errorMessage: `HTTP ${res.status}` }, t0);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +367,8 @@ function verifySignature(rawBody, signatureHeader) {
 }
 
 module.exports = {
+  postMessage,
+  SEND_TIMEOUT_MS,
   sendTemplate,
   sendText,
   sendImage,

@@ -34,14 +34,17 @@ const push = require("./push");
 const catalogOrder = require("./catalogOrder");
 const productSync = require("./productSync");
 const bill = require("./bill");
-const { resolveCycle, upsertCustomer, findOpenOrder, loadOrderForBill } = require("./orders");
+const { writeGroceryOrder, resolveProduct } = require("./grocery/write");
+const groceryWorker = require("./grocery/worker");
+const groceryAlerts = require("./grocery/alerts");
+const groceryReceipts = require("./grocery/receipts");
+const grocerySwitches = require("./grocery/switches");
+const { parseOrderJson, UnsafeIntegerError } = require("./grocery/orderjson");
 const wa = require("./whatsapp");
 const notify = require("./notify");
 const broadcast = require("./broadcast");
 const communityIntake = require("./community/intake");
 const communityWorker = require("./community/worker");
-const { assertNoCommunityLines } = require("./community/classify");
-const { groceryOnlyOrder } = require("./community/sanitize");
 
 const app = express();
 app.set("trust proxy", 1); // Render sits behind a proxy
@@ -61,6 +64,7 @@ app.set("trust proxy", 1); // Render sits behind a proxy
 //   INBOX_COOKIE_SECRET   any long random string
 // ------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
+const INSTANCE_STARTED_AT = new Date().toISOString();
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "asb-verify-2026";
 
 // ------------------------------------------------------------
@@ -106,262 +110,14 @@ function normalizePhone(raw) {
 // lock and delivery times set by hand.
 // ------------------------------------------------------------
 // ------------------------------------------------------------
-// Match a Shopify line item to a product in our catalogue.
-// Try variant id, then SKU, then title. If nothing matches we
-// create a stub so the order is never silently truncated - the
-// WARN tells us to tidy the catalogue afterwards.
+// The grocery bag writer lives in grocery/write.js (migration 017). The
+// production path is grocery/apply.js, which calls it only for a Shopify
+// order whose shopify_order_sources row it holds. persistOrder() is kept as a
+// thin wrapper for tests and tools: it bypasses the source mapping, so it is
+// NOT an idempotent entry point and nothing in the webhook path calls it.
 // ------------------------------------------------------------
-async function resolveProduct(client, item) {
-  const variantId = item.variant_id ? String(item.variant_id) : null;
-  const sku = item.sku || null;
-
-  if (variantId) {
-    const hit = await client.query(
-      `SELECT id, unit, name_en, name_ur, market_price
-         FROM products WHERE shopify_variant_id = $1`,
-      [variantId]
-    );
-    if (hit.rows.length) return hit.rows[0];
-  }
-  if (sku) {
-    const hit = await client.query(
-      `SELECT id, unit, name_en, name_ur, market_price
-         FROM products WHERE sku = $1`,
-      [sku]
-    );
-    if (hit.rows.length) {
-      if (variantId) {
-        await client.query(
-          `UPDATE products SET shopify_variant_id = $1
-            WHERE id = $2 AND shopify_variant_id IS NULL`,
-          [variantId, hit.rows[0].id]
-        );
-      }
-      return hit.rows[0];
-    }
-  }
-
-  const stubSku = sku || `SHOPIFY-${variantId || crypto.randomUUID().slice(0, 8)}`;
-  const { rows } = await client.query(
-    `INSERT INTO products (sku, name_en, category, unit, shopify_product_id, shopify_variant_id)
-     VALUES ($1, $2, 'uncategorised', 'kg', $3, $4)
-     ON CONFLICT (sku) DO UPDATE SET name_en = EXCLUDED.name_en
-     RETURNING id, unit, name_en, name_ur, market_price`,
-    [
-      stubSku,
-      item.title || stubSku,
-      item.product_id ? String(item.product_id) : null,
-      variantId,
-    ]
-  );
-  console.warn(`[db] unknown product "${item.title}" - created stub ${stubSku}`);
-  return rows[0];
-}
-
-// ------------------------------------------------------------
-// Write the order.
-//
-// One live order per customer per cycle is a database rule (that is
-// the community model: one bag per household per Community Day). If
-// the same customer orders twice before lock, the second order's
-// items are merged into the first rather than rejected.
-// ------------------------------------------------------------
-//
-// Community lines never reach this function: the webhook diverts them to
-// community_intake first. assertNoCommunityLines() is the backstop - if one
-// ever does arrive, the whole write is refused (rolled back) rather than
-// creating a products stub, an order_items row or a cycle_prices row.
-//
-// For a mixed cart `order` is the sanitized grocery-only view
-// (community/sanitize.js), so orders.source_payload never holds a Community
-// line either.
 async function persistOrder(order, phone) {
-  return db.tx(async (client) => {
-    await assertNoCommunityLines(client, order.line_items || [], { orderId: order.id });
-
-    const cycle = await resolveCycle(
-      client,
-      order.created_at ? new Date(order.created_at) : new Date()
-    );
-
-    const firstName =
-      order.customer?.first_name || order.shipping_address?.first_name || null;
-    const lastName =
-      order.customer?.last_name || order.shipping_address?.last_name || "";
-    const fullName = [firstName, lastName].filter(Boolean).join(" ") || null;
-
-    const customer = await upsertCustomer(client, {
-      phone,
-      name: fullName,
-      shopifyCustomerId: order.customer?.id,
-    });
-
-    const addr = order.shipping_address || {};
-
-    // Is there already a live order for this household this cycle?
-    const existing = await findOpenOrder(client, customer.id, cycle.id);
-
-    let orderRow;
-    let merged = false;
-
-    if (existing) {
-      orderRow = existing;
-      merged = true;
-      console.log(
-        `[db] merging Shopify ${order.name} into existing ${orderRow.order_number}`
-      );
-    } else {
-      const ins = await client.query(
-        `INSERT INTO orders (customer_id, cycle_id, society_id, channel, status,
-                             shopify_order_id, shopify_order_name,
-                             deliver_building, deliver_flat, deliver_note,
-                             source_payload, placed_at)
-         VALUES ($1, $2, $3, 'shopify', 'confirmed', $4, $5, $6, $7, $8, $9,
-                 COALESCE($10::timestamptz, now()))
-         ON CONFLICT (shopify_order_id) DO NOTHING
-         RETURNING id, order_number`,
-        [
-          customer.id,
-          cycle.id,
-          customer.society_id,
-          String(order.id),
-          order.name || null,
-          addr.address2 || null,
-          addr.address1 || null,
-          order.note || null,
-          order,
-          // When the customer ordered, per Shopify. A retried webhook can
-          // arrive hours later; the bill must show the real order time.
-          order.created_at || null,
-        ]
-      );
-
-      if (ins.rows.length === 0) {
-        const again = await client.query(
-          `SELECT id, order_number FROM orders WHERE shopify_order_id = $1`,
-          [String(order.id)]
-        );
-        return { skipped: true, orderNumber: again.rows[0]?.order_number };
-      }
-      orderRow = ins.rows[0];
-    }
-
-    // --- line items -------------------------------------------------
-    // The Shopify price is the CEILING. Nothing here sets a final price;
-    // that happens at lock time, after the mandi run.
-    for (const item of order.line_items || []) {
-      const product = await resolveProduct(client, item);
-      const qty = Number(item.quantity || 1);
-      const ceiling = Number(item.price || 0);
-
-      if (!(ceiling > 0)) {
-        console.warn(`[db] line "${item.title}" has no price - skipped`);
-        continue;
-      }
-
-      await client.query(
-        // market_unit_price is the BAZAAR rate, frozen onto this line.
-        //
-        // It cannot come from the Shopify webhook - an order line_item carries
-        // `price` but not `compare_at_price` (confirmed against Shopify's Order
-        // API reference). So it is read from our own catalogue, which mirrors
-        // compare_at_price via db/seed/001_shopify_catalogue.sql.
-        //
-        // NULL is a legitimate value and means "we don't know the bazaar rate
-        // for this product". The bill then omits the comparison for that line
-        // rather than inventing one. On a merge, COALESCE keeps whatever rate
-        // was recorded first - the promise the customer already saw.
-        `INSERT INTO order_items (order_id, product_id, name_snapshot, name_ur_snapshot,
-                                  unit, qty_ordered, ceiling_unit_price, market_unit_price)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (order_id, product_id) DO UPDATE
-            SET qty_ordered = order_items.qty_ordered + EXCLUDED.qty_ordered,
-                market_unit_price = COALESCE(order_items.market_unit_price,
-                                             EXCLUDED.market_unit_price)`,
-        [
-          orderRow.id,
-          product.id,
-          item.title || product.name_en,
-          product.name_ur,
-          product.unit,
-          qty,
-          ceiling,
-          product.market_price ?? null,
-        ]
-      );
-
-      // Publish the ceiling into the cycle price book if it isn't there.
-      // Never overwrite an existing ceiling - that would move a promise
-      // that customers have already seen.
-      await client.query(
-        `INSERT INTO cycle_prices (cycle_id, product_id, ceiling_price, market_price)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (cycle_id, product_id) DO NOTHING`,
-        [cycle.id, product.id, ceiling, product.market_price ?? null]
-      );
-    }
-
-    await client.query(`SELECT asb_refresh_order_totals($1)`, [orderRow.id]);
-
-    const totals = await client.query(
-      `SELECT order_number, ceiling_total, grand_total FROM orders WHERE id = $1`,
-      [orderRow.id]
-    );
-
-    return {
-      skipped: false,
-      merged,
-      orderId: orderRow.id,
-      customerId: customer.id,
-      cycleCode: cycle.code,
-      deliveryDay: cycle.deliveryDay,
-      ...totals.rows[0],
-    };
-  });
-}
-
-
-// ------------------------------------------------------------
-// Log an outbound WhatsApp send against the order.
-// The idempotency key makes a duplicate send impossible even if
-// this function is somehow called twice.
-// ------------------------------------------------------------
-// `preview` is what a human reads in the inbox. Without it a template send
-// shows up as an empty bubble, which makes the thread impossible to follow -
-// you can see that something went out but not what the customer was told.
-async function logOutbound({ key, customerId, orderId, phone, template, preview, wamid, ok, payload }) {
-  try {
-    await db.query(
-      `INSERT INTO whatsapp_messages
-         (idempotency_key, customer_id, order_id, phone, direction,
-          template_name, template_lang, wamid, status, payload, sent_at,
-          received_at, attempts, msg_type, body_preview)
-       -- $8 is used both as an enum and in a text comparison, so both uses
-       -- need an explicit cast. Without them Postgres refuses the statement
-       -- with "inconsistent types deduced for parameter $8".
-       VALUES ($1, $2, $3, $4, 'outbound', $5, $6, $7, $8::msg_status, $9,
-               CASE WHEN $8::text = 'sent' THEN now() ELSE NULL END,
-               now(), 1, CASE WHEN $5::text IS NULL THEN 'text' ELSE 'template' END, $10)
-       ON CONFLICT (idempotency_key) DO UPDATE
-          SET wamid = COALESCE(EXCLUDED.wamid, whatsapp_messages.wamid),
-              status = EXCLUDED.status,
-              attempts = whatsapp_messages.attempts + 1`,
-      [
-        key,
-        customerId || null,
-        orderId || null,
-        phone,
-        template || null,
-        template ? "ur" : null,
-        wamid,
-        ok ? "sent" : "failed",
-        payload || {},
-        (preview || template || "").slice(0, 500),
-      ]
-    );
-  } catch (e) {
-    console.error("[db] could not log outbound message:", e.message);
-  }
+  return db.tx((client) => writeGroceryOrder(client, order, phone));
 }
 
 // ------------------------------------------------------------
@@ -490,6 +246,8 @@ app.get("/healthz", async (req, res) => {
   const h = await db.health();
   const config = {
     graphVersion: wa.graphVersion,
+    // Where Meta calls go. A rehearsal must point this at a local fake Graph.
+    graphHost: (() => { try { return new URL(process.env.GRAPH_BASE || "https://graph.facebook.com").hostname; } catch { return "invalid"; } })(),
     whatsappToken: Boolean(process.env.WHATSAPP_TOKEN),
     phoneNumberId: Boolean(process.env.PHONE_NUMBER_ID),
     appSecret: Boolean(process.env.META_APP_SECRET),
@@ -532,9 +290,40 @@ app.get("/healthz", async (req, res) => {
       community = { ready: false, error: e.message };
     }
   }
+  // Grocery reliability (migration 017). Reported only: it does not change
+  // `ready` or the status code, so a paused worker never fails a deploy check.
+  let grocery = { available: false };
+  if (h.ok) {
+    try {
+      const has = (await db.query(`SELECT to_regclass('shopify_order_sources') IS NOT NULL AS t`)).rows[0].t;
+      if (has) {
+        const sw = await grocerySwitches.status(db);
+        const { rows } = await db.query(
+          `SELECT (SELECT coalesce(jsonb_object_agg(status, n), '{}') FROM
+                    (SELECT status, count(*)::int AS n FROM shopify_order_sources GROUP BY status) x)      AS sources,
+                  (SELECT coalesce(jsonb_object_agg(bill_state, n), '{}') FROM
+                    (SELECT bill_state, count(*)::int AS n FROM shopify_order_sources GROUP BY bill_state) y) AS bills,
+                  (SELECT count(*)::int FROM shopify_order_sources WHERE status = 'processing' AND lease_until < now()) AS expired_leases,
+                  (SELECT count(*)::int FROM shopify_order_sources WHERE bill_hold_reason IS NOT NULL)             AS bills_held,
+                  (SELECT count(*)::int FROM shopify_order_source_duplicates
+                    WHERE fingerprint_differs AND acknowledged_at IS NULL)                                         AS open_anomalies,
+                  (SELECT count(*)::int FROM grocery_alerts WHERE state = 'pending')                               AS alerts_pending,
+                  (SELECT count(*)::int FROM grocery_alerts WHERE state = 'gave_up')                               AS alerts_gave_up,
+                  (SELECT count(*)::int FROM whatsapp_receipt_backlog WHERE applied_at IS NULL)                    AS receipts_unapplied`);
+        grocery = { available: true, ...sw, ...rows[0],
+                    alert_push: groceryAlerts.pushOn(), push_suppressed: (await push.suppressed(db)) || false };
+      }
+    } catch (e) {
+      grocery = { available: false, error: e.message };
+    }
+  }
+  // Migration 017 must be present: without it every orders/create answers
+  // 503. Readiness therefore fails, so a deploy ahead of the migration is
+  // caught instead of silently refusing every order.
   const ready = h.ok && h.migrated && config.whatsappToken &&
-    config.phoneNumberId && config.appSecret && community.ready;
-  res.status(ready ? 200 : 503).json({ ...h, config, community, ready });
+    config.phoneNumberId && config.appSecret && community.ready && grocery.available;
+  res.status(ready ? 200 : 503).json({ ...h, config, community, grocery, ready,
+    build: process.env.RENDER_GIT_COMMIT || null, instance_started_at: INSTANCE_STARTED_AT });
 });
 
 // ------------------------------------------------------------
@@ -573,16 +362,30 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     return res.sendStatus(401);
   }
 
-  // Always answer 200 fast, or Meta keeps retrying
-  res.sendStatus(200);
-
   let body;
   try {
     body = JSON.parse(raw.toString("utf8"));
   } catch (e) {
     console.error("[wa] webhook body is not JSON:", e.message);
-    return;
+    return res.sendStatus(200);
   }
+
+  // ---- Journal delivery receipts BEFORE the 200 (migration 017) ----
+  // A receipt is the only proof a message reached the customer, so it is
+  // never acknowledged unrecorded: if the journal write fails, answer 503 and
+  // Meta retries. Applying it to whatsapp_messages happens after the 200.
+  const receiptList = groceryReceipts.statusesIn(body);
+  if (receiptList.length) {
+    try {
+      await groceryReceipts.journal(db, receiptList);
+    } catch (e) {
+      console.error("[wa] could not journal delivery receipts - answering 503 so Meta retries:", e.message);
+      return res.sendStatus(503);
+    }
+  }
+
+  // Answer 200 fast, or Meta keeps retrying
+  res.sendStatus(200);
 
   const eventId = crypto
     .createHash("sha256")
@@ -628,27 +431,18 @@ app.post("/webhooks/whatsapp", async (req, res) => {
         }
 
         // --- delivery receipts for things we sent ---
+        // Journalled before the 200; applied here MONOTONICALLY (read is never
+        // downgraded). A receipt for a message not logged yet stays in the
+        // journal and is applied when the row appears (sweeper / bill finalize).
         for (const status of value.statuses || []) {
           console.log(`STATUS: ${status.recipient_id} -> "${status.status}"`);
           try {
-            await db.query(
-              `UPDATE whatsapp_messages
-                  SET status = $2::msg_status,
-                      delivered_at = CASE WHEN $2::text IN ('delivered','read')
-                                          THEN COALESCE(delivered_at, now()) END,
-                      read_at      = CASE WHEN $2::text = 'read'
-                                          THEN COALESCE(read_at, now()) END,
-                      error_code   = $3
-                WHERE wamid = $1`,
-              [
-                status.id,
-                status.status,
-                status.errors?.[0]?.code?.toString() || null,
-              ]
-            );
+            if (status.id && ["sent", "delivered", "read", "failed"].includes(String(status.status))) {
+              await groceryReceipts.applyOne(db, String(status.id), String(status.status));
+            }
             handled++;
           } catch (e) {
-            console.error("[wa] status update failed:", e.message);
+            console.error("[wa] status update failed (stays in the journal for replay):", e.message);
           }
         }
 
@@ -719,8 +513,13 @@ app.post("/webhooks/shopify", async (req, res) => {
 
   let order;
   try {
-    order = JSON.parse(req.body.toString("utf8"));
+    // Lossless for 64-bit Shopify ids (grocery/orderjson.js).
+    order = parseOrderJson(req.body);
   } catch (e) {
+    if (e instanceof UnsafeIntegerError) {
+      console.error(`Shopify webhook ${deliveryId}: ${e.message} - answering 503, NOT captured`);
+      return res.sendStatus(503);
+    }
     console.error("Shopify webhook body is not JSON:", e.message);
     return res.sendStatus(400);
   }
@@ -810,7 +609,19 @@ app.post("/webhooks/shopify", async (req, res) => {
     return;
   }
 
-  if (cap.kind === "order" && cap.communityLines.length) {
+  // ---- 4. Orders: hand over to the durable grocery worker ----
+  // Migration 017. The capture above reserved this Shopify order
+  // (shopify_order_sources) in the same transaction as the dedupe row, so it
+  // survives a restart from here on. A Shopify order that was ALREADY known -
+  // under any delivery id - was recorded as a duplicate and is never applied
+  // or billed again (a different payload raised an anomaly alert).
+  if (cap.orderDuplicate || cap.invalidOrder) {
+    console.log(`Shopify order ${order.name || order.id}: ${cap.orderDuplicate ? "already captured (source " + cap.sourceId + ") - not applied again" : "no order id - not applied"}`);
+    if (cap.alertIds?.length) groceryAlerts.dispatch(db, cap.alertIds).catch(() => {});
+    return;
+  }
+
+  if (cap.communityLines.length) {
     console.log(
       `   COMMUNITY: ${order.name || order.id} - ${cap.communityLines.length} line(s) captured to community_intake ` +
         `(${cap.inserted} new): ` +
@@ -818,167 +629,12 @@ app.post("/webhooks/shopify", async (req, res) => {
     );
     communityWorker.kick(db);
   }
+  console.log(`NEW ORDER ${order.name || "#" + order.id} captured as source ${cap.sourceId}`);
 
-  // ---- 4. Persist, then notify ----
-  // From here on the grocery pipeline sees ONLY grocery lines. An order whose
-  // lines were all Community creates no grocery order and sends no grocery
-  // bill. An order with no Community lines is handled exactly as before.
-  const hasCommunity = cap.kind === "order" && cap.communityLines.length > 0;
-  const rawOrder = order;
-  if (hasCommunity) {
-    order = groceryOnlyOrder(rawOrder, { ...cap, eventRowId });
-    if (!cap.groceryLines.length) {
-      console.log(`   ${rawOrder.name || rawOrder.id}: Community-only order - no grocery order created, no grocery bill sent`);
-      if (eventRowId) await db.markWebhookProcessed(eventRowId);
-      return;
-    }
-  }
-
-  try {
-    const orderName = order.name || `#${order.id}`;
-    const firstName =
-      order.customer?.first_name || order.shipping_address?.first_name || "Customer";
-    const rawPhone =
-      order.shipping_address?.phone || order.customer?.phone || order.phone || null;
-    const phone = normalizePhone(rawPhone);
-
-    const items = (order.line_items || [])
-      .map((i) => `${i.title} x${i.quantity}`)
-      .join(", ");
-
-    // A mixed cart's grocery view carries no Shopify totals (they included the
-    // Community packs), so the fallback total is summed from the grocery lines.
-    const totalPKR = Math.round(
-      hasCommunity
-        ? (order.line_items || []).reduce((s, i) => s + Number(i.price || 0) * Number(i.quantity || 1), 0)
-        : Number(order.total_price || 0)
-    ).toLocaleString("en-PK");
-
-    console.log(`NEW ORDER ${orderName} from ${firstName}, phone: ${rawPhone} -> ${phone}`);
-    console.log(`   Items: ${items} | Max bill: Rs ${totalPKR}`);
-
-    if (!phone) {
-      console.error(`   No phone on order ${orderName} - cannot save or send`);
-      if (eventRowId) await db.markWebhookFailed(eventRowId, "no phone on order");
-      return;
-    }
-
-    // --- save it ---
-    let saved = null;
-    let recapturedLeak = false;
-    try {
-      saved = await persistOrder(order, phone).catch(async (e) => {
-        if (e.code !== "ASB_COMMUNITY_LEAK") throw e;
-        // The registry changed between capture (before the 200) and now, so a
-        // line that was grocery then is Community now. Capture it to
-        // community_intake (never lose it), then persist only what is still
-        // grocery. No second chance: a further leak is refused below.
-        recapturedLeak = true;
-        const cap2 = await db.tx((c) => communityIntake.captureOrderLines(c, {
-          shop, topic, order: rawOrder, eventRowId, phone: normalizePhone(rawPhoneEarly),
-          orderRaw: Buffer.from(req.body).toString("utf8"),
-        }));
-        console.warn(`   ${orderName}: registry changed after capture - ${cap2.communityLines.length} Community line(s) now in community_intake`);
-        communityWorker.kick(db);
-        if (!cap2.groceryLines.length) return { communityOnly: true };
-        order = groceryOnlyOrder(rawOrder, { ...cap2, eventRowId });
-        return persistOrder(order, phone);
-      });
-      if (saved.communityOnly) {
-        console.log(`   ${orderName}: no grocery lines left - no grocery order, no grocery bill`);
-        if (eventRowId) await db.markWebhookProcessed(eventRowId);
-        return;
-      }
-      if (saved.skipped) {
-        console.log(`   Already saved as ${saved.orderNumber} - not sending again`);
-        if (eventRowId) await db.markWebhookProcessed(eventRowId);
-        return;
-      }
-      console.log(
-        `   Saved as ${saved.order_number} for ${saved.deliveryDay} delivery (${saved.cycleCode})` +
-          `${saved.merged ? " (merged)" : ""}, ceiling Rs ${saved.ceiling_total}`
-      );
-    } catch (e) {
-      console.error(`   DB write failed for ${orderName}:`, e.message);
-      if (eventRowId) await db.markWebhookFailed(eventRowId, e.message);
-      // The Community backstop refused the order (a Community line reached
-      // the grocery writer). Send nothing: an improvised bill here could list
-      // the wrong lines. The payload stays in webhook_events for review.
-      if (e.code === "ASB_COMMUNITY_LEAK" || recapturedLeak) return;
-      // Still send the confirmation - the customer matters more than our records,
-      // and the raw payload is safe in webhook_events for a later backfill.
-    }
-
-    // --- compose the message ---
-    //
-    // Built from the saved order when we have one. If the DB write failed we
-    // fall back to the raw Shopify payload rather than sending nothing: an
-    // improvised confirmation beats silence for the customer, and the payload
-    // is safe in webhook_events for a later backfill.
-    let composed = null;
-    if (saved?.orderId) {
-      try {
-        const forBill = await loadOrderForBill(db, saved.orderId);
-        if (forBill) {
-          // On a merge the saved order carries the FIRST order's time. The
-          // message confirms THIS order, so it states this order's time.
-          forBill.ordered_at = order.created_at || forBill.placed_at;
-          composed = bill.orderConfirmation(forBill);
-        }
-      } catch (e) {
-        console.error(`   Could not compose bill for ${orderName}:`, e.message);
-      }
-    }
-
-    // Print the exact customer-facing text to the log. This is how the message
-    // can be read and checked while outbound sending is still blocked.
-    if (composed) {
-      console.log("   --- message the customer would receive ---");
-      for (const ln of composed.rich.split("\n")) console.log("   " + ln);
-      console.log("   ------------------------------------------");
-    }
-
-    // If the order could not be composed from the database (the DB write
-    // failed), build a stand-in from the raw Shopify payload so the customer
-    // still hears from us. Same shape bill.orderConfirmation returns.
-    if (!composed) {
-      const orderNo = saved?.order_number || orderName;
-      composed = {
-        communitySaved: 0,
-        rich:
-          `Assalam-o-Alaikum ${firstName} 🌿\nAap ka order mil gaya — *${orderNo}*\n\n` +
-          `${items || "-"}\n\nZyada se zyada: *Rs ${totalPKR}*\n\nApna Sasta Bazaar`,
-        params: {
-          customer_name: firstName, order_id: orderNo, ordered: "-", delivery: "-",
-          order_items: items || "-", bazaar_total: `Rs ${totalPKR}`,
-          zyada_se_zyada: `Rs ${totalPKR}`, abhi_se_bachat: "Rs 0",
-        },
-      };
-    }
-
-    // --- tell the customer ---
-    // Free text if she has written to us in the last 24 hours, the approved
-    // asb_order_bill template otherwise (notify.js decides).
-    const { result, via, template } = await notify.sendOrderBill(db, phone, composed);
-    console.log(`   Bill sent as ${via}: ${result.ok ? "accepted by Meta" : "REFUSED (" + (result.code || "?") + ")"}`);
-
-    await logOutbound({
-      key: `order_confirmed:shopify:${order.id}`,
-      customerId: saved?.customerId,
-      orderId: saved?.orderId,
-      phone,
-      template,
-      preview: composed.rich,
-      wamid: result.wamid,
-      ok: result.ok,
-      payload: { order_name: orderName, response: result.data },
-    });
-
-    if (eventRowId) await db.markWebhookProcessed(eventRowId);
-  } catch (e) {
-    console.error("Error processing Shopify order:", e.message);
-    if (eventRowId) await db.markWebhookFailed(eventRowId, e.message);
-  }
+  // Apply (grocery lines only) and send the frozen bill, right now if the
+  // switches allow; otherwise the order waits safely and the sweeper picks it
+  // up once the worker is activated. No bill is ever improvised.
+  groceryWorker.kick(db, cap.sourceId);
 });
 
 // ------------------------------------------------------------
@@ -1048,6 +704,23 @@ return app.listen(PORT, async () => {
   // 'retryable_error' (a crash, a deploy, a failed attempt). Started even if
   // the boot check failed (e.g. Neon still waking) - each sweep tolerates errors.
   communityWorker.start(db);
+
+  // Grocery worker (migration 017). Always started; the GROCERY_SOURCE_WORKER
+  // and GROCERY_BILL_SEND switches (plus their recorded activations) gate the
+  // work inside every sweep. Receipt replay and alert delivery always run.
+  if (h.ok) {
+    try {
+      const has = (await db.query(`SELECT to_regclass('shopify_order_sources') IS NOT NULL AS t`)).rows[0].t;
+      if (!has) console.error("[grocery] migration 017 NOT applied - Shopify orders will answer 503 until it is.");
+      else console.log(`[grocery] switches: ${JSON.stringify(await grocerySwitches.status(db))}`);
+    } catch (e) {
+      console.error("[grocery] boot check failed:", e.message);
+    }
+  }
+  if (!require("./grocery/fingerprint").HAS_SOURCE) {
+    console.warn("[grocery] this Node cannot parse JSON numbers losslessly; orders with ids beyond 2^53 will be refused (503)");
+  }
+  groceryWorker.start(db);
 });
 }
 

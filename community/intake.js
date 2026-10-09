@@ -34,6 +34,7 @@ function topicKind(topic) {
 }
 const { classifyLines } = require("./classify");
 const registry = require("./registry");
+const sources = require("../grocery/sources");
 
 /**
  * db: the db module (needs .tx).
@@ -72,8 +73,18 @@ async function captureWebhook(db, { shop, deliveryId, topic, payload, phone, raw
       return { duplicate: false, eventRowId, kind: "product", registry: r };
     }
 
+    // Migration 017: reserve the Shopify order itself (one source row per
+    // Shopify order). A Shopify order that is already known is never captured
+    // or applied again, whatever its delivery id.
+    const src = await sources.reserve(client, { shop, eventRowId, rawText: orderRaw, payload });
+    if (src.kind !== "owner") {
+      return { duplicate: false, eventRowId, kind: "order", orderDuplicate: src.kind === "duplicate",
+               invalidOrder: src.kind === "invalid", sourceId: src.sourceId || null, alertIds: src.alertIds,
+               groceryLines: [], communityLines: [], inserted: 0 };
+    }
+
     const cap = await captureOrderLines(client, { shop, topic, order: payload, eventRowId, phone, orderRaw });
-    return { duplicate: false, eventRowId, kind: "order", ...cap };
+    return { duplicate: false, eventRowId, kind: "order", sourceId: src.sourceId, alertIds: [], ...cap };
   });
 }
 

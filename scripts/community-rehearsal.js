@@ -41,11 +41,23 @@ async function guard(db, base) {
   if (h?.community?.environment !== "rehearsal") {
     throw new RehearsalRefused(`app at ${base} is not wired to a rehearsal database (environment=${h?.community?.environment})`);
   }
-  if (h?.config?.whatsappToken) {
-    throw new RehearsalRefused("app has a WhatsApp token - unset WHATSAPP_TOKEN on staging so no customer can be messaged");
+  // Real WhatsApp stays disabled: either no token, or every Meta call goes to
+  // a LOCAL fake Graph (scripts/fake-graph.js via GRAPH_BASE).
+  const localGraph = ["127.0.0.1", "localhost", "::1"].includes(h?.config?.graphHost);
+  if (h?.config?.whatsappToken && !localGraph) {
+    throw new RehearsalRefused(`app has a WhatsApp token and Meta calls go to ${h?.config?.graphHost} - unset WHATSAPP_TOKEN or point GRAPH_BASE at scripts/fake-graph.js`);
   }
   if (!h?.community?.ready) throw new RehearsalRefused(`app reports Community not ready: ${JSON.stringify(h.community)}`);
   if (!(h.community.variants_resolvable > 0)) throw new RehearsalRefused("registry has no resolvable variant - load the snapshot first");
+  // Migration 017: the staging copy must have run the backfill and activated
+  // the worker (scripts/grocery-backfill.js, scripts/grocery-activate.js).
+  if (h.grocery && h.grocery.available && !h.grocery.worker_enabled) {
+    throw new RehearsalRefused(`grocery worker not enabled on staging (${JSON.stringify(h.grocery)})`);
+  }
+  // Real ASB phones must never be notified from a copy of production.
+  if (h.grocery && h.grocery.available && !h.grocery.push_suppressed) {
+    throw new RehearsalRefused("push notifications are NOT suppressed on staging (mark the database as rehearsal or set PUSH_DISABLED=1)");
+  }
   return h;
 }
 
@@ -164,6 +176,27 @@ async function rehearse({ db, base, secret, log = console.log }) {
   const hEv = (await db.query(`SELECT status FROM webhook_events WHERE source='shopify' AND event_id=$1`, [hH])).rows[0];
   check("H orders/updated recorded as ignored", hEv?.status === "ignored", JSON.stringify(hEv));
   check("H grocery order A unchanged", (await qtyA()) === qBefore, `qty ${qBefore}`);
+
+  // I. migration 017: the same Shopify order under a NEW delivery id
+  const has017 = (await db.query(`SELECT to_regclass('shopify_order_sources') IS NOT NULL AS t`)).rows[0].t;
+  if (has017) {
+    const hI = `reh-${run}-I`;
+    check("I same order, new delivery id answered 200", (await send(A, hI)) === 200, "");
+    const iEv = await waitDone(hI);
+    check("I recorded as an ignored duplicate", iEv === "ignored", iEv);
+    check("I grocery order A not doubled", (await qtyA()) === qBefore, `qty ${await qtyA()}`);
+    // J. same order, DIFFERENT content, new delivery id: never applied, anomaly recorded
+    const hJ = `reh-${run}-J`;
+    await send({ ...A, line_items: A.line_items.map((l) => ({ ...l, quantity: 7 })) }, hJ);
+    await waitDone(hJ);
+    const jEv = (await db.query(`SELECT status, error_detail FROM webhook_events WHERE source='shopify' AND event_id=$1`, [hJ])).rows[0];
+    check("J different content -> ignored as MISMATCH", jEv?.status === "ignored" && /MISMATCH/.test(jEv.error_detail || ""), JSON.stringify(jEv));
+    check("J grocery order A unchanged", (await qtyA()) === qBefore, "");
+    const srcA = (await db.query(`SELECT status, bill_state FROM shopify_order_sources WHERE shopify_order_id = $1`, [String(A.id)])).rows[0];
+    check("K source A applied once", srcA?.status === "applied", JSON.stringify(srcA));
+    const srcB = (await db.query(`SELECT status, bill_state FROM shopify_order_sources WHERE shopify_order_id = $1`, [String(B.id)])).rows[0];
+    check("K source B Community-only, no bill", srcB?.status === "community_only" && srcB.bill_state === "not_required", JSON.stringify(srcB));
+  }
 
   // G. global: no Community SKU anywhere in grocery tables for this run
   const leak = (await db.query(

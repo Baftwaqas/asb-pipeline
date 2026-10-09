@@ -9,6 +9,7 @@
 "use strict";
 
 const path = require("path");
+const fs = require("fs");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const { Client } = require("pg");
@@ -25,7 +26,7 @@ async function adminQuery(sql) {
 }
 
 /** Fresh database, migrated by THAT repo's own migration runner. */
-async function createDatabase(name, repoDir) {
+async function createDatabase(name, repoDir, { grocery = true } = {}) {
   await adminQuery(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   await adminQuery(`CREATE DATABASE ${name}`);
   const url = `${BASE}/${name}`;
@@ -33,6 +34,11 @@ async function createDatabase(name, repoDir) {
     env: { ...process.env, DATABASE_URL: url },
     stdio: "pipe",
   });
+  // Migration 017 code: backfill + activate exactly as an operator would, so
+  // the grocery worker and bills run in tests. (Older checkouts have neither.)
+  if (grocery && fs.existsSync(path.join(repoDir, "grocery", "backfill.js"))) {
+    execFileSync(process.execPath, [path.join(__dirname, "grocery-ready.js"), repoDir, url], { stdio: "pipe" });
+  }
   return url;
 }
 
@@ -45,6 +51,10 @@ function setEnv(url) {
     WHATSAPP_TOKEN: "test-token",
     PHONE_NUMBER_ID: "000000",
     COMMUNITY_INTAKE_WORKER: "off",   // tests drive the worker explicitly
+    GROCERY_SOURCE_WORKER: "on",      // 017: the kick applies orders (no sweeper timer in tests)
+    GROCERY_BILL_SEND: "on",
+    GROCERY_FINALIZE_RETRY_MS: "300",
+    GROCERY_ALERT_PUSH: "on",          // alert delivery is exercised against stubs / empty subscriptions
     PORT: process.env.PORT || "0",
   });
 }
@@ -96,6 +106,15 @@ async function postShopify(base, payload, { topic = "orders/create", id, shop = 
   return res.status;
 }
 
+/** The exact bytes given (for payloads JSON.stringify cannot express, e.g. ids > 2^53). */
+async function postShopifyRaw(base, rawText, { topic = "orders/create", id, shop = SHOP } = {}) {
+  const body = Buffer.from(rawText, "utf8");
+  const res = await fetch(`${base}/webhooks/shopify`, {
+    method: "POST", headers: shopifyHeaders(body, { topic, id, shop }), body,
+  });
+  return res.status;
+}
+
 async function postWhatsApp(base, payload) {
   const body = Buffer.from(JSON.stringify(payload));
   const sig = "sha256=" + crypto.createHmac("sha256", META_SECRET).update(body).digest("hex");
@@ -115,12 +134,24 @@ async function waitFor(fn, { timeoutMs = 8000, everyMs = 40 } = {}) {
   }
 }
 
-/** Wait until the webhook_events row for this delivery is closed out. */
+/**
+ * Wait until the webhook_events row for this delivery is closed out - and,
+ * with migration 017, until its order's bill is no longer in flight (the bill
+ * is sent after the apply commits).
+ */
 function waitWebhookDone(db, source, eventId) {
   return waitFor(async () => {
     const { rows } = await db.query(
       `SELECT status FROM webhook_events WHERE source = $1 AND event_id = $2`, [source, eventId]);
-    return rows[0] && rows[0].status !== "received" ? rows[0].status : null;
+    if (!rows[0] || rows[0].status === "received") return null;
+    const has017 = (await db.query(`SELECT to_regclass('shopify_order_sources') IS NOT NULL AS t`)).rows[0].t;
+    if (has017 && source === "shopify") {
+      const b = (await db.query(
+        `SELECT s.bill_state FROM shopify_order_sources s JOIN webhook_events we ON we.id = s.first_webhook_event_id
+          WHERE we.source = 'shopify' AND we.event_id = $1`, [eventId])).rows[0];
+      if (b && ["pending", "sending"].includes(b.bill_state)) return null;
+    }
+    return rows[0].status;
   });
 }
 
@@ -168,6 +199,6 @@ function shopifyOrder({ id, name, lines, phone = "+92 300 1234567", first = "Aye
 }
 
 module.exports = {
-  BASE, SHOP, createDatabase, setEnv, stubOutside, postShopify, postWhatsApp,
+  BASE, SHOP, createDatabase, setEnv, stubOutside, postShopify, postShopifyRaw, postWhatsApp,
   waitFor, waitWebhookDone, FIXTURE_SQL, GROCERY, COMMUNITY, line, shopifyOrder, adminQuery,
 };
