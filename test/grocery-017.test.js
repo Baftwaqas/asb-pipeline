@@ -1172,7 +1172,7 @@ test("rehearsal guard: a full 017 rehearsal needs worker, bills AND alert push o
   }
 });
 
-test("full rehearsal against a staging server whose Meta calls go to a local FAKE Graph: bills really 'sent', nothing real touched",
+test("full rehearsal, run TWICE on the same database, against a staging server whose Meta calls go to a local FAKE Graph: bills really 'sent', no customer-id collision, nothing real touched",
   { timeout: 120000 }, async () => {
     const net = require("net");
     const { spawn } = require("child_process");
@@ -1225,6 +1225,33 @@ test("full rehearsal against a staging server whose Meta calls go to a local FAK
       assert.equal(v.real_meta_ids, 0, JSON.stringify(v));
       assert.equal((await sdb.query(`SELECT count(*)::int n FROM grocery_alerts WHERE state = 'sent'`)).rows[0].n, 0,
                    "no alert was pushed to a device");
+
+      // Regression (Neon step 13a): a SECOND rehearsal against the same database
+      // must not reuse the first run's synthetic Shopify customer ids. It used
+      // new phones with the same ids -> 23505 on customers_shopify_customer_id_key.
+      const r2 = await rehearsal.rehearse({ db: sdb, base: sbase, secret: "staging-secret", log: (l) => out.push(l) });
+      assert.notEqual(r2.run, r.run);
+      assert.equal(r2.failed, 0, out.join("\n"));
+      const srcOf = async (run) => (await sdb.query(
+        `SELECT shopify_order_name AS name, status, bill_state, last_error FROM shopify_order_sources
+          WHERE shopify_order_name LIKE $1 ORDER BY id`, [`#REH-${run}-%`])).rows;
+      const second = await H.waitFor(async () => {
+        const rows = await srcOf(r2.run);
+        const a = rows.find((x) => x.name.endsWith("-A")), c = rows.find((x) => x.name.endsWith("-C"));
+        return a?.status === "applied" && c?.status === "applied" && a.bill_state === "sent" && c.bill_state === "sent" && rows;
+      }, { timeoutMs: 20000 }).catch(async () => { throw new Error(`second run did not apply: ${JSON.stringify(await srcOf(r2.run))}`); });
+      for (const x of second) {
+        assert.ok(!["retryable_error", "review"].includes(x.status), JSON.stringify(x));
+        assert.doesNotMatch(String(x.last_error || ""), /23505|shopify_customer_id/, JSON.stringify(x));
+      }
+      const ids = async (run) => (await sdb.query(
+        `SELECT DISTINCT c.shopify_customer_id AS id FROM shopify_order_sources s JOIN orders o ON o.id = s.order_id
+           JOIN customers c ON c.id = o.customer_id WHERE s.shopify_order_name LIKE $1`, [`#REH-${run}-%`])).rows.map((x) => x.id);
+      const [ids1, ids2] = [await ids(r.run), await ids(r2.run)];
+      assert.equal(ids1.length, 2, JSON.stringify(ids1));
+      assert.equal(ids2.length, 2, JSON.stringify(ids2));
+      assert.ok(ids2.every((id) => !ids1.includes(id)), `customer ids reused across runs: ${ids1} / ${ids2}`);
+      assert.ok([...ids1, ...ids2].every((id) => Number.isSafeInteger(Number(id))), "ids stay within the safe integer range");
     } finally {
       child?.kill("SIGTERM");
       fake.server.close();

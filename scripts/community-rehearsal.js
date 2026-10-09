@@ -80,8 +80,12 @@ async function rehearse({ db, base, secret, log = console.log }) {
   const run = Date.now() % 1e9;
   const shop = process.env.SHOPIFY_SHOP_DOMAIN || "rehearsal.myshopify.com";
   let seq = 0;
+  // Every synthetic id is unique PER RUN (run * 100 + seq; seq stays < 100),
+  // so a second rehearsal on the same database never reuses an earlier run's
+  // ids. Largest value ~9.4e12, far inside Number.MAX_SAFE_INTEGER.
   const lineId = () => 9100000000000 + run * 100 + ++seq;
   const orderId = () => 9200000000000 + run * 100 + ++seq;
+  const customerId = () => 9300000000000 + run * 100 + seq;   // seq of the order just created
 
   const grocery = (await db.query(
     `SELECT shopify_variant_id, shopify_product_id, sku, name_en, asb_price
@@ -98,7 +102,7 @@ async function rehearse({ db, base, secret, log = console.log }) {
   const fakePhone = (n) => `+92 39${String(run % 1e6).padStart(6, "0")}${String(n).padStart(2, "0")}`;
   const mk = (name, lines, phone) => ({
     id: orderId(), name: `#REH-${run}-${name}`, created_at: new Date().toISOString(), currency: "PKR",
-    total_price: "0", customer: { id: 9300000000000 + seq, first_name: "Rehearsal", last_name: name },
+    total_price: "0", customer: { id: customerId(), first_name: "Rehearsal", last_name: name },
     shipping_address: { first_name: "Rehearsal", phone, address1: "Test", address2: "Test" },
     line_items: lines.map(([b, q]) => ({ id: lineId(), quantity: q, vendor: "Apna Sasta Bazaar", ...b })),
   });
