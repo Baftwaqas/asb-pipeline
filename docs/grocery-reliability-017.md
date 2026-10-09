@@ -69,16 +69,17 @@ Shopify webhook bodies are parsed with `grocery/orderjson.js`:
 Each step needs Waqas's approval. Nothing here touches production; real WhatsApp and real push are impossible throughout.
 
 1. **Branch.** Create a Neon branch from production. It contains customer data, so it is deleted at the end.
-2. **Mark it.** Run `INSERT INTO app_settings (key, value) VALUES ('asb_environment','rehearsal')` on the branch.
+2. **Mark it.** Run `node scripts/rehearsal-db.js --mark --apply`. It refuses unless the `DATABASE_URL` host exactly equals `EXPECTED_REHEARSAL_DB_HOST` and is not `PRODUCTION_DB_HOST`. Never mark it from the SQL Editor.
    - This suppresses every push, even though the branch carries the real `push_subscriptions` and VAPID keys.
 3. **Migrate.** Apply 017 on the branch.
 4. **Backfill.** Run the dry run on the real data and check every mapping. Then apply it with the printed `plan_sha256`.
 5. **Fake Graph.** Start `FAKE_GRAPH_PORT=4599 node scripts/fake-graph.js` on the rehearsal machine.
    - Modes: `accept` (default), `window_first` (rehearses 131047, then the template retry), `timeout_first` (rehearses an ambiguous send, then `unknown`).
-6. **Staging app.** Run it against the branch with:
+6. **Staging app.** Run it against the branch with the following (full commands in `docs/neon-rehearsal-commands.md`):
    - `GRAPH_BASE=http://127.0.0.1:4599/v25.0`
    - `WHATSAPP_TOKEN=fake-token`, `PHONE_NUMBER_ID=000000`
    - `PUSH_DISABLED=1` (a second layer)
+   - `BIND_HOST=127.0.0.1` (loopback only: the branch holds copied customer data)
    - `GROCERY_SOURCE_WORKER=on`, `GROCERY_BILL_SEND=on`, `GROCERY_ALERT_PUSH=on`
    - no Shopify Admin token
 

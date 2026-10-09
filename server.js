@@ -641,9 +641,14 @@ app.post("/webhooks/shopify", async (req, res) => {
 // Started only when run directly (`node server.js`, as Render does). Tests
 // require() this file to drive the routes without opening the port or
 // starting the background timers.
+//
+// BIND_HOST (optional): the interface to listen on, e.g. 127.0.0.1 for a local
+// rehearsal against a copy of production data, so it is never reachable from
+// the LAN. Unset (Render) = Node's default, all interfaces - unchanged.
+const BIND_HOST = (process.env.BIND_HOST || "").trim() || null;
 function start() {
-return app.listen(PORT, async () => {
-  console.log(`ASB Pipeline listening on port ${PORT} (Graph ${wa.graphVersion})`);
+return app.listen(...(BIND_HOST ? [PORT, BIND_HOST] : [PORT]), async () => {
+  console.log(`ASB Pipeline listening on ${BIND_HOST ? `${BIND_HOST}:` : "port "}${PORT} (Graph ${wa.graphVersion})`);
 
   // Fail loudly at boot rather than silently at the first message.
   if (!process.env.META_APP_SECRET) {

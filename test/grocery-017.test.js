@@ -1194,7 +1194,7 @@ test("full rehearsal against a staging server whose Meta calls go to a local FAK
       await sdb.query(`INSERT INTO app_settings (key, value) VALUES ('asb_environment', 'rehearsal')`);
       await addDevicesTo(sdb, 1);                     // a "real" device copied from production
       const port = await new Promise((res) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
-      const env = { ...process.env, DATABASE_URL: url, PORT: String(port), SHOPIFY_WEBHOOK_SECRET: "staging-secret",
+      const env = { ...process.env, DATABASE_URL: url, PORT: String(port), BIND_HOST: "127.0.0.1", SHOPIFY_WEBHOOK_SECRET: "staging-secret",
                     META_APP_SECRET: "x", COMMUNITY_INTAKE_WORKER: "on", COMMUNITY_INTAKE_SWEEP_MS: "300",
                     GRAPH_BASE: graph, WHATSAPP_TOKEN: "fake-token", PHONE_NUMBER_ID: "000000",
                     GROCERY_SOURCE_WORKER: "on", GROCERY_BILL_SEND: "on", GROCERY_ALERT_PUSH: "on", GROCERY_SWEEP_MS: "500" };
@@ -1210,6 +1210,19 @@ test("full rehearsal against a staging server whose Meta calls go to a local FAK
       assert.ok(sends.length >= 2, "bills went to the FAKE Graph");
       const wam = (await sdb.query(`SELECT wamid FROM whatsapp_messages WHERE idempotency_key LIKE 'order_confirmed:shopify:%'`)).rows;
       assert.ok(wam.length >= 2 && wam.every((w) => /^wamid\.FAKE/.test(w.wamid)));
+      // The command sheet's step 14e query: a direct join from rehearsal attempts to their message rows.
+      const v = (await sdb.query(
+        `SELECT count(a.id)::int AS rehearsal_attempts, count(m.id)::int AS messages_found,
+                (count(*) FILTER (WHERE m.wamid LIKE 'wamid.FAKE%'))::int AS fake_ids,
+                (count(*) FILTER (WHERE m.wamid IS NOT NULL AND m.wamid NOT LIKE 'wamid.FAKE%'
+                                    AND m.wamid NOT LIKE 'wamid.REHEARSAL-LINK-%'))::int AS real_meta_ids
+           FROM shopify_order_bill_attempts a
+           JOIN shopify_order_sources s ON s.id = a.source_id AND s.shopify_order_name LIKE '#REH-%'
+           LEFT JOIN whatsapp_messages m ON m.idempotency_key = a.message_key`)).rows[0];
+      assert.ok(v.rehearsal_attempts >= 2, JSON.stringify(v));
+      assert.equal(v.messages_found, v.rehearsal_attempts, JSON.stringify(v));
+      assert.equal(v.fake_ids, v.rehearsal_attempts, JSON.stringify(v));
+      assert.equal(v.real_meta_ids, 0, JSON.stringify(v));
       assert.equal((await sdb.query(`SELECT count(*)::int n FROM grocery_alerts WHERE state = 'sent'`)).rows[0].n, 0,
                    "no alert was pushed to a device");
     } finally {
@@ -1225,3 +1238,109 @@ async function addDevicesTo(q, n) {
                   [`https://push.example.invalid/prodcopy-${process.pid}-${i}`]);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Neon rehearsal safety: scripts/rehearsal-db.js and BIND_HOST
+// ---------------------------------------------------------------------------
+
+test("rehearsal-db host check: exact expected host required; production endpoint (direct or pooled) always refused", () => {
+  const { checkHost, Refused } = require(path.join(ROOT, "scripts", "rehearsal-db.js"));
+  const REH = "ep-rehearsal-111.c-2.us-east-2.aws.neon.tech";
+  const PROD = "ep-production-999.c-2.us-east-2.aws.neon.tech";
+  const url = (h) => `postgresql://u:p@${h}/neondb?sslmode=require`;
+  const ok = { databaseUrl: url(REH), expectedHost: REH, productionHost: PROD };
+  assert.equal(checkHost(ok), REH);
+  assert.equal(checkHost({ ...ok, expectedHost: REH.toUpperCase() }), REH);
+  const refuses = (over, re) => assert.throws(() => checkHost({ ...ok, ...over }), (e) => e instanceof Refused && re.test(e.message));
+  refuses({ databaseUrl: undefined }, /DATABASE_URL is not set/);
+  refuses({ expectedHost: "" }, /EXPECTED_REHEARSAL_DB_HOST is not set/);
+  refuses({ productionHost: undefined }, /PRODUCTION_DB_HOST is not set/);
+  refuses({ databaseUrl: url(PROD), expectedHost: PROD }, /PRODUCTION endpoint/);
+  refuses({ databaseUrl: url(PROD) }, /PRODUCTION endpoint/);
+  refuses({ databaseUrl: url(PROD.replace("ep-production-999", "ep-production-999-pooler")) }, /PRODUCTION endpoint/);
+  refuses({ expectedHost: PROD.replace("ep-production-999", "ep-production-999-pooler"),
+            databaseUrl: url(PROD.replace("ep-production-999", "ep-production-999-pooler")) }, /PRODUCTION endpoint/);
+  refuses({ expectedHost: PROD }, /EXPECTED_REHEARSAL_DB_HOST is the production endpoint/);
+  refuses({ databaseUrl: url("ep-other-222.c-2.us-east-2.aws.neon.tech") }, /does not exactly match/);
+  refuses({ databaseUrl: url(`x${REH}`) }, /does not exactly match/);
+  const pooled = REH.replace("ep-rehearsal-111", "ep-rehearsal-111-pooler");
+  refuses({ databaseUrl: url(pooled), expectedHost: pooled }, /pooled host/);
+});
+
+test("rehearsal-db: marking writes only after the host check; --check / --assert-* gate operator targets to #REH- orders", async () => {
+  const rdb = require(path.join(ROOT, "scripts", "rehearsal-db.js"));
+  const host = new URL(process.env.DATABASE_URL).hostname;
+  const env = { DATABASE_URL: process.env.DATABASE_URL, EXPECTED_REHEARSAL_DB_HOST: host, PRODUCTION_DB_HOST: "ep-prod-1.example.neon.tech" };
+  const quiet = { log: () => {} };
+  const getMarker = async () => (await db.query(`SELECT value FROM app_settings WHERE key = 'asb_environment'`)).rows[0]?.value ?? null;
+  const original = await getMarker();
+  try {
+    await db.query(`DELETE FROM app_settings WHERE key = 'asb_environment'`);
+    // Production host -> refused BEFORE any connection; nothing written.
+    let touched = false;
+    await assert.rejects(rdb.run(["--mark", "--apply"], { ...env, PRODUCTION_DB_HOST: host }, { ...quiet, getDb: () => { touched = true; return db; } }),
+      (e) => e instanceof rdb.Refused && /PRODUCTION endpoint/.test(e.message));
+    await assert.rejects(rdb.run(["--mark", "--apply"], { ...env, EXPECTED_REHEARSAL_DB_HOST: "other.example" }, { ...quiet, getDb: () => { touched = true; return db; } }),
+      /does not exactly match/);
+    assert.equal(touched, false, "the database is never opened when the host check fails");
+    assert.equal(await getMarker(), null);
+    // --check refuses an unmarked database.
+    await assert.rejects(rdb.run(["--check"], env, { ...quiet, getDb: () => db }), /not marked as a rehearsal copy/);
+    // Dry run writes nothing; --apply writes the marker.
+    assert.equal((await rdb.run(["--mark"], env, { ...quiet, getDb: () => db })).wrote, false);
+    assert.equal(await getMarker(), null);
+    assert.equal((await rdb.run(["--mark", "--apply"], env, { ...quiet, getDb: () => db })).wrote, true);
+    assert.equal(await getMarker(), "rehearsal");
+    assert.equal((await rdb.run(["--check"], env, { ...quiet, getDb: () => db })).marker, "rehearsal");
+
+    // A rehearsal order and a real-looking order.
+    const reh = newOrder([H.line(H.GROCERY.aloo, 1)], { phone: phoneN(), name: `#REH-${process.pid}-A` });
+    const real = newOrder([H.line(H.GROCERY.aloo, 1)], { phone: phoneN() });
+    await deliver(reh); await deliver(real);
+    const sReh = await H.waitFor(async () => { const s = await src(reh.id); return s?.status === "applied" && s; });
+    const sReal = await H.waitFor(async () => { const s = await src(real.id); return s?.status === "applied" && s; });
+    await deliver({ ...reh, line_items: [H.line(H.GROCERY.aloo, 3)] });          // changed content -> duplicate row
+    const dupReh = (await db.query(`SELECT id FROM shopify_order_source_duplicates WHERE source_id = $1`, [sReh.id])).rows[0];
+    const attReh = await H.waitFor(async () => (await attemptsOf(sReh.id))[0]);
+    const attReal = await H.waitFor(async () => (await attemptsOf(sReal.id))[0]);
+    const ok = (args) => rdb.run(args, env, { ...quiet, getDb: () => db });
+    assert.equal((await ok(["--assert-source", String(sReh.id)])).source.id, sReh.id);
+    assert.equal((await ok(["--assert-attempt", String(attReh.id)])).source.id, sReh.id);
+    assert.equal((await ok(["--assert-duplicate", String(dupReh.id)])).source.id, sReh.id);
+    await assert.rejects(ok(["--assert-source", String(sReal.id)]), /NOT a rehearsal order/);
+    await assert.rejects(ok(["--assert-attempt", String(attReal.id)]), /NOT a rehearsal order/);
+    await assert.rejects(ok(["--assert-source", "999999999"]), /not found/);
+    await assert.rejects(ok(["--assert-source", "1; DROP TABLE x"]), /numeric id/);
+  } finally {
+    await db.query(`DELETE FROM app_settings WHERE key = 'asb_environment'`);
+    if (original !== null) await db.query(`INSERT INTO app_settings (key, value) VALUES ('asb_environment', $1)`, [original]);
+  }
+});
+
+test("BIND_HOST=127.0.0.1: the server listens on loopback only; unset keeps the default (all interfaces)", { timeout: 60000 }, async () => {
+  const net = require("net");
+  const os = require("os");
+  const { spawn } = require("child_process");
+  const lan = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === "IPv4" && !i.internal)?.address;
+  const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
+  const canConnect = (host, port) => new Promise((res) => {
+    const c = net.connect({ host, port }); c.once("connect", () => { c.destroy(); res(true); }); c.once("error", () => res(false));
+  });
+  const boot = async (extra) => {
+    const port = await freePort();
+    const child = spawn(process.execPath, ["server.js"], { cwd: ROOT, stdio: "ignore",
+      env: { ...process.env, PORT: String(port), GROCERY_SOURCE_WORKER: "off", GROCERY_BILL_SEND: "off", COMMUNITY_INTAKE_WORKER: "off", ...extra } });
+    await H.waitFor(() => canConnect("127.0.0.1", port), { timeoutMs: 15000 });
+    return { child, port };
+  };
+  const bound = await boot({ BIND_HOST: "127.0.0.1" });
+  try {
+    assert.equal(await canConnect("127.0.0.1", bound.port), true);
+    if (lan) assert.equal(await canConnect(lan, bound.port), false, `must not be reachable on ${lan}`);
+  } finally { bound.child.kill(); }
+  if (lan) {
+    const open = await boot({ BIND_HOST: "" });
+    try { assert.equal(await canConnect(lan, open.port), true, "default (Render) behaviour unchanged"); }
+    finally { open.child.kill(); }
+  }
+});

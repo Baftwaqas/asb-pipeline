@@ -3,68 +3,83 @@
 **Status: for review. Not started.** No Neon branch exists yet.
 
 - **Steps that need Waqas's explicit approval at the time:** 1 (create branch), 6 (backfill apply) and 15 (delete branch).
-- **Code under test:** commit `b795d847838d3d370a4e235b93caeb04ae010a9b` on branch `grocery-reliability-017`. Its tree is `7ba7b24f`, and it passed 109/109 tests.
+- **Code under test:** the commit on `grocery-reliability-017` that is approved for rehearsal. Its full SHA is recorded in chat as `<APPROVED_SHA>`.
 - **Where it runs:** Waqas's Windows PC, in PowerShell. Only three things are involved:
   - one throwaway Neon branch called `asb-rehearsal-017`;
   - a local fake Graph on `127.0.0.1:4599`;
-  - a local staging app on `127.0.0.1:3017`.
+  - a local staging app bound to `127.0.0.1:3017` only.
 
 ## Hard rules for the whole sheet
 
-1. **Use only the `asb-rehearsal-017` connection string.**
+1. **Only the `asb-rehearsal-017` DIRECT connection string is ever used.**
    - The production connection string is never pasted into any window used here.
-   - Every window that holds `DATABASE_URL` runs `Check-RehearsalDb` before its first write.
-   - The check must print `asb_environment: 'rehearsal'` and the rehearsal endpoint host.
+   - Every database command is preceded by `node scripts/rehearsal-db.js`. It checks the host in `DATABASE_URL` **before connecting** and refuses unless all of these hold:
+     - `EXPECTED_REHEARSAL_DB_HOST` is supplied, and the host equals it **exactly**;
+     - `PRODUCTION_DB_HOST` is supplied, and the host is **not** production's endpoint (the direct and `-pooler` forms are both refused);
+     - the host is not a pooled (`-pooler`) host;
+     - for every mode except `--mark`, the database is marked `asb_environment='rehearsal'`.
+   - The marker itself is written **only** by `node scripts/rehearsal-db.js --mark --apply`, after those host checks.
+   - **The Neon SQL Editor is used for SELECTs only.** Marking production would suppress production push notifications.
 2. **Keep push off.** `PUSH_DISABLED=1` is set on the app. The branch is also marked `asb_environment=rehearsal`, which suppresses every push by itself as well.
 3. **Keep Meta calls local.**
    - `GRAPH_BASE=http://127.0.0.1:4599/v25.0`. It is never `graph.facebook.com`.
    - `WHATSAPP_TOKEN` is the dummy value `fake-token`.
    - There is no Shopify Admin token and no VAPID env.
-4. **Keep secrets out of chat.** Never paste a connection string, password or secret into chat. Output marked "safe to share" contains only booleans, counts, ids and hashes.
-5. **Stop on any surprise.** If a step prints something other than its "Expected" line, stop and share the output.
+4. **Loopback only.** The staging app runs with `BIND_HOST=127.0.0.1`, so it is not reachable from the LAN while it holds copied customer data. The fake Graph listens on `127.0.0.1` only.
+5. **Rehearsal rows only.** Operator actions run only after `node scripts/rehearsal-db.js --assert-…` confirms the target belongs to a `#REH-` order.
+6. **Keep secrets out of chat.** Never paste a connection string, password or secret into chat. Output marked "safe to share" contains only booleans, counts, ids, hosts and hashes.
+7. **Stop on any surprise.** If a step prints something other than its "Expected" line, or anything says `REFUSED`, stop and share the output.
 
 ## Windows used
 
 | Window | Purpose | Holds `DATABASE_URL`? |
 |---|---|---|
-| **A** | operator: migrate, backfill, activate, rehearse, review | yes (rehearsal branch) |
+| **A** | operator: mark, migrate, backfill, activate, rehearse, review | yes (rehearsal branch) |
 | **B** | fake Graph | **no** |
 | **C** | staging app | yes (rehearsal branch) |
 
 ### Code folder
 
-Download the exact reviewed commit:
+Download the exact approved commit:
 
 ```
-https://github.com/Baftwaqas/asb-pipeline/archive/b795d847838d3d370a4e235b93caeb04ae010a9b.zip
+https://github.com/Baftwaqas/asb-pipeline/archive/<APPROVED_SHA>.zip
 ```
 
-Extract it to `C:\Users\waqas\asb-rehearsal-017\`, which gives the folder `asb-pipeline-b795d847838d3d370a4e235b93caeb04ae010a9b`. Then, in window A:
+Extract it into `C:\Users\waqas\asb-rehearsal-017\`. In **each** window, first run:
 
 ```powershell
-cd $HOME\asb-rehearsal-017\asb-pipeline-b795d847838d3d370a4e235b93caeb04ae010a9b
+$code = "$HOME\asb-rehearsal-017\asb-pipeline-<APPROVED_SHA>"
+cd $code
+```
+
+Then, once only, in window A:
+
+```powershell
 node -v      # Expected: v22.x or newer (lossless Shopify ids need it)
 npm ci
-# No real secrets may be present in this window. This prints NAMES only. Expected: nothing.
-Get-ChildItem Env: | Where-Object Name -match 'DATABASE|WHATSAPP|SHOPIFY|VAPID|GRAPH|META|PUSH|GROCERY|COMMUNITY|INBOX' | Select-Object Name
 ```
 
-### Define `Check-RehearsalDb` (windows A and C)
-
-Paste this into **each** of windows A and C after setting `DATABASE_URL`. It is read-only.
+### Clean-window check (every window, before setting anything)
 
 ```powershell
-function Check-RehearsalDb {
-  node -e 'const db=require(`./db`);db.query(`SELECT current_database() AS db, (SELECT value FROM app_settings WHERE key=$$asb_environment$$) AS asb_environment, to_regclass($$public.shopify_order_sources$$) IS NOT NULL AS has_017`).then(r=>{console.log(r.rows[0]);return db.shutdown()})'
-}
+Get-ChildItem Env: | Where-Object Name -match 'DATABASE|WHATSAPP|SHOPIFY|VAPID|GRAPH|META|PUSH|GROCERY|COMMUNITY|INBOX|REHEARSAL|PRODUCTION|BIND' | Select-Object Name
 ```
 
-It prints:
+This prints names only. Expected: nothing.
 
-- `[db] pool ready (host ep-…)`: this host must be the **rehearsal** endpoint from step 1;
-- `{ db: 'neondb', asb_environment: 'rehearsal', has_017: … }`.
+### Database env (windows A and C only)
 
-**Stop** if the host is production's endpoint or `asb_environment` is not `'rehearsal'`.
+Read both hosts from the Neon console's **Connect** dialog, with "Connection pooling" **unticked**. The host is the part between `@` and `/`, for example `ep-xxxx-xxxx-123456.c-2.<region>.aws.neon.tech`.
+
+- **Rehearsal host:** from branch `asb-rehearsal-017`. Copy its full DIRECT string as well, for this window only.
+- **Production host:** from branch `production`. Copy the **host only**, never the production string.
+
+```powershell
+$env:EXPECTED_REHEARSAL_DB_HOST = "<asb-rehearsal-017 direct host>"
+$env:PRODUCTION_DB_HOST         = "<production direct host - host only>"
+$env:DATABASE_URL               = "<asb-rehearsal-017 DIRECT connection string>"
+```
 
 ---
 
@@ -76,57 +91,61 @@ In the Neon console, project `old-surf-30168106`:
 2. Name: `asb-rehearsal-017`.
 3. Parent: `production` (`br-crimson-leaf-aum7i4bs`). Data: **current point in time (head)**.
 4. Create it.
-5. Note the new branch's compute endpoint id (`ep-…`). It differs from production's endpoint.
-6. On `asb-rehearsal-017`, open **Connect**:
-   - database `neondb`;
-   - **untick "Connection pooling"**, so you get the direct connection (the advisory lock and the single-transaction backfill need it);
-   - copy the string, which is used only in windows A and C.
+5. On `asb-rehearsal-017`, open **Connect**: database `neondb`, with "Connection pooling" **unticked**.
+6. Note the direct host, and keep the direct string for windows A and C.
+7. Note production's direct host (host only) the same way, from branch `production`.
 
-Expected: a branch `asb-rehearsal-017` whose endpoint id is not production's.
+Expected: the two hosts have **different** `ep-…` endpoint ids.
 
-## 2. Mark the branch `asb_environment=rehearsal`
+Nothing is written in the SQL Editor.
 
-Use the Neon **SQL Editor**. **First set the branch selector to `asb-rehearsal-017`.**
+## 2. Mark the branch `asb_environment=rehearsal` (window A, guarded script)
 
-```sql
-INSERT INTO app_settings (key, value) VALUES ('asb_environment', 'rehearsal')
-ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
-
-SELECT key, value FROM app_settings WHERE key = 'asb_environment';
-```
-
-Expected: exactly one row, `asb_environment | rehearsal`.
-
-Then, in window A:
+Set the three variables from "Database env" above, then:
 
 ```powershell
-$env:DATABASE_URL = "<asb-rehearsal-017 DIRECT connection string - typed/pasted in your own window only>"
-Check-RehearsalDb
+node scripts/rehearsal-db.js --mark
 ```
 
-Expected: the rehearsal host, `asb_environment: 'rehearsal'` and `has_017: false`.
+Expected, as a dry run:
+
+- `host <rehearsal host> = EXPECTED_REHEARSAL_DB_HOST, endpoint ep-… is not production (ep-…)`;
+- `asb_environment now: (not set)`.
+
+**Stop** on `REFUSED`, or if the host shown is not the rehearsal host.
+
+```powershell
+node scripts/rehearsal-db.js --mark --apply
+node scripts/rehearsal-db.js --check
+```
+
+Expected:
+
+- `wrote asb_environment = 'rehearsal'`;
+- `asb_environment = 'rehearsal', migration 017 present: false`.
 
 ## 3. Migration 017: dry run, then apply (window A)
 
 ```powershell
-Check-RehearsalDb
-node scripts/migrate.js --dry
+node scripts/rehearsal-db.js --check
+if ($LASTEXITCODE -eq 0) { node scripts/migrate.js --dry }
 ```
 
 Expected: the only pending file is `017_shopify_order_sources.sql`. Stop if any other file is listed.
 
 ```powershell
-node scripts/migrate.js
-Check-RehearsalDb
+node scripts/rehearsal-db.js --check
+if ($LASTEXITCODE -eq 0) { node scripts/migrate.js }
+node scripts/rehearsal-db.js --check
 ```
 
-Expected: the migration is applied, and the check now shows `has_017: true`.
+Expected: the migration is applied, then `migration 017 present: true`.
 
 ## 4. Backfill dry run (window A, read-only)
 
 ```powershell
-Check-RehearsalDb
-node scripts/grocery-backfill.js --shop 0du4xf-6j.myshopify.com > backfill-plan.json
+node scripts/rehearsal-db.js --check
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-backfill.js --shop 0du4xf-6j.myshopify.com > backfill-plan.json }
 Get-Content backfill-plan.json | Select-String -Pattern '"counts"' -Context 0,20
 Get-Content backfill-plan.json | Select-String -Pattern 'unusable_event_ids|"marker"'
 Select-String -Path backfill-plan.json -Pattern 'plan_sha256'
@@ -149,8 +168,8 @@ The apply in step 6 refuses unless the plan computed at that moment has exactly 
 ## 6. Backfill apply — NEEDS APPROVAL (window A)
 
 ```powershell
-Check-RehearsalDb
-node scripts/grocery-backfill.js --shop 0du4xf-6j.myshopify.com --apply --plan-sha <approved plan_sha256> --by "Waqas" --reason "Neon rehearsal 017 backfill"
+node scripts/rehearsal-db.js --check
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-backfill.js --shop 0du4xf-6j.myshopify.com --apply --plan-sha <approved plan_sha256> --by "Waqas" --reason "Neon rehearsal 017 backfill" }
 ```
 
 Expected: JSON with the inserted and upgraded counts and the marker written. A `[backfill] REFUSED: …` means nothing was written.
@@ -160,7 +179,7 @@ The apply runs in one transaction, under an advisory lock, and writes the marker
 ## 7. Start the fake Graph (window B: no `DATABASE_URL`)
 
 ```powershell
-cd $HOME\asb-rehearsal-017\asb-pipeline-b795d847838d3d370a4e235b93caeb04ae010a9b
+cd $code
 $env:FAKE_GRAPH_PORT = "4599"
 $env:FAKE_GRAPH_MODE = "accept"
 node scripts/fake-graph.js
@@ -170,16 +189,12 @@ Expected: `[fake-graph] listening on http://127.0.0.1:4599 (mode accept)`. Leave
 
 ## 8. Staging app environment, then start (window C)
 
-Open a **fresh** PowerShell window.
+Open a **fresh** PowerShell window. Run `cd $code`, the clean-window check, and "Database env". Then:
 
 ```powershell
-cd $HOME\asb-rehearsal-017\asb-pipeline-b795d847838d3d370a4e235b93caeb04ae010a9b
-Get-ChildItem Env: | Where-Object Name -match 'DATABASE|WHATSAPP|SHOPIFY|VAPID|GRAPH|META|PUSH|GROCERY|COMMUNITY|INBOX' | Select-Object Name   # Expected: nothing
+node scripts/rehearsal-db.js --check     # Expected: rehearsal host, 'rehearsal', migration 017 present: true
 
-$env:DATABASE_URL            = "<asb-rehearsal-017 DIRECT connection string>"
-# paste the Check-RehearsalDb function here, then:
-Check-RehearsalDb            # Expected: rehearsal host, asb_environment 'rehearsal', has_017 true
-
+$env:BIND_HOST               = "127.0.0.1"                     # loopback only - not reachable from the LAN
 $env:PORT                    = "3017"
 $env:GRAPH_BASE              = "http://127.0.0.1:4599/v25.0"   # LOCAL fake Graph - never graph.facebook.com
 $env:WHATSAPP_TOKEN          = "fake-token"
@@ -197,17 +212,17 @@ $env:GROCERY_ALERT_PUSH      = "on"
 node server.js
 ```
 
-Expected: the server listens on port 3017.
+Expected: `ASB Pipeline listening on 127.0.0.1:3017`.
 
-If Windows Firewall asks about Node, choose **Cancel**: the app is used only from this PC.
+If Windows Firewall asks about Node, choose **Cancel**.
 
 Until steps 9–10 are recorded, the worker and bills stay off, because each also needs its activation in the database.
 
 ## 9. Worker activation (window A)
 
 ```powershell
-Check-RehearsalDb
-node scripts/grocery-activate.js --worker --by "Waqas" --reason "Neon rehearsal 017" --apply
+node scripts/rehearsal-db.js --check
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-activate.js --worker --by "Waqas" --reason "Neon rehearsal 017" --apply }
 ```
 
 Expected: the activation is recorded. It refuses if the backfill marker is missing.
@@ -215,7 +230,8 @@ Expected: the activation is recorded. It refuses if the backfill marker is missi
 ## 10. Bill activation (window A)
 
 ```powershell
-node scripts/grocery-activate.js --bills --by "Waqas" --reason "Neon rehearsal 017" --apply
+node scripts/rehearsal-db.js --check
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-activate.js --bills --by "Waqas" --reason "Neon rehearsal 017" --apply }
 node scripts/grocery-activate.js --status
 ```
 
@@ -224,13 +240,14 @@ Expected: the bill activation is recorded, and `--status` shows both activations
 ## 11. Health checks (window A)
 
 ```powershell
+Get-NetTCPConnection -LocalPort 3017 -State Listen | Select-Object LocalAddress, LocalPort
 $h = Invoke-RestMethod http://127.0.0.1:3017/healthz
 $h | ConvertTo-Json -Depth 6          # safe to share: booleans and counts only
 $h.community.environment, $h.community.ready, $h.config.graphHost,
 $h.grocery.available, $h.grocery.worker_enabled, $h.grocery.bills_enabled, $h.grocery.alert_push, $h.grocery.push_suppressed
 ```
 
-Expected, in order:
+Expected: the listener is `127.0.0.1  3017` **only**, with no `0.0.0.0` and no `::`. Then, in order:
 
 | Value | Expected |
 |---|---|
@@ -248,11 +265,11 @@ Expected, in order:
 ## 12. `community:rehearsal` (window A)
 
 ```powershell
-Check-RehearsalDb
+node scripts/rehearsal-db.js --check
 $env:REHEARSAL_BASE_URL     = "http://127.0.0.1:3017"
 $env:SHOPIFY_WEBHOOK_SECRET = "rehearsal-shopify-secret"
 $env:SHOPIFY_SHOP_DOMAIN    = "0du4xf-6j.myshopify.com"
-npm run community:rehearsal
+if ($LASTEXITCODE -eq 0) { npm run community:rehearsal }
 ```
 
 Expected: `N/N checks passed` and exit code 0.
@@ -270,7 +287,10 @@ Window B must show the bill sends for the rehearsal orders, which are named `#RE
 
 ## 13. Grocery review and operator tests (rehearsal rows only)
 
-Operator actions are run **only** on sources whose `shopify_order_name` starts with `#REH-`. Those were created by the rehearsal, so no real customer row is touched.
+Every operator action below runs **only if** the line before it, `node scripts/rehearsal-db.js --assert-…`, exits 0. That line refuses unless:
+
+- the host checks and the rehearsal marker pass;
+- the target source, attempt or duplicate belongs to a source whose `shopify_order_name LIKE '#REH-%'`.
 
 ### 13a. Make two bills `unknown`
 
@@ -281,7 +301,7 @@ Operator actions are run **only** on sources whose `shopify_order_name` starts w
    ```
 2. **Window A:** run `npm run community:rehearsal` again. Then wait about 60 seconds: the app gives up on an unanswered send after 20 seconds and records it as ambiguous, so the bill becomes `unknown`.
 
-### 13b. Find the targets (SQL Editor, branch `asb-rehearsal-017`)
+### 13b. Find the targets (SQL Editor, branch `asb-rehearsal-017`, SELECT only)
 
 ```sql
 SELECT s.id AS source_id, s.shopify_order_name, s.status, s.bill_state, s.bill_hold_reason,
@@ -295,7 +315,7 @@ SELECT s.id AS source_id, s.shopify_order_name, s.status, s.bill_state, s.bill_h
 
 From the newest run, take **X** and **Y**: two sources with `bill_state = 'unknown'` (orders `…-A` and `…-C`).
 
-### 13c. The list (window A)
+### 13c. The list (window A, read-only)
 
 ```powershell
 npm run grocery:review
@@ -306,22 +326,38 @@ Expected: X and Y are listed as needing attention.
 ### 13d. Hold, release, resend on source X
 
 ```powershell
-node scripts/grocery-review.js --action bill-hold    --source <X> --by "Waqas" --reason "rehearsal hold test"
-node scripts/grocery-review.js --action bill-hold    --source <X> --by "Waqas" --reason "rehearsal hold test" --apply
-node scripts/grocery-review.js --action bill-release --source <X> --by "Waqas" --reason "rehearsal release test" --apply
-node scripts/grocery-review.js --action bill-resend  --source <X> --by "Waqas" --reason "rehearsal resend test" --apply
+node scripts/rehearsal-db.js --assert-source <X>
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-review.js --action bill-hold --source <X> --by "Waqas" --reason "rehearsal hold test" }
+
+node scripts/rehearsal-db.js --assert-source <X>
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-review.js --action bill-hold --source <X> --by "Waqas" --reason "rehearsal hold test" --apply }
+
+node scripts/rehearsal-db.js --assert-source <X>
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-review.js --action bill-release --source <X> --by "Waqas" --reason "rehearsal release test" --apply }
+
+node scripts/rehearsal-db.js --assert-source <X>
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-review.js --action bill-resend --source <X> --by "Waqas" --reason "rehearsal resend test" --apply }
 ```
 
 Expected:
 
-- the first command is a dry run only;
+- each assert prints `OK: source <X> -> source <X> #REH-…`;
+- the first action is a dry run only;
 - hold gives `held: true`, and release gives `held: false`;
 - after the resend, at the next sweep (within about a minute), window B shows a second send to X's phone, which is accepted;
 - the step 13b query shows X as `sent`.
 
 ### 13e. Link a receipt to Y's ambiguous attempt
 
-First, post a signed synthetic delivery receipt to the **local** app. Use Y's `phone` from step 13b.
+First, confirm the attempt belongs to a rehearsal order:
+
+```powershell
+node scripts/rehearsal-db.js --assert-attempt <Y attempt_id>
+```
+
+Expected: `OK: attempt <id> -> source <Y> #REH-…`. **Stop** otherwise.
+
+Then post a signed synthetic delivery receipt to the **local** app, using Y's `phone` from step 13b:
 
 ```powershell
 $wamid = "wamid.REHEARSAL-LINK-<Y attempt_id>"
@@ -337,20 +373,26 @@ Expected: `200`. The receipt is journalled, but nothing is linked automatically.
 Then link it:
 
 ```powershell
-node scripts/grocery-review.js --action link-receipt --attempt <Y attempt_id> --wamid $wamid --by "Waqas" --reason "rehearsal link-receipt test" --apply
+node scripts/rehearsal-db.js --assert-attempt <Y attempt_id>
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-review.js --action link-receipt --attempt <Y attempt_id> --wamid $wamid --by "Waqas" --reason "rehearsal link-receipt test" --apply }
 ```
 
 Expected: Y's bill becomes `sent`, and the attempt's proof is recorded. Re-running the same command must refuse, because the attempt already has a wamid.
 
 ### 13f. Acknowledge the step 12 anomaly
 
+Find it (SQL Editor, SELECT only):
+
 ```sql
-SELECT id, source_id, fingerprint_differs, acknowledged_at FROM shopify_order_source_duplicates
- WHERE fingerprint_differs AND acknowledged_at IS NULL ORDER BY id DESC;
+SELECT d.id, d.source_id, s.shopify_order_name, d.fingerprint_differs, d.acknowledged_at
+  FROM shopify_order_source_duplicates d JOIN shopify_order_sources s ON s.id = d.source_id
+ WHERE d.fingerprint_differs AND d.acknowledged_at IS NULL AND s.shopify_order_name LIKE '#REH-%'
+ ORDER BY d.id DESC;
 ```
 
 ```powershell
-node scripts/grocery-review.js --action anomaly-ack --duplicate <id> --by "Waqas" --reason "rehearsal anomaly-ack test" --apply
+node scripts/rehearsal-db.js --assert-duplicate <id>
+if ($LASTEXITCODE -eq 0) { node scripts/grocery-review.js --action anomaly-ack --duplicate <id> --by "Waqas" --reason "rehearsal anomaly-ack test" --apply }
 ```
 
 Expected: the duplicate is acknowledged, and `/healthz` `grocery.open_anomalies` goes down by one.
@@ -359,7 +401,7 @@ Expected: the duplicate is acknowledged, and `/healthz` `grocery.open_anomalies`
 
 **Window B:** Ctrl+C, then `$env:FAKE_GRAPH_MODE = "accept"; node scripts/fake-graph.js`.
 
-## 14. Final read-only verification (SQL Editor, branch `asb-rehearsal-017`)
+## 14. Final read-only verification (SQL Editor, branch `asb-rehearsal-017`, SELECT only)
 
 ```sql
 -- a. Source states. Backfilled rows are legacy. Rehearsal rows are applied or community_only, and their bills are sent or not_required.
@@ -381,11 +423,18 @@ SELECT count(*) FROM shopify_order_bill_attempts a JOIN shopify_order_sources s 
 SELECT kind, state, count(*) FROM grocery_alerts GROUP BY 1,2 ORDER BY 1,2;
 SELECT count(*) AS sent FROM grocery_alerts WHERE state = 'sent';
 
--- e. No outbound message from the rehearsal window carries a real Meta id. Expected: 0.
-SELECT count(*) FROM whatsapp_messages
- WHERE direction = 'outbound'
-   AND created_at >= (SELECT min(created_at) FROM shopify_order_sources WHERE shopify_order_name LIKE '#REH-%') - interval '5 minutes'
-   AND wamid IS NOT NULL AND wamid NOT LIKE 'wamid.FAKE%' AND wamid NOT LIKE 'wamid.REHEARSAL-LINK-%';
+-- e. Every WhatsApp message written for a rehearsal bill attempt carries a fake or synthetic id.
+--    This is a direct join from the attempts' message keys, so copied historical messages cannot count.
+--    Expected: rehearsal_attempts = messages_found (every attempt has its message row), and real_meta_ids = 0.
+SELECT count(a.id)                                                                   AS rehearsal_attempts,
+       count(m.id)                                                                   AS messages_found,
+       count(*) FILTER (WHERE m.wamid LIKE 'wamid.FAKE%')                            AS fake_ids,
+       count(*) FILTER (WHERE m.wamid LIKE 'wamid.REHEARSAL-LINK-%')                 AS synthetic_link_ids,
+       count(*) FILTER (WHERE m.wamid IS NOT NULL AND m.wamid NOT LIKE 'wamid.FAKE%'
+                          AND m.wamid NOT LIKE 'wamid.REHEARSAL-LINK-%')             AS real_meta_ids
+  FROM shopify_order_bill_attempts a
+  JOIN shopify_order_sources s ON s.id = a.source_id AND s.shopify_order_name LIKE '#REH-%'
+  LEFT JOIN whatsapp_messages m ON m.idempotency_key = a.message_key;
 
 -- f. Duplicates from I and J.
 SELECT fingerprint_differs, raw_differs, (acknowledged_at IS NOT NULL) AS acked, count(*)
