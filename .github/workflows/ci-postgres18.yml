@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - grocery-reliability-017
+      - grocery-reliability-017-hardening
   pull_request:
     branches:
       - main
@@ -46,7 +47,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version-file: ".node-version"
           cache: npm
 
       - name: Install dependencies

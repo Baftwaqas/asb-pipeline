@@ -6,7 +6,7 @@
 // database, and requires identical grocery + WhatsApp rows and messages,
 // except for keys listed as an EXPECTED difference for that baseline.
 //
-// Guards: a missing baseline FAILS when CI=1 (skips locally with a reason); a
+// Guards: a missing baseline FAILS when CI=true/1 (skips locally with a reason); a
 // baseline whose tree equals a clean HEAD fails as vacuous.
 // ============================================================================
 "use strict";
@@ -19,6 +19,7 @@ const { execFileSync, execSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..", "..");
 const SCENARIO = path.join(__dirname, "scenario.js");
+const IS_CI = /^(1|true)$/i.test(String(process.env.CI || ""));
 
 function git(args) {
   return execSync(`git -C "${ROOT}" ${args}`, { stdio: "pipe", encoding: "utf8" }).trim();
@@ -50,7 +51,7 @@ function resolveBaseline({ sha, tag }) {
 function runGolden(t, { sha, tag, label, expectedDiff = [] }) {
   const b = resolveBaseline({ sha, tag });
   if (b.missing) {
-    if (process.env.CI === "1") assert.fail(`golden baseline ${label}: ${b.missing} (fetch it: git fetch origin ${sha})`);
+    if (IS_CI) assert.fail(`golden baseline ${label}: ${b.missing} (fetch it: git fetch origin ${sha})`);
     t.skip(`golden baseline ${label}: ${b.missing}`);
     return null;
   }
