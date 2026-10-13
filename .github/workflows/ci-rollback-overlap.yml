@@ -1,0 +1,72 @@
+name: CI - Rollback/017 Overlap Rehearsal
+
+on:
+  push:
+    branches:
+      - rollback-compat-017
+    paths:
+      - scripts/rehearsal-rollback-overlap.js
+      - .github/workflows/ci-rollback-overlap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  overlap:
+    name: 017-aware ↔ rollback-compat overlap
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54330:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54330
+      PGSSLMODE: disable
+      AWARE_SHA: 266fe5a3b8f30cff3856c49649fd242831a5a084
+      ROLLBACK_CODE_SHA: e01a1bcb29153120bd08de6cbe466eecb0387340
+
+    steps:
+      - name: Checkout rollback-compat branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout exact 017-aware hardening candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 266fe5a3b8f30cff3856c49649fd242831a5a084
+          path: aware
+          fetch-depth: 1
+
+      - name: Set up Node.js 24.21.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+          cache: npm
+
+      - name: Install rollback dependencies
+        run: npm ci
+
+      - name: Install 017-aware dependencies
+        working-directory: aware
+        run: npm ci
+
+      - name: Run cross-build overlap rehearsal
+        env:
+          AWARE_DIR: ${{ github.workspace }}/aware
+          ROLLBACK_DIR: ${{ github.workspace }}
+        run: node scripts/rehearsal-rollback-overlap.js
