@@ -175,8 +175,44 @@ async function resolveProduct(client, item) {
 // For a mixed cart `order` is the sanitized grocery-only view
 // (community/sanitize.js), so orders.source_payload never holds a Community
 // line either.
-async function persistOrder(order, phone) {
+async function persistOrder(order, phone, { shop, eventRowId } = {}) {
   return db.tx(async (client) => {
+    const shopifyOrderId = String(order?.id || "");
+    if (!shop || !/^[0-9]+$/.test(shopifyOrderId)) {
+      throw new Error("rollback-compat-017 requires shop and a numeric Shopify order id");
+    }
+
+    // L3 rollback guard: reserve the Shopify order in migration 017 BEFORE
+    // touching the grocery bag. If a source already exists, this old-code
+    // compatibility build must not merge quantities or send another bill.
+    const compat = await client.query(
+      `INSERT INTO shopify_order_sources
+         (origin, shop, shopify_order_id, shopify_order_name, shopify_created_at,
+          first_webhook_event_id, status, legacy_reason, bill_state)
+       VALUES ('compat', $1, $2, $3, $4, $5, 'legacy', 'compat_inline', 'legacy')
+       ON CONFLICT DO NOTHING
+       RETURNING id`,
+      [shop, shopifyOrderId, order.name || null, order.created_at || null, eventRowId || null]
+    );
+
+    if (compat.rows.length === 0) {
+      const { rows } = await client.query(
+        `SELECT s.id, o.order_number
+           FROM shopify_order_sources s
+           LEFT JOIN orders o ON o.id = s.order_id
+          WHERE s.shopify_order_id = $1
+          LIMIT 1`,
+        [shopifyOrderId]
+      );
+      return {
+        skipped: true,
+        orderNumber: rows[0]?.order_number || `017 source ${rows[0]?.id || "existing"}`,
+        compatSource: true,
+      };
+    }
+
+    const compatSourceId = compat.rows[0].id;
+
     await assertNoCommunityLines(client, order.line_items || [], { orderId: order.id });
 
     const cycle = await resolveCycle(
@@ -238,9 +274,18 @@ async function persistOrder(order, phone) {
 
       if (ins.rows.length === 0) {
         const again = await client.query(
-          `SELECT id, order_number FROM orders WHERE shopify_order_id = $1`,
-          [String(order.id)]
+          `SELECT id, order_number, customer_id, cycle_id
+             FROM orders WHERE shopify_order_id = $1`,
+          [shopifyOrderId]
         );
+        if (again.rows[0]) {
+          await client.query(
+            `UPDATE shopify_order_sources
+                SET order_id = $2, customer_id = $3, cycle_id = $4, disposition = 'created'
+              WHERE id = $1`,
+            [compatSourceId, again.rows[0].id, again.rows[0].customer_id, again.rows[0].cycle_id]
+          );
+        }
         return { skipped: true, orderNumber: again.rows[0]?.order_number };
       }
       orderRow = ins.rows[0];
@@ -306,6 +351,16 @@ async function persistOrder(order, phone) {
     const totals = await client.query(
       `SELECT order_number, ceiling_total, grand_total FROM orders WHERE id = $1`,
       [orderRow.id]
+    );
+
+    await client.query(
+      `UPDATE shopify_order_sources
+          SET order_id = $2,
+              customer_id = $3,
+              cycle_id = $4,
+              disposition = $5
+        WHERE id = $1`,
+      [compatSourceId, orderRow.id, customer.id, cycle.id, merged ? "merged" : "created"]
     );
 
     return {
@@ -867,7 +922,7 @@ app.post("/webhooks/shopify", async (req, res) => {
     let saved = null;
     let recapturedLeak = false;
     try {
-      saved = await persistOrder(order, phone).catch(async (e) => {
+      saved = await persistOrder(order, phone, { shop, eventRowId }).catch(async (e) => {
         if (e.code !== "ASB_COMMUNITY_LEAK") throw e;
         // The registry changed between capture (before the 200) and now, so a
         // line that was grocery then is Community now. Capture it to
@@ -882,7 +937,7 @@ app.post("/webhooks/shopify", async (req, res) => {
         communityWorker.kick(db);
         if (!cap2.groceryLines.length) return { communityOnly: true };
         order = groceryOnlyOrder(rawOrder, { ...cap2, eventRowId });
-        return persistOrder(order, phone);
+        return persistOrder(order, phone, { shop, eventRowId });
       });
       if (saved.communityOnly) {
         console.log(`   ${orderName}: no grocery lines left - no grocery order, no grocery bill`);
@@ -901,12 +956,9 @@ app.post("/webhooks/shopify", async (req, res) => {
     } catch (e) {
       console.error(`   DB write failed for ${orderName}:`, e.message);
       if (eventRowId) await db.markWebhookFailed(eventRowId, e.message);
-      // The Community backstop refused the order (a Community line reached
-      // the grocery writer). Send nothing: an improvised bill here could list
-      // the wrong lines. The payload stays in webhook_events for review.
-      if (e.code === "ASB_COMMUNITY_LEAK" || recapturedLeak) return;
-      // Still send the confirmation - the customer matters more than our records,
-      // and the raw payload is safe in webhook_events for a later backfill.
+      // rollback-compat-017: never improvise a bill after a persistence failure.
+      // The captured webhook remains available for source-aware recovery.
+      return;
     }
 
     // --- compose the message ---
@@ -938,22 +990,11 @@ app.post("/webhooks/shopify", async (req, res) => {
       console.log("   ------------------------------------------");
     }
 
-    // If the order could not be composed from the database (the DB write
-    // failed), build a stand-in from the raw Shopify payload so the customer
-    // still hears from us. Same shape bill.orderConfirmation returns.
     if (!composed) {
-      const orderNo = saved?.order_number || orderName;
-      composed = {
-        communitySaved: 0,
-        rich:
-          `Assalam-o-Alaikum ${firstName} 🌿\nAap ka order mil gaya — *${orderNo}*\n\n` +
-          `${items || "-"}\n\nZyada se zyada: *Rs ${totalPKR}*\n\nApna Sasta Bazaar`,
-        params: {
-          customer_name: firstName, order_id: orderNo, ordered: "-", delivery: "-",
-          order_items: items || "-", bazaar_total: `Rs ${totalPKR}`,
-          zyada_se_zyada: `Rs ${totalPKR}`, abhi_se_bachat: "Rs 0",
-        },
-      };
+      const reason = "rollback-compat-017: no database-composed bill available";
+      console.error(`   Bill NOT sent for ${orderName}: ${reason}`);
+      if (eventRowId) await db.markWebhookFailed(eventRowId, reason);
+      return;
     }
 
     // --- tell the customer ---

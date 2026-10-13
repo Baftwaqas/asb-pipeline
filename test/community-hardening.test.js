@@ -185,7 +185,7 @@ test("sanitized grocery view is an allow-list and the backstop rejects any Commu
   assert.doesNotMatch(JSON.stringify(v), /ASB-COM-|50595473817858/);
   // Even if a future caller passed the RAW order to the grocery writer, it is refused whole.
   const { persistOrder } = require(path.join(ROOT, "server.js"));
-  await assert.rejects(persistOrder(raw, "923001234567"), /Community line/);
+  await assert.rejects(persistOrder(raw, "923001234567", { shop: H.SHOP }), /Community line/);
 });
 
 // ---------------------------------------------------------------------------

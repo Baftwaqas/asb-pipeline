@@ -300,7 +300,7 @@ test("capture failure before the 200 -> 503, nothing half-written, retry succeed
 test("persistOrder refuses a Community line handed to it directly (backstop)", async () => {
   const before = await groceryCounts();
   const order = H.shopifyOrder({ id: ++orderSeq, name: "#LEAK", lines: [H.line(H.COMMUNITY.onion5Draft, 1)] });
-  await assert.rejects(persistOrder(order, "923001234567"), /Community line/);
+  await assert.rejects(persistOrder(order, "923001234567", { shop: H.SHOP }), /Community line/);
   assert.deepEqual(await groceryCounts(), before);
 });
 

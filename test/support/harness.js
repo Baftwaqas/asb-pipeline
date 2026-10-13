@@ -10,6 +10,7 @@
 
 const path = require("path");
 const crypto = require("crypto");
+const fs = require("fs");
 const { execFileSync } = require("child_process");
 const { Client } = require("pg");
 
@@ -33,6 +34,19 @@ async function createDatabase(name, repoDir) {
     env: { ...process.env, DATABASE_URL: url },
     stdio: "pipe",
   });
+
+  // Test rollback-compat-017 against the exact post-017 schema.
+  const compat017 = path.join(repoDir, "test", "fixtures", "017_shopify_order_sources.sql");
+  if (fs.existsSync(compat017)) {
+    const c = new Client({ connectionString: url });
+    await c.connect();
+    try {
+      await c.query(fs.readFileSync(compat017, "utf8"));
+    } finally {
+      await c.end();
+    }
+  }
+
   return url;
 }
 
