@@ -33,10 +33,13 @@ jobs:
     env:
       TEST_PG_URL: postgres://postgres:postgres@localhost:54330
       PGSSLMODE: disable
+      GOLDEN_BASE_REF: 3296c0f9acac8f645eda2c52e9ab3e1cdfa8c56e
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js 24.21.0
         uses: actions/setup-node@v4

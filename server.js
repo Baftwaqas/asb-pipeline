@@ -523,6 +523,25 @@ async function saveInbound(msg, contact) {
   return { from, type, preview };
 }
 
+// ------------------------------------------------------------
+// L3 rollback compatibility requires migration 017 to exist.
+// This check is deliberately cheap and is used by /healthz and by
+// orders/create BEFORE Shopify receives a 200. A pre-017 restore must run
+// production 3296c0f, never rollback-compat-017.
+// ------------------------------------------------------------
+async function rollbackCompat017SchemaStatus() {
+  try {
+    const { rows } = await db.query(
+      `SELECT to_regclass('public.shopify_order_sources') IS NOT NULL AS source_table`
+    );
+    return rows[0]?.source_table
+      ? { ready: true }
+      : { ready: false, reason: "migration_017_missing" };
+  } catch (e) {
+    return { ready: false, reason: "schema_check_failed", error: e.message };
+  }
+}
+
 // ============================================================
 // ROUTES
 // ============================================================
@@ -587,9 +606,12 @@ app.get("/healthz", async (req, res) => {
       community = { ready: false, error: e.message };
     }
   }
+  const rollbackCompat017 = h.ok
+    ? await rollbackCompat017SchemaStatus()
+    : { ready: false, reason: "database_unavailable" };
   const ready = h.ok && h.migrated && config.whatsappToken &&
-    config.phoneNumberId && config.appSecret && community.ready;
-  res.status(ready ? 200 : 503).json({ ...h, config, community, ready });
+    config.phoneNumberId && config.appSecret && community.ready && rollbackCompat017.ready;
+  res.status(ready ? 200 : 503).json({ ...h, config, community, rollbackCompat017, ready });
 });
 
 // ------------------------------------------------------------
@@ -799,6 +821,20 @@ app.post("/webhooks/shopify", async (req, res) => {
     }
     console.log(`Shopify webhook ${deliveryId}: topic "${topic || "(missing)"}" ignored (Phase 1 allowlist)`);
     return res.sendStatus(200);
+  }
+
+  // L3 is valid only after migration 017. Refuse orders/create BEFORE the
+  // capture/ack boundary so Shopify retries instead of accepting an order that
+  // this compatibility build cannot reserve safely.
+  if (kind === "order") {
+    const compat017 = await rollbackCompat017SchemaStatus();
+    if (!compat017.ready) {
+      console.error(
+        `Shopify webhook ${deliveryId} (${topic}) REFUSED by rollback-compat-017: ` +
+        `${compat017.reason || "migration 017 unavailable"}; answering 503`
+      );
+      return res.sendStatus(503);
+    }
   }
 
   // ---- 2b. Capture BEFORE answering ----
