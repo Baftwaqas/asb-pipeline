@@ -16,6 +16,7 @@
     "grocery:backfill": "node scripts/grocery-backfill.js",
     "grocery:activate": "node scripts/grocery-activate.js",
     "grocery:review": "node scripts/grocery-review.js",
-    "grocery:rollback-reconcile": "node scripts/grocery-rollback-reconcile.js"
+    "grocery:rollback-reconcile": "node scripts/grocery-rollback-reconcile.js",
+    "grocery:compat-bill-reconcile": "node scripts/grocery-compat-bill-reconcile.js"
   }
 }
