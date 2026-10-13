@@ -15,6 +15,7 @@
     "community:rehearsal": "node scripts/community-rehearsal.js",
     "grocery:backfill": "node scripts/grocery-backfill.js",
     "grocery:activate": "node scripts/grocery-activate.js",
-    "grocery:review": "node scripts/grocery-review.js"
+    "grocery:review": "node scripts/grocery-review.js",
+    "grocery:rollback-reconcile": "node scripts/grocery-rollback-reconcile.js"
   }
 }
