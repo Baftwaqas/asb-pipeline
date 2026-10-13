@@ -37,7 +37,7 @@ jobs:
       TEST_PG_URL: postgres://postgres:postgres@localhost:54330
       PGSSLMODE: disable
       AWARE_SHA: 266fe5a3b8f30cff3856c49649fd242831a5a084
-      ROLLBACK_CODE_SHA: e01a1bcb29153120bd08de6cbe466eecb0387340
+      ROLLBACK_CODE_SHA: 1059117ba4f0a74b98ec51284936182cfc21677c
 
     steps:
       - name: Checkout rollback-compat branch
