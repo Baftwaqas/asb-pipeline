@@ -67,10 +67,10 @@ const opts = (hour) => ({
 
 test("compat bill: definite Meta refusal becomes audited pending snapshot and sends once as attempt 2", async () => {
   const c = await compatCase({
-    at:"2026-10-13T15:01:00Z",
+    at:"2026-10-13T05:01:00Z",
     message:{status:"failed",payload:{response:{error:{code:131047,message:"window closed"}}}},
   });
-  const p = await reconcile.plan(db, opts(15));
+  const p = await reconcile.plan(db, opts(5));
   assert.deepEqual([p.rows[0].action,p.rows[0].reason,p.rows[0].meta_error_code],
                    ["recover_bill","meta_error_response_proves_not_accepted","131047"]);
 
@@ -80,7 +80,7 @@ test("compat bill: definite Meta refusal becomes audited pending snapshot and se
   );
 
   const before=sent.length;
-  const r=await reconcile.apply(db,{...opts(15),planSha:p.plan_sha256,by:"Waqas",reason:"Meta refused old L3 send"});
+  const r=await reconcile.apply(db,{...opts(5),planSha:p.plan_sha256,by:"Waqas",reason:"Meta refused old L3 send"});
   assert.equal(r.recovered,1);
   let s=(await db.query(`SELECT * FROM shopify_order_sources WHERE id=$1`,[c.sourceId])).rows[0];
   assert.deepEqual([s.status,s.bill_state,Boolean(s.bill_authorization_audit_id)],["applied","pending",true]);
@@ -96,13 +96,13 @@ test("compat bill: definite Meta refusal becomes audited pending snapshot and se
 
 test("compat bill: prior sent evidence is recorded and never re-sent", async () => {
   const c=await compatCase({
-    at:"2026-10-13T16:01:00Z",
+    at:"2026-10-13T06:01:00Z",
     message:{status:"sent",wamid:"wamid.OLD-COMPAT-SENT",payload:{response:{messages:[{id:"wamid.OLD-COMPAT-SENT"}]}}},
   });
-  const p=await reconcile.plan(db,opts(16));
+  const p=await reconcile.plan(db,opts(6));
   assert.equal(p.rows[0].action,"record_sent_evidence");
   const before=sent.length;
-  const r=await reconcile.apply(db,{...opts(16),planSha:p.plan_sha256,by:"Waqas",reason:"record old accepted bill"});
+  const r=await reconcile.apply(db,{...opts(6),planSha:p.plan_sha256,by:"Waqas",reason:"record old accepted bill"});
   assert.equal(r.recorded_sent,1);
   const s=(await db.query(`SELECT status,bill_state,legacy_bill_evidence FROM shopify_order_sources WHERE id=$1`,[c.sourceId])).rows[0];
   assert.deepEqual([s.status,s.bill_state,s.legacy_bill_evidence],["legacy","legacy",true]);
@@ -112,14 +112,14 @@ test("compat bill: prior sent evidence is recorded and never re-sent", async () 
 
 test("compat bill: ambiguous failed send is review-only", async () => {
   const c=await compatCase({
-    at:"2026-10-13T17:01:00Z",
+    at:"2026-10-13T07:01:00Z",
     message:{status:"failed",payload:{response:null}},
   });
-  const p=await reconcile.plan(db,opts(17));
+  const p=await reconcile.plan(db,opts(7));
   assert.deepEqual([p.rows[0].action,p.rows[0].reason],
                    ["review","failed_send_without_definite_non_send_evidence"]);
   const before=sent.length;
-  const r=await reconcile.apply(db,{...opts(17),planSha:p.plan_sha256,by:"Waqas",reason:"ambiguous old send"});
+  const r=await reconcile.apply(db,{...opts(7),planSha:p.plan_sha256,by:"Waqas",reason:"ambiguous old send"});
   assert.deepEqual([r.recovered,r.review_only],[0,1]);
   const s=(await db.query(`SELECT status,bill_state FROM shopify_order_sources WHERE id=$1`,[c.sourceId])).rows[0];
   assert.deepEqual([s.status,s.bill_state],["legacy","legacy"]);
@@ -128,14 +128,14 @@ test("compat bill: ambiguous failed send is review-only", async () => {
 
 test("compat bill: explicit pre-send compose failure can be recovered with attempt 1", async () => {
   const c=await compatCase({
-    at:"2026-10-13T18:01:00Z",
+    at:"2026-10-13T08:01:00Z",
     eventStatus:"failed",
     errorDetail:"rollback-compat-017: no database-composed bill available",
   });
-  const p=await reconcile.plan(db,opts(18));
+  const p=await reconcile.plan(db,opts(8));
   assert.deepEqual([p.rows[0].action,p.rows[0].reason],["recover_bill","l3_failed_before_send"]);
   const before=sent.length;
-  await reconcile.apply(db,{...opts(18),planSha:p.plan_sha256,by:"Waqas",reason:"compose fixed"});
+  await reconcile.apply(db,{...opts(8),planSha:p.plan_sha256,by:"Waqas",reason:"compose fixed"});
   await worker.runOnce(db);
   const a=(await db.query(`SELECT attempt_no FROM shopify_order_bill_attempts WHERE source_id=$1`,[c.sourceId])).rows;
   assert.deepEqual(a.map(x=>x.attempt_no),[1]);
@@ -144,17 +144,17 @@ test("compat bill: explicit pre-send compose failure can be recovered with attem
 
 test("compat bill: evidence change after dry run invalidates the approved plan", async () => {
   const c=await compatCase({
-    at:"2026-10-13T19:01:00Z",
+    at:"2026-10-13T09:01:00Z",
     message:{status:"failed",payload:{response:{error:{code:100,message:"bad param"}}}},
   });
-  const p=await reconcile.plan(db,opts(19));
+  const p=await reconcile.plan(db,opts(9));
   assert.equal(p.rows[0].action,"recover_bill");
   await db.query(
     `UPDATE whatsapp_messages SET status='sent', wamid='wamid.LATE-EVIDENCE'
       WHERE idempotency_key=$1`,[`order_confirmed:shopify:${c.oid}`]
   );
   await assert.rejects(
-    reconcile.apply(db,{...opts(19),planSha:p.plan_sha256,by:"Waqas",reason:"stale evidence"}),
+    reconcile.apply(db,{...opts(9),planSha:p.plan_sha256,by:"Waqas",reason:"stale evidence"}),
     /plan changed since approval/
   );
   const s=(await db.query(`SELECT status,bill_state FROM shopify_order_sources WHERE id=$1`,[c.sourceId])).rows[0];
