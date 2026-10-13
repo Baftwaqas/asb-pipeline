@@ -12,7 +12,7 @@ let server;
 let base;
 
 before(async () => {
-  const url = await H.createDatabase("asb_t_rollback_guard_pre017", ROOT, { compat017: false });
+  const url = await H.createDatabase("asb_t_rollback_guard_pre017", ROOT, { applyCompat017: false });
   H.setEnv(url);
   H.stubOutside(ROOT);
 

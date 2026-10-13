@@ -26,7 +26,7 @@ async function adminQuery(sql) {
 }
 
 /** Fresh database, migrated by THAT repo's own migration runner. */
-async function createDatabase(name, repoDir, { compat017 = true } = {}) {
+async function createDatabase(name, repoDir, { applyCompat017 = true } = {}) {
   await adminQuery(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   await adminQuery(`CREATE DATABASE ${name}`);
   const url = `${BASE}/${name}`;
@@ -37,7 +37,7 @@ async function createDatabase(name, repoDir, { compat017 = true } = {}) {
 
   // Test rollback-compat-017 against the exact post-017 schema.
   const compat017 = path.join(repoDir, "test", "fixtures", "017_shopify_order_sources.sql");
-  if (compat017 && fs.existsSync(compat017)) {
+  if (applyCompat017 && fs.existsSync(compat017)) {
     const c = new Client({ connectionString: url });
     await c.connect();
     try {
