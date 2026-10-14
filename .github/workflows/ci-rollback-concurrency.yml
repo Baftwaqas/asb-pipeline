@@ -37,7 +37,7 @@ jobs:
     env:
       TEST_PG_URL: postgres://postgres:postgres@localhost:54330
       PGSSLMODE: disable
-      ROLLBACK_SHA: dcf27705f3cbe612efd3fc4eea67509a45730c15
+      ROLLBACK_SHA: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
       RACE_ITERATIONS: "25"
 
     steps:
@@ -49,7 +49,7 @@ jobs:
       - name: Checkout exact proven L3 rollback build
         uses: actions/checkout@v4
         with:
-          ref: dcf27705f3cbe612efd3fc4eea67509a45730c15
+          ref: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
           path: rollback
           fetch-depth: 1
 
