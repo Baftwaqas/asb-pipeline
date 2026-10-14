@@ -64,6 +64,11 @@ jobs:
         working-directory: prod
         run: npm ci
 
+      - name: Prove migration 018 fails fast on lock contention
+        env:
+          AWARE_DIR: ${{ github.workspace }}
+        run: node scripts/rehearsal-migration-018-lock.js
+
       - name: Run real PostgreSQL backup and restore drill
         env:
           AWARE_DIR: ${{ github.workspace }}
