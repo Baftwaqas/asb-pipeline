@@ -10,11 +10,16 @@ const H = require("../test/support/harness");
 const AWARE_DIR = path.resolve(process.env.AWARE_DIR || process.cwd());
 const ROLLBACK_DIR = path.resolve(process.env.ROLLBACK_DIR || "");
 const ROLLBACK_SHA = process.env.ROLLBACK_SHA;
+const AWARE_SHA = process.env.AWARE_SHA;
 const ITERATIONS = Number(process.env.RACE_ITERATIONS || 25);
 
-if (!ROLLBACK_DIR || !ROLLBACK_SHA) throw new Error("ROLLBACK_DIR and ROLLBACK_SHA are required");
+if (!ROLLBACK_DIR || !ROLLBACK_SHA || !AWARE_SHA) {
+  throw new Error("ROLLBACK_DIR, ROLLBACK_SHA and AWARE_SHA are required");
+}
 
 const { execFileSync } = require("node:child_process");
+const actualAware = execFileSync("git", ["rev-parse","HEAD"], { cwd:AWARE_DIR, encoding:"utf8" }).trim();
+assert.equal(actualAware, AWARE_SHA, "aware checkout SHA mismatch");
 const actualRollback = execFileSync("git", ["rev-parse","HEAD"], { cwd:ROLLBACK_DIR, encoding:"utf8" }).trim();
 assert.equal(actualRollback, ROLLBACK_SHA, "rollback checkout SHA mismatch");
 
