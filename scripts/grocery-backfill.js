@@ -15,14 +15,31 @@
 // ============================================================================
 "use strict";
 const backfill = require("../grocery/backfill");
+const { assertMutationTarget, Refused: TargetRefused } = require("./lib/db-target-guard");
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i > -1 ? process.argv[i + 1] : null; };
 
 async function main() {
+  const applying = process.argv.includes("--apply");
+
+  if (applying) {
+    try {
+      const t = assertMutationTarget({
+        databaseUrl: process.env.DATABASE_URL,
+        operation: "grocery backfill apply"
+      });
+      console.log(`[backfill] mutation target authorized: ${t.host}/${t.database}`);
+    } catch (e) {
+      console.error(`[backfill] ${e instanceof TargetRefused ? "REFUSED" : "failed"}: ${e.message}`);
+      process.exitCode = 2;
+      return;
+    }
+  }
+
   const db = require("../db");
   const shop = arg("--shop") || process.env.SHOPIFY_SHOP_DOMAIN;
   try {
-    if (process.argv.includes("--apply")) {
+    if (applying) {
       const r = await backfill.apply(db, { shop, by: arg("--by"), reason: arg("--reason"), planSha: arg("--plan-sha") });
       console.log(JSON.stringify(r, null, 2));
     } else {
