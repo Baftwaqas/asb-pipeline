@@ -1,5 +1,7 @@
 "use strict";
 
+const { parse } = require("pg-connection-string");
+
 // Exact target guard for operator scripts that can mutate a database.
 //
 // Loopback PostgreSQL is allowed automatically for CI/rehearsals.
@@ -15,13 +17,31 @@ class Refused extends Error {}
 
 function targetOf(databaseUrl) {
   if (!databaseUrl) throw new Refused("DATABASE_URL is not set");
+
+  // node-postgres accepts connection parameters in the URI query string.
+  // A string such as postgres://u:p@localhost/db?host=production can therefore
+  // make URL.hostname say "localhost" while the driver connects elsewhere.
+  // Refuse those override parameters outright before parsing the effective
+  // target with the SAME parser node-postgres uses.
   let u;
   try { u = new URL(databaseUrl); }
   catch { throw new Refused("DATABASE_URL is not a valid URL"); }
-  const host = String(u.hostname || "").toLowerCase();
-  const database = decodeURIComponent(String(u.pathname || "").replace(/^\//, ""));
-  if (!host) throw new Refused("DATABASE_URL has no hostname");
-  if (!database) throw new Refused("DATABASE_URL has no database name");
+
+  for (const key of u.searchParams.keys()) {
+    const k = String(key).toLowerCase();
+    if (k === "host" || k === "hostaddr") {
+      throw new Refused(`DATABASE_URL query parameter "${key}" is refused because it can override the connection host`);
+    }
+  }
+
+  let parsed;
+  try { parsed = parse(databaseUrl); }
+  catch { throw new Refused("DATABASE_URL could not be parsed by node-postgres"); }
+
+  const host = String(parsed.host || "").toLowerCase();
+  const database = String(parsed.database || "");
+  if (!host) throw new Refused("DATABASE_URL has no effective hostname");
+  if (!database) throw new Refused("DATABASE_URL has no effective database name");
   return { host, database };
 }
 
