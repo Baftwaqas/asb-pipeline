@@ -6,6 +6,7 @@ on:
       - grocery-reliability-017-reconcile
     paths:
       - scripts/rehearsal-pg-dump-restore.js
+      - scripts/rehearsal-migration-018-lock.js
       - .github/workflows/ci-pg-dump-restore.yml
   workflow_dispatch:
 
