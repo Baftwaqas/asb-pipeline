@@ -192,7 +192,10 @@ async function catalogSnapshot(c){
   const environment={
     database:(await c.query(`SELECT d.datname,
       pg_encoding_to_char(d.encoding) AS encoding,d.datcollate,d.datctype,
-      d.datlocprovider,d.daticulocale,d.datcollversion
+      d.datlocprovider,
+      to_jsonb(d)->>'daticulocale' AS daticulocale,
+      to_jsonb(d)->>'datlocale' AS datlocale,
+      d.datcollversion
       FROM pg_database d WHERE d.datname=current_database()`)).rows[0],
     db_role_settings:(await c.query(`SELECT COALESCE(d.datname,'') AS database_name,
       COALESCE(r.rolname,'') AS role_name,s.setconfig
