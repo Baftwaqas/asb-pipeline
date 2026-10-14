@@ -1,0 +1,71 @@
+name: CI - Synthetic PostgreSQL Disaster Recovery
+
+on:
+  push:
+    branches:
+      - grocery-reliability-017-reconcile
+    paths:
+      - scripts/rehearsal-pg-dump-restore.js
+      - .github/workflows/ci-pg-dump-restore.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disaster-recovery:
+    name: pg_dump / pg_restore / forward migrate / PostgreSQL 18
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54330:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54330
+      PGSSLMODE: disable
+      PROD_SHA: 3296c0f9acac8f645eda2c52e9ab3e1cdfa8c56e
+
+    steps:
+      - name: Checkout current 017 recovery candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout exact current production release
+        uses: actions/checkout@v4
+        with:
+          ref: 3296c0f9acac8f645eda2c52e9ab3e1cdfa8c56e
+          path: prod
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".node-version"
+          cache: npm
+
+      - name: Install current candidate dependencies
+        run: npm ci
+
+      - name: Install production dependencies
+        working-directory: prod
+        run: npm ci
+
+      - name: Run real PostgreSQL backup and restore drill
+        env:
+          AWARE_DIR: ${{ github.workspace }}
+          PROD_DIR: ${{ github.workspace }}/prod
+        run: node scripts/rehearsal-pg-dump-restore.js
