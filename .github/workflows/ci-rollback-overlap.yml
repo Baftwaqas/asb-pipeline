@@ -36,7 +36,7 @@ jobs:
     env:
       TEST_PG_URL: postgres://postgres:postgres@localhost:54330
       PGSSLMODE: disable
-      AWARE_SHA: c7a0e1f69659339e3ed79064806213ab1d41fa31
+      AWARE_SHA: 1bd18c1d514c9d260bd762cd02201a244eb4ec5c
       ROLLBACK_CODE_SHA: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
 
     steps:
@@ -48,7 +48,7 @@ jobs:
       - name: Checkout exact final 017 recovery candidate
         uses: actions/checkout@v4
         with:
-          ref: c7a0e1f69659339e3ed79064806213ab1d41fa31
+          ref: 1bd18c1d514c9d260bd762cd02201a244eb4ec5c
           path: aware
           fetch-depth: 1
 
