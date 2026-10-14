@@ -39,6 +39,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { Client } = require("pg");
+const { assertMutationTarget, Refused: TargetRefused } = require("./lib/db-target-guard");
 
 const ROOT = path.join(__dirname, "..");
 const MIGRATIONS = path.join(ROOT, "db", "migrations");
@@ -108,15 +109,26 @@ async function main() {
     process.exit(1);
   }
 
-  // Same TLS rule as db/index.js: a hostname with no dots is a private
-  // network name and needs no TLS; anything else crosses the internet.
+  // Every non-dry invocation can mutate (migrations, baseline records, or
+  // seeds). Authorize the exact remote host + database BEFORE connecting.
+  if (!DRY) {
+    try {
+      const t = assertMutationTarget({ databaseUrl: url, operation: "migrate" });
+      console.log(`[migrate] mutation target authorized: ${t.host}/${t.database}`);
+    } catch (e) {
+      console.error(`[migrate] ${e instanceof TargetRefused ? "REFUSED" : "failed"}: ${e.message}`);
+      process.exit(2);
+    }
+  }
+
+  // Same TLS rule as db/index.js.
   let host = "";
   try {
     host = new URL(url).hostname;
   } catch (_) {}
   const isLocal =
     host === "localhost" || host === "127.0.0.1" || host === "::1" ||
-    (host !== "" && !host.includes("."));
+    host === "[::1]" || (host !== "" && !host.includes("."));
 
   const client = new Client({
     connectionString: url,
@@ -127,18 +139,25 @@ async function main() {
   await client.connect();
   console.log(`[migrate] connected to ${host || "(unparsed host)"}\n`);
 
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      filename    TEXT PRIMARY KEY,
-      sha256      TEXT NOT NULL,
-      applied_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-      ms          INTEGER
-    )
-  `);
+  // --dry is genuinely read-only. Do not CREATE even the bookkeeping table.
+  const migrationTableExists = (await client.query(
+    `SELECT to_regclass('public.schema_migrations') IS NOT NULL AS x`
+  )).rows[0].x;
 
-  const { rows } = await client.query(
-    `SELECT filename, sha256 FROM schema_migrations`
-  );
+  if (!DRY && !migrationTableExists) {
+    await client.query(`
+      CREATE TABLE schema_migrations (
+        filename    TEXT PRIMARY KEY,
+        sha256      TEXT NOT NULL,
+        applied_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        ms          INTEGER
+      )
+    `);
+  }
+
+  const rows = migrationTableExists
+    ? (await client.query(`SELECT filename, sha256 FROM schema_migrations`)).rows
+    : [];
   const applied = new Map(rows.map((r) => [r.filename, r.sha256]));
 
   const files = sqlFiles(MIGRATIONS);
