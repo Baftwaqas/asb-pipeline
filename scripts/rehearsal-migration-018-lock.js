@@ -72,6 +72,10 @@ async function applyThrough017(){
     );
     assert.ok(elapsed>=4000 && elapsed<9000,`018 should fail near 5s, elapsed=${elapsed}ms`);
 
+    // 018 carries its own BEGIN/COMMIT. A statement error leaves this client
+    // inside an aborted transaction until an explicit ROLLBACK.
+    await migrator.query("ROLLBACK");
+
     const before=(await migrator.query(
       `SELECT EXISTS(
          SELECT 1 FROM pg_constraint WHERE conrelid='customers'::regclass
