@@ -42,6 +42,8 @@ async function configureComparisonSession(c){
   await c.query("SET DateStyle TO 'ISO, YMD'");
   await c.query("SET IntervalStyle TO 'iso_8601'");
   await c.query("SET extra_float_digits TO 3");
+  await c.query("SET search_path TO public");
+  await c.query("SET bytea_output TO 'hex'");
 }
 async function conn(name){
   const c=new Client({connectionString:`${BASE}/${name}`});
@@ -52,8 +54,10 @@ async function conn(name){
 async function drop(name){await admin(`DROP DATABASE IF EXISTS ${ident(name)} WITH (FORCE)`);}
 
 async function dataSnapshot(c){
-  const tables=(await c.query(`SELECT table_name FROM information_schema.tables
-    WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name`)).rows.map(r=>r.table_name);
+  const tables=(await c.query(`SELECT c.relname AS table_name
+    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relkind IN ('r','p')
+    ORDER BY c.relname`)).rows.map(r=>r.table_name);
   const out={};
   for(const t of tables){
     const rows=(await c.query(`SELECT to_jsonb(x)::text AS j FROM ${ident(t)} x`)).rows.map(r=>r.j).sort();
@@ -64,54 +68,155 @@ async function dataSnapshot(c){
 
 async function catalogSnapshot(c){
   const qs={
-    columns:`SELECT table_name,column_name,ordinal_position,data_type,udt_name,is_nullable,column_default
-      FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name,ordinal_position`,
-    constraints:`SELECT c.relname AS table_name,x.conname,x.contype,pg_get_constraintdef(x.oid,true) AS def
-      FROM pg_constraint x JOIN pg_class c ON c.oid=x.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' ORDER BY c.relname,x.conname`,
-    indexes:`SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname='public' ORDER BY tablename,indexname`,
-    views:`SELECT c.relname AS view_name,pg_get_viewdef(c.oid,true) AS def FROM pg_class c
-      JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('v','m') ORDER BY c.relname`,
-    functions:`SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS args,pg_get_functiondef(p.oid) AS def
+    columns:`SELECT c.relname AS table_name,a.attname AS column_name,a.attnum AS ordinal_position,
+      format_type(a.atttypid,a.atttypmod) AS data_type,t.typname AS udt_name,
+      a.attnotnull,a.attidentity,a.attgenerated,
+      pg_get_expr(ad.adbin,ad.adrelid) AS column_default
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid=a.attrelid
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN pg_type t ON t.oid=a.atttypid
+      LEFT JOIN pg_attrdef ad ON ad.adrelid=a.attrelid AND ad.adnum=a.attnum
+      WHERE n.nspname='public' AND c.relkind IN ('r','p')
+        AND a.attnum>0 AND NOT a.attisdropped
+      ORDER BY c.relname,a.attnum`,
+    constraints:`SELECT c.relname AS table_name,x.conname,x.contype,
+      x.condeferrable,x.condeferred,x.convalidated,
+      pg_get_constraintdef(x.oid,true) AS def
+      FROM pg_constraint x
+      JOIN pg_class c ON c.oid=x.conrelid
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public'
+      ORDER BY c.relname,x.conname`,
+    indexes:`SELECT tc.relname AS table_name,ic.relname AS index_name,
+      i.indisunique,i.indisprimary,i.indisvalid,i.indisready,
+      pg_get_indexdef(i.indexrelid) AS def,
+      pg_get_expr(i.indpred,i.indrelid) AS predicate
+      FROM pg_index i
+      JOIN pg_class tc ON tc.oid=i.indrelid
+      JOIN pg_class ic ON ic.oid=i.indexrelid
+      JOIN pg_namespace n ON n.oid=tc.relnamespace
+      WHERE n.nspname='public'
+      ORDER BY tc.relname,ic.relname`,
+    views:`SELECT c.relname AS view_name,pg_get_viewdef(c.oid,true) AS def
+      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relkind IN ('v','m')
+      ORDER BY c.relname`,
+    functions:`SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS args,
+      p.prokind,p.provolatile,p.prosecdef,p.proparallel,p.proconfig,
+      pg_get_functiondef(p.oid) AS def
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-      WHERE n.nspname='public' ORDER BY p.proname,pg_get_function_identity_arguments(p.oid)`,
-    triggers:`SELECT c.relname AS table_name,t.tgname,pg_get_triggerdef(t.oid,true) AS def FROM pg_trigger t
-      JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
-      WHERE n.nspname='public' AND NOT t.tgisinternal ORDER BY c.relname,t.tgname`,
-    enums:`SELECT t.typname,e.enumsortorder,e.enumlabel FROM pg_type t JOIN pg_enum e ON e.enumtypid=t.oid
-      JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public' ORDER BY t.typname,e.enumsortorder`,
+      WHERE n.nspname='public'
+      ORDER BY p.proname,pg_get_function_identity_arguments(p.oid)`,
+    triggers:`SELECT c.relname AS table_name,t.tgname,t.tgenabled,
+      pg_get_triggerdef(t.oid,true) AS def
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid=t.tgrelid
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND NOT t.tgisinternal
+      ORDER BY c.relname,t.tgname`,
+    enums:`SELECT t.typname,e.enumsortorder,e.enumlabel
+      FROM pg_type t JOIN pg_enum e ON e.enumtypid=t.oid
+      JOIN pg_namespace n ON n.oid=t.typnamespace
+      WHERE n.nspname='public'
+      ORDER BY t.typname,e.enumsortorder`,
     extensions:`SELECT extname,extversion FROM pg_extension ORDER BY extname`,
-    sequences:`SELECT schemaname,sequencename,data_type,start_value,min_value,max_value,
-      increment_by,cycle,cache_size,last_value FROM pg_sequences WHERE schemaname='public' ORDER BY sequencename`,
-    relations:`SELECT c.relname,c.relkind FROM pg_class c
-      JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','S','v','m')
+    sequences:`SELECT c.relname AS sequencename,
+      format_type(s.seqtypid,NULL) AS data_type,
+      s.seqstart,s.seqmin,s.seqmax,s.seqincrement,s.seqcycle,s.seqcache,
+      ps.last_value
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN pg_sequence s ON s.seqrelid=c.oid
+      LEFT JOIN pg_sequences ps
+        ON ps.schemaname=n.nspname AND ps.sequencename=c.relname
+      WHERE n.nspname='public' AND c.relkind='S'
+      ORDER BY c.relname`,
+    sequence_ownership:`SELECT seq.relname AS sequence_name,tbl.relname AS table_name,
+      a.attname AS column_name,d.deptype
+      FROM pg_class seq
+      JOIN pg_namespace ns ON ns.oid=seq.relnamespace
+      JOIN pg_depend d
+        ON d.classid='pg_class'::regclass AND d.objid=seq.oid
+       AND d.deptype IN ('a','i')
+      JOIN pg_class tbl ON tbl.oid=d.refobjid
+      JOIN pg_attribute a ON a.attrelid=tbl.oid AND a.attnum=d.refobjsubid
+      WHERE ns.nspname='public' AND seq.relkind='S'
+      ORDER BY seq.relname,tbl.relname,a.attname`,
+    relations:`SELECT c.relname,c.relkind,c.relpersistence,
+      c.relrowsecurity,c.relforcerowsecurity
+      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relkind IN ('r','p','S','v','m')
       ORDER BY c.relkind,c.relname`,
+    policies:`SELECT c.relname AS table_name,p.polname,p.polpermissive,p.polcmd,
+      ARRAY(
+        SELECT CASE WHEN x=0 THEN 'PUBLIC' ELSE pg_get_userbyid(x) END
+        FROM unnest(p.polroles) x
+        ORDER BY 1
+      ) AS roles,
+      pg_get_expr(p.polqual,p.polrelid) AS using_expr,
+      pg_get_expr(p.polwithcheck,p.polrelid) AS check_expr
+      FROM pg_policy p
+      JOIN pg_class c ON c.oid=p.polrelid
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public'
+      ORDER BY c.relname,p.polname`,
     migrations:`SELECT filename,sha256 FROM schema_migrations ORDER BY filename`
   };
-  const parts={}; for(const [k,q] of Object.entries(qs)) parts[k]=(await c.query(q)).rows;
-  parts.large_objects=(await c.query(`SELECT count(*)::int AS n FROM pg_largeobject_metadata`)).rows[0];
 
-  // Ownership and ACLs are environment-specific when restoring with
-  // --no-owner/--no-privileges. Record them separately rather than poisoning
-  // the structural catalog hash.
+  const parts={};
+  for(const [k,q] of Object.entries(qs)) parts[k]=(await c.query(q)).rows;
+  parts.large_objects=(await c.query(
+    `SELECT count(*)::int AS n FROM pg_largeobject_metadata`
+  )).rows[0];
+
   const security={
-    relations:(await c.query(`SELECT c.relname,c.relkind,pg_get_userbyid(c.relowner) AS owner,c.relacl::text AS acl
+    relations:(await c.query(`SELECT c.relname,c.relkind,
+      pg_get_userbyid(c.relowner) AS owner,c.relacl::text AS acl
       FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
       WHERE n.nspname='public' AND c.relkind IN ('r','p','S','v','m')
       ORDER BY c.relkind,c.relname`)).rows,
-    functions:(await c.query(`SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS args,
+    functions:(await c.query(`SELECT p.proname,
+      pg_get_function_identity_arguments(p.oid) AS args,
       pg_get_userbyid(p.proowner) AS owner,p.proacl::text AS acl
       FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public'
       ORDER BY p.proname,pg_get_function_identity_arguments(p.oid)`)).rows,
-    sequences:(await c.query(`SELECT sequencename,sequenceowner
-      FROM pg_sequences WHERE schemaname='public' ORDER BY sequencename`)).rows
+    sequences:(await c.query(`SELECT c.relname AS sequencename,
+      pg_get_userbyid(c.relowner) AS owner,c.relacl::text AS acl
+      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relkind='S'
+      ORDER BY c.relname`)).rows
   };
+
+  const environment={
+    database:(await c.query(`SELECT d.datname,
+      pg_encoding_to_char(d.encoding) AS encoding,d.datcollate,d.datctype,
+      d.datlocprovider,d.daticulocale,d.datcollversion
+      FROM pg_database d WHERE d.datname=current_database()`)).rows[0],
+    db_role_settings:(await c.query(`SELECT COALESCE(d.datname,'') AS database_name,
+      COALESCE(r.rolname,'') AS role_name,s.setconfig
+      FROM pg_db_role_setting s
+      LEFT JOIN pg_database d ON d.oid=s.setdatabase
+      LEFT JOIN pg_roles r ON r.oid=s.setrole
+      ORDER BY 1,2`)).rows,
+    role_configs:(await c.query(`SELECT rolname,rolconfig
+      FROM pg_roles WHERE rolconfig IS NOT NULL ORDER BY rolname`)).rows,
+    runtime:(await c.query(`SELECT
+      current_setting('server_version_num') AS server_version_num,
+      current_setting('default_toast_compression') AS default_toast_compression,
+      current_setting('TimeZone') AS timezone,
+      current_setting('search_path') AS search_path,
+      current_setting('bytea_output') AS bytea_output`)).rows[0]
+  };
+
   return {
     parts,
     sha256:sha256(stable(parts)),
     security,
-    security_sha256:sha256(stable(security))
+    security_sha256:sha256(stable(security)),
+    environment,
+    environment_sha256:sha256(stable(environment))
   };
 }
 
@@ -212,7 +317,10 @@ async function compareSourceRestore(source,restored){
     rows:Object.values(sd).reduce((n,x)=>n+x.count,0),
     source_security_sha256:sc.security_sha256,
     restored_security_sha256:rc.security_sha256,
-    security_metadata_equal:sc.security_sha256===rc.security_sha256
+    security_metadata_equal:sc.security_sha256===rc.security_sha256,
+    source_environment_sha256:sc.environment_sha256,
+    restored_environment_sha256:rc.environment_sha256,
+    environment_metadata_equal:sc.environment_sha256===rc.environment_sha256
   };
 }
 
