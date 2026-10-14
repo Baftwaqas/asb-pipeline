@@ -16,6 +16,10 @@
 
 BEGIN;
 
+-- Do not queue Shopify/customer writes behind this DDL. If the customer table
+-- cannot be locked promptly, abort the migration and retry in a quieter window.
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE customers
   DROP CONSTRAINT IF EXISTS customers_shopify_customer_id_key;
 

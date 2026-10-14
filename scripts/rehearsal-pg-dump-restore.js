@@ -37,7 +37,18 @@ async function admin(sql,params=[]){
   const c=new Client({connectionString:`${BASE}/postgres`}); await c.connect();
   try{return await c.query(sql,params);} finally{await c.end();}
 }
-async function conn(name){const c=new Client({connectionString:`${BASE}/${name}`});await c.connect();return c;}
+async function configureComparisonSession(c){
+  await c.query("SET TIME ZONE 'UTC'");
+  await c.query("SET DateStyle TO 'ISO, YMD'");
+  await c.query("SET IntervalStyle TO 'iso_8601'");
+  await c.query("SET extra_float_digits TO 3");
+}
+async function conn(name){
+  const c=new Client({connectionString:`${BASE}/${name}`});
+  await c.connect();
+  await configureComparisonSession(c);
+  return c;
+}
 async function drop(name){await admin(`DROP DATABASE IF EXISTS ${ident(name)} WITH (FORCE)`);}
 
 async function dataSnapshot(c){
@@ -61,8 +72,8 @@ async function catalogSnapshot(c){
     indexes:`SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname='public' ORDER BY tablename,indexname`,
     views:`SELECT c.relname AS view_name,pg_get_viewdef(c.oid,true) AS def FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('v','m') ORDER BY c.relname`,
-    functions:`SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS args,pg_get_functiondef(p.oid) AS def,
-      pg_get_userbyid(p.proowner) AS owner,p.proacl::text AS acl FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+    functions:`SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS args,pg_get_functiondef(p.oid) AS def
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
       WHERE n.nspname='public' ORDER BY p.proname,pg_get_function_identity_arguments(p.oid)`,
     triggers:`SELECT c.relname AS table_name,t.tgname,pg_get_triggerdef(t.oid,true) AS def FROM pg_trigger t
       JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -70,16 +81,38 @@ async function catalogSnapshot(c){
     enums:`SELECT t.typname,e.enumsortorder,e.enumlabel FROM pg_type t JOIN pg_enum e ON e.enumtypid=t.oid
       JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public' ORDER BY t.typname,e.enumsortorder`,
     extensions:`SELECT extname,extversion FROM pg_extension ORDER BY extname`,
-    sequences:`SELECT schemaname,sequencename,sequenceowner,data_type,start_value,min_value,max_value,
+    sequences:`SELECT schemaname,sequencename,data_type,start_value,min_value,max_value,
       increment_by,cycle,cache_size,last_value FROM pg_sequences WHERE schemaname='public' ORDER BY sequencename`,
-    relations:`SELECT c.relname,c.relkind,pg_get_userbyid(c.relowner) AS owner,c.relacl::text AS acl FROM pg_class c
+    relations:`SELECT c.relname,c.relkind FROM pg_class c
       JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','S','v','m')
       ORDER BY c.relkind,c.relname`,
     migrations:`SELECT filename,sha256 FROM schema_migrations ORDER BY filename`
   };
   const parts={}; for(const [k,q] of Object.entries(qs)) parts[k]=(await c.query(q)).rows;
   parts.large_objects=(await c.query(`SELECT count(*)::int AS n FROM pg_largeobject_metadata`)).rows[0];
-  return {parts,sha256:sha256(stable(parts))};
+
+  // Ownership and ACLs are environment-specific when restoring with
+  // --no-owner/--no-privileges. Record them separately rather than poisoning
+  // the structural catalog hash.
+  const security={
+    relations:(await c.query(`SELECT c.relname,c.relkind,pg_get_userbyid(c.relowner) AS owner,c.relacl::text AS acl
+      FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND c.relkind IN ('r','p','S','v','m')
+      ORDER BY c.relkind,c.relname`)).rows,
+    functions:(await c.query(`SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS args,
+      pg_get_userbyid(p.proowner) AS owner,p.proacl::text AS acl
+      FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+      WHERE n.nspname='public'
+      ORDER BY p.proname,pg_get_function_identity_arguments(p.oid)`)).rows,
+    sequences:(await c.query(`SELECT sequencename,sequenceowner
+      FROM pg_sequences WHERE schemaname='public' ORDER BY sequencename`)).rows
+  };
+  return {
+    parts,
+    sha256:sha256(stable(parts)),
+    security,
+    security_sha256:sha256(stable(security))
+  };
 }
 
 async function semanticSourceChecks(c){
@@ -165,15 +198,31 @@ function restoreDump(cid,name){
 }
 
 async function compareSourceRestore(source,restored){
-  const [sd,rd,sc,rc]=await Promise.all([dataSnapshot(source),dataSnapshot(restored),catalogSnapshot(source),catalogSnapshot(restored)]);
-  assert.deepEqual(rd,sd); assert.equal(rc.sha256,sc.sha256); assert.deepEqual(rc.parts,sc.parts);
-  return {data_sha256:sha256(stable(sd)),catalog_sha256:sc.sha256,tables:Object.keys(sd).length,
-    rows:Object.values(sd).reduce((n,x)=>n+x.count,0)};
+  const [sd,rd,sc,rc]=await Promise.all([
+    dataSnapshot(source),dataSnapshot(restored),catalogSnapshot(source),catalogSnapshot(restored)
+  ]);
+  assert.deepEqual(rd,sd,"canonical UTC/ISO table data must match after restore");
+  assert.equal(rc.sha256,sc.sha256,"structural catalog hash must match after restore");
+  assert.deepEqual(rc.parts,sc.parts,"structural catalog details must match after restore");
+
+  return {
+    data_sha256:sha256(stable(sd)),
+    catalog_sha256:sc.sha256,
+    tables:Object.keys(sd).length,
+    rows:Object.values(sd).reduce((n,x)=>n+x.count,0),
+    source_security_sha256:sc.security_sha256,
+    restored_security_sha256:rc.security_sha256,
+    security_metadata_equal:sc.security_sha256===rc.security_sha256
+  };
 }
 
 async function forwardMigrateAndBackfill(restoreUrl){
   run(process.execPath,[path.join(ROOT,"scripts","migrate.js")],{cwd:ROOT,env:{...process.env,DATABASE_URL:restoreUrl}});
-  const pool=new Pool({connectionString:restoreUrl,max:2});
+  const pool=new Pool({
+    connectionString:restoreUrl,
+    max:2,
+    options:"-c TimeZone=UTC -c DateStyle=ISO,YMD -c IntervalStyle=iso_8601 -c extra_float_digits=3"
+  });
   const db={query:(t,p)=>pool.query(t,p),tx:async(fn)=>{const c=await pool.connect();try{await c.query("BEGIN");
     const r=await fn(c);await c.query("COMMIT");return r;}catch(e){await c.query("ROLLBACK");throw e;}finally{c.release();}}};
   try{
