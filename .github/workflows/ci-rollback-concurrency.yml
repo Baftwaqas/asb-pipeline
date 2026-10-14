@@ -7,6 +7,11 @@ on:
     paths:
       - scripts/rehearsal-server-helper.js
       - scripts/rehearsal-rollback-concurrency.js
+      - scripts/lib/db-target-guard.js
+      - scripts/migrate.js
+      - scripts/grocery-backfill.js
+      - scripts/rehearsal-pg-dump-restore.js
+      - db/migrations/018_customer_shopify_id_nonunique.sql
       - .github/workflows/ci-rollback-concurrency.yml
   workflow_dispatch:
 
@@ -38,6 +43,7 @@ jobs:
       TEST_PG_URL: postgres://postgres:postgres@localhost:54330
       PGSSLMODE: disable
       ROLLBACK_SHA: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
+      AWARE_SHA: ${{ github.sha }}
       RACE_ITERATIONS: "25"
 
     steps:
