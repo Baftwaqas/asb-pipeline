@@ -8,6 +8,9 @@ on:
       - scripts/rehearsal-server-helper.js
       - scripts/rehearsal-rollback-concurrency.js
       - scripts/lib/db-target-guard.js
+      - scripts/rehearsal-db.js
+      - package.json
+      - package-lock.json
       - scripts/migrate.js
       - scripts/grocery-backfill.js
       - scripts/rehearsal-pg-dump-restore.js

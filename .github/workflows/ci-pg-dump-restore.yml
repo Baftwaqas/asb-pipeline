@@ -8,6 +8,9 @@ on:
       - scripts/rehearsal-pg-dump-restore.js
       - scripts/rehearsal-migration-018-lock.js
       - scripts/lib/db-target-guard.js
+      - scripts/rehearsal-db.js
+      - package.json
+      - package-lock.json
       - scripts/migrate.js
       - scripts/grocery-backfill.js
       - test/db-target-safety.test.js
