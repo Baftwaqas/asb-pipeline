@@ -91,11 +91,19 @@ async function semanticSourceChecks(c){
     (SELECT count(*)::int FROM order_items) order_items,
     (SELECT count(*)::int FROM customers) customers,
     (SELECT count(*)::int FROM webhook_events WHERE source='shopify' AND topic='orders/create') order_events,
-    (SELECT count(*)::int FROM webhook_events WHERE source='shopify' AND topic='orders/create' AND status='failed') failed_events,
+    (SELECT count(*)::int FROM webhook_events WHERE source='shopify' AND topic='orders/create' AND status='processed') processed_events,
     (SELECT count(*)::int FROM community_intake) community_intake,
     (SELECT count(*)::int FROM whatsapp_messages WHERE direction='outbound') outbound`)).rows[0];
   assert.ok(s.orders>=2); assert.ok(s.order_items>=3); assert.ok(s.customers>=2);
-  assert.ok(s.order_events>=5); assert.ok(s.failed_events>=1); assert.ok(s.community_intake>=2); assert.ok(s.outbound>=3);
+  assert.ok(s.order_events>=5); assert.ok(s.processed_events>=5); assert.ok(s.community_intake>=2); assert.ok(s.outbound>=3);
+  const oldFailure=(await c.query(`SELECT we.status,
+      EXISTS(SELECT 1 FROM orders o WHERE o.shopify_order_id='8930000000005') AS has_order,
+      EXISTS(SELECT 1 FROM whatsapp_messages m
+              WHERE m.idempotency_key='order_confirmed:shopify:8930000000005'
+                AND m.status::text IN ('sent','delivered','read')) AS bill_evidence
+    FROM webhook_events we WHERE we.source='shopify' AND we.event_id='dr-failed-old-code'`)).rows[0];
+  assert.deepEqual(oldFailure,{status:"processed",has_order:false,bill_evidence:true},
+    "exact old-code failure must remain processed + no order + bill evidence");
   return s;
 }
 
@@ -125,7 +133,7 @@ async function populateProduction(){
     const bad={variant_id:59999999999991,product_id:19999999999991,sku:"DR-BAD-PRICE",
       title:"Synthetic Restore Failure",price:"999999999999999999.00"};
     assert.equal(await send(H.shopifyOrder({id:8930000000005,name:"#DR-FAIL",lines:[H.line(bad,1)],
-      phone:"+92 304 7500004",createdAt:"2026-10-08T06:08:00+05:00"}),"dr-failed-old-code"),"failed");
+      phone:"+92 304 7500004",createdAt:"2026-10-08T06:08:00+05:00"}),"dr-failed-old-code"),"processed");
     await worker.runOnce(db); await worker.runOnce(db);
     const checks=await semanticSourceChecks(db); assert.ok(sent.length>=3);
     console.log("SOURCE POPULATED",JSON.stringify({...checks,stubbed_sends:sent.length}));
@@ -175,7 +183,13 @@ async function forwardMigrateAndBackfill(restoreUrl){
     const backfill=require(path.join(ROOT,"grocery","backfill.js"));
     const p1=await backfill.plan(db,{shop:SHOP}),p2=await backfill.plan(db,{shop:SHOP});
     assert.equal(p1.plan_sha256,p2.plan_sha256); assert.ok(p1.rows.length>=5);
-    assert.ok(p1.rows.some(r=>r.legacy_reason==="event_failed"&&r.shopify_order_id==="8930000000005"));
+    const oldFailurePlan=p1.rows.find(r=>r.shopify_order_id==="8930000000005");
+    assert.ok(oldFailurePlan,"old failed-write order must be present in backfill");
+    assert.deepEqual(
+      [oldFailurePlan.legacy_reason,oldFailurePlan.order_id,oldFailurePlan.legacy_bill_evidence],
+      ["event_processed_unmapped",null,true],
+      "old write-failure + improvised bill must be quarantined, never replayed/rebilled"
+    );
     const applied=await backfill.apply(db,{shop:SHOP,by:"synthetic-dr-ci",
       reason:"synthetic pg_dump/pg_restore disaster recovery proof",planSha:p1.plan_sha256});
     assert.equal(applied.plan_sha256,p1.plan_sha256); assert.equal((await backfill.markerOf(db)).plan_sha256,p1.plan_sha256);
