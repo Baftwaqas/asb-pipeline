@@ -615,6 +615,75 @@ app.get("/healthz", async (req, res) => {
 });
 
 // ------------------------------------------------------------
+// L3 receipt safety (migration 017)
+//
+// L3 may temporarily receive Meta delivery receipts while the 017-aware app is
+// offline. Every known receipt is journalled BEFORE Meta gets HTTP 200. L3
+// applies only the monotonic whatsapp_messages projection; it deliberately
+// leaves backlog.applied_at NULL so the full 017 receipt engine can later
+// reconcile grocery bill proof / retry semantics.
+// ------------------------------------------------------------
+const ROLLBACK_RECEIPT_KNOWN = new Set(["sent", "delivered", "read", "failed"]);
+
+function rollbackReceiptStatusesIn(body) {
+  const out = [];
+  for (const entry of body?.entry || []) {
+    for (const change of entry?.changes || []) {
+      for (const s of change?.value?.statuses || []) {
+        if (s?.id && ROLLBACK_RECEIPT_KNOWN.has(String(s.status))) out.push(s);
+      }
+    }
+  }
+  return out;
+}
+
+async function rollbackJournalReceipts(statuses) {
+  if (!statuses.length) return 0;
+  return db.tx(async (c) => {
+    let n = 0;
+    for (const s of statuses) {
+      const ts = Number(s.timestamp);
+      const r = await c.query(
+        `INSERT INTO whatsapp_receipt_backlog (wamid, status, recipient_id, meta_timestamp, errors)
+         VALUES ($1, $2, $3,
+                 CASE WHEN $4::double precision IS NULL THEN NULL ELSE to_timestamp($4) END,
+                 $5)
+         ON CONFLICT (wamid, status) DO NOTHING`,
+        [
+          String(s.id),
+          String(s.status),
+          s.recipient_id || null,
+          Number.isFinite(ts) ? ts : null,
+          s.errors ? JSON.stringify(s.errors) : null,
+        ]
+      );
+      n += r.rowCount;
+    }
+    return n;
+  });
+}
+
+async function rollbackApplyReceiptToMessage(status) {
+  const ts = Number(status.timestamp);
+  const at = Number.isFinite(ts) ? new Date(ts * 1000) : new Date();
+  const errCode = status.errors?.[0]?.code?.toString() || null;
+  await db.query(
+    `UPDATE whatsapp_messages
+        SET status       = $2::text::msg_status,
+            sent_at      = CASE WHEN $2::text IN ('sent','delivered','read')
+                                THEN COALESCE(sent_at, $3::timestamptz) ELSE sent_at END,
+            delivered_at = CASE WHEN $2::text IN ('delivered','read')
+                                THEN COALESCE(delivered_at, $3::timestamptz) ELSE delivered_at END,
+            read_at      = CASE WHEN $2::text = 'read'
+                                THEN COALESCE(read_at, $3::timestamptz) ELSE read_at END,
+            error_code   = CASE WHEN $2::text = 'failed' THEN $4 ELSE error_code END
+      WHERE wamid = $1
+        AND asb_msg_status_rank(status::text) < asb_msg_status_rank($2::text)`,
+    [String(status.id), String(status.status), at, errCode]
+  );
+}
+
+// ------------------------------------------------------------
 // ROUTE 1: Meta webhook VERIFICATION handshake (GET)
 // ------------------------------------------------------------
 app.get("/webhooks/whatsapp", (req, res) => {
@@ -650,16 +719,26 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     return res.sendStatus(401);
   }
 
-  // Always answer 200 fast, or Meta keeps retrying
-  res.sendStatus(200);
-
   let body;
   try {
     body = JSON.parse(raw.toString("utf8"));
   } catch (e) {
     console.error("[wa] webhook body is not JSON:", e.message);
-    return;
+    return res.sendStatus(200);
   }
+
+  // Receipts are different from ordinary inbound messages: if L3 ACKs one
+  // without durable storage, Meta may never send it again. Journal every known
+  // status before the ACK; a journal failure must answer 503 so Meta retries.
+  const rollbackReceipts = rollbackReceiptStatusesIn(body);
+  try {
+    await rollbackJournalReceipts(rollbackReceipts);
+  } catch (e) {
+    console.error("[wa] receipt journal failed before ACK:", e.message);
+    return res.sendStatus(503);
+  }
+
+  res.sendStatus(200);
 
   const eventId = crypto
     .createHash("sha256")
@@ -705,24 +784,14 @@ app.post("/webhooks/whatsapp", async (req, res) => {
         }
 
         // --- delivery receipts for things we sent ---
+        // Already journalled before the 200 above. L3 updates the visible
+        // message monotonically but leaves backlog.applied_at NULL; when 017
+        // returns, its receipt engine replays the row to reconcile bill proof.
         for (const status of value.statuses || []) {
           console.log(`STATUS: ${status.recipient_id} -> "${status.status}"`);
+          if (!status?.id || !ROLLBACK_RECEIPT_KNOWN.has(String(status.status))) continue;
           try {
-            await db.query(
-              `UPDATE whatsapp_messages
-                  SET status = $2::msg_status,
-                      delivered_at = CASE WHEN $2::text IN ('delivered','read')
-                                          THEN COALESCE(delivered_at, now()) END,
-                      read_at      = CASE WHEN $2::text = 'read'
-                                          THEN COALESCE(read_at, now()) END,
-                      error_code   = $3
-                WHERE wamid = $1`,
-              [
-                status.id,
-                status.status,
-                status.errors?.[0]?.code?.toString() || null,
-              ]
-            );
+            await rollbackApplyReceiptToMessage(status);
             handled++;
           } catch (e) {
             console.error("[wa] status update failed:", e.message);
