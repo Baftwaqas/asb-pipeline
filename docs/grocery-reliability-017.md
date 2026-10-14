@@ -99,7 +99,7 @@ Each step needs Waqas's approval. Nothing here touches production; real WhatsApp
 
 Every step needs Waqas's explicit approval. Steps 2–7 happen in one supervised, quiet window.
 
-1. Apply 017: `node scripts/migrate.js`. Old code ignores the new tables.
+1. Apply 017 only after setting `ASB_MUTATION_DB_HOST` and `ASB_MUTATION_DB_NAME` to the exact approved production direct host/database, then run `node scripts/migrate.js`. The guard refuses a remote mutation without both independent values and refuses Neon pooled endpoints. Clear both authorization variables immediately afterward. Old code ignores the new tables.
 2. Deploy the 017 code with `GROCERY_SOURCE_WORKER=off` and `GROCERY_BILL_SEND=off`.
    - `/healthz` gives 503 until 017 is applied, so a deploy ahead of the migration is caught.
 3. Confirm the old instance is gone:
@@ -114,10 +114,13 @@ Every step needs Waqas's explicit approval. Steps 2–7 happen in one supervised
      ```
 4. Definitive dry run: `node scripts/grocery-backfill.js --shop 0du4xf-6j.myshopify.com`.
    - Waqas approves the printed `plan_sha256`.
-5. Apply:
+5. Apply only with the exact production direct host/database separately authorized:
    ```
+   ASB_MUTATION_DB_HOST=<approved direct host>
+   ASB_MUTATION_DB_NAME=<approved database>
    node scripts/grocery-backfill.js --shop ... --apply --plan-sha <hash> --by "Waqas" --reason "..."
    ```
+   Clear both authorization variables immediately after the apply.
    - It runs as one transaction under an advisory lock.
    - It refuses if the plan hash changed.
    - It writes the marker last.
