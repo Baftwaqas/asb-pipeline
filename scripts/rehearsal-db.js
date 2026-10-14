@@ -25,6 +25,8 @@
 
 "use strict";
 
+const { targetOf } = require("./lib/db-target-guard");
+
 class Refused extends Error {}
 
 const endpointId = (host) => String(host).toLowerCase().split(".")[0].replace(/-pooler$/, "");
@@ -35,7 +37,8 @@ function checkHost({ databaseUrl, expectedHost, productionHost }) {
   if (!expectedHost || !String(expectedHost).trim()) throw new Refused("EXPECTED_REHEARSAL_DB_HOST is not set");
   if (!productionHost || !String(productionHost).trim()) throw new Refused("PRODUCTION_DB_HOST is not set (the known production endpoint host)");
   let actual;
-  try { actual = new URL(databaseUrl).hostname.toLowerCase(); } catch { throw new Refused("DATABASE_URL is not a valid URL"); }
+  try { actual = targetOf(databaseUrl).host; }
+  catch (e) { throw new Refused(e.message); }
   const expected = String(expectedHost).trim().toLowerCase();
   const production = String(productionHost).trim().toLowerCase();
   if (actual === production || endpointId(actual) === endpointId(production)) {
