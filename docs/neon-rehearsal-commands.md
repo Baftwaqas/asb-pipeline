@@ -17,6 +17,8 @@
      - `EXPECTED_REHEARSAL_DB_HOST` is supplied, and the host equals it **exactly**;
      - `PRODUCTION_DB_HOST` is supplied, and the host is **not** production's endpoint (the direct and `-pooler` forms are both refused);
      - the host is not a pooled (`-pooler`) host;
+     - connection-string query parameters `host=` and `hostaddr=` are refused before connecting;
+     - the effective target is parsed with the same parser used by node-postgres;
      - for every mode except `--mark`, the database is marked `asb_environment='rehearsal'`.
    - The marker itself is written **only** by `node scripts/rehearsal-db.js --mark --apply`, after those host checks.
    - **The Neon SQL Editor is used for SELECTs only.** Marking production would suppress production push notifications.
@@ -135,7 +137,11 @@ Expected: the only pending file is `017_shopify_order_sources.sql`. Stop if any 
 
 ```powershell
 node scripts/rehearsal-db.js --check
+$env:ASB_MUTATION_DB_HOST = $env:EXPECTED_REHEARSAL_DB_HOST
+$env:ASB_MUTATION_DB_NAME = "neondb"
 if ($LASTEXITCODE -eq 0) { node scripts/migrate.js }
+Remove-Item Env:ASB_MUTATION_DB_HOST -ErrorAction SilentlyContinue
+Remove-Item Env:ASB_MUTATION_DB_NAME -ErrorAction SilentlyContinue
 node scripts/rehearsal-db.js --check
 ```
 
@@ -169,7 +175,11 @@ The apply in step 6 refuses unless the plan computed at that moment has exactly 
 
 ```powershell
 node scripts/rehearsal-db.js --check
+$env:ASB_MUTATION_DB_HOST = $env:EXPECTED_REHEARSAL_DB_HOST
+$env:ASB_MUTATION_DB_NAME = "neondb"
 if ($LASTEXITCODE -eq 0) { node scripts/grocery-backfill.js --shop 0du4xf-6j.myshopify.com --apply --plan-sha <approved plan_sha256> --by "Waqas" --reason "Neon rehearsal 017 backfill" }
+Remove-Item Env:ASB_MUTATION_DB_HOST -ErrorAction SilentlyContinue
+Remove-Item Env:ASB_MUTATION_DB_NAME -ErrorAction SilentlyContinue
 ```
 
 Expected: JSON with the inserted and upgraded counts and the marker written. A `[backfill] REFUSED: …` means nothing was written.
