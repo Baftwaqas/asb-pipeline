@@ -172,7 +172,7 @@ const billUpgradeV3 = action(async (c, { sourceId, by, reason }) => {
 
   const existing = Number((await c.query(
     `SELECT count(*)::int n FROM shopify_order_source_audit
-      WHERE source_id = $1 AND action = 'bill_upgrade_v3'`, [s.id])).rows[0].n);
+      WHERE source_id = $1 AND action = 'bill_hold' AND detail->>'kind' = 'v3_test_override'`, [s.id])).rows[0].n);
   if (existing !== 0) throw new Error("v3 upgrade already exists for this source");
 
   const frozen = typeof snap.content === "string" ? JSON.parse(snap.content) : snap.content;
@@ -185,8 +185,9 @@ const billUpgradeV3 = action(async (c, { sourceId, by, reason }) => {
   const holdReason = `v3 controlled test awaiting explicit send approval: ${reason}`;
 
   const id = await audit(c, s, {
-    action: "bill_upgrade_v3", by, reason,
+    action: "bill_hold", by, reason,
     detail: {
+      kind: "v3_test_override",
       from_template: snap.template_name,
       to_template: t.name,
       bill_key: snap.bill_key,
