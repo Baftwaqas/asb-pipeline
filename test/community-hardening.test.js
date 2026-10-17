@@ -160,18 +160,18 @@ test("tripwire: no code reads orders.source_payload or Shopify webhook payloads 
       }
     });
   }
-  // Allowed: the column definition, the one INSERT in persistOrder, comments.
+  // Allowed: the column definition, the one INSERT in the bag writer, comments.
   const allowed = hits.filter((h) =>
     /^db\/migrations\/001_init\.sql:\d+: source_payload\s+JSONB/.test(h) ||
-    /^server\.js:\d+:\s+source_payload, placed_at\)/.test(h) ||
-    /^(server\.js|community\/sanitize\.js):\d+: \/\//.test(h) ||
+    /^grocery\/write\.js:\d+:\s+source_payload, placed_at\)/.test(h) ||
+    /^(server\.js|grocery\/write\.js|community\/sanitize\.js):\d+: \/\//.test(h) ||
     // the split marker's explanatory text (a string literal, not a read)
     /^community\/sanitize\.js:\d+: "Original order:/.test(h) ||
     // the rehearsal tool reads it only to VERIFY sanitization on a staging copy
     /^scripts\/community-rehearsal\.js:/.test(h));
   assert.deepEqual(hits.filter((h) => !allowed.includes(h)), [],
     "a new reader of a raw/original payload appeared - grocery logic must only use sanitized lines");
-  assert.ok(allowed.some((h) => h.startsWith("server.js")), "the INSERT is still the only writer");
+  assert.ok(allowed.some((h) => h.startsWith("grocery/write.js")), "the INSERT is still the only writer");
 });
 
 test("sanitized grocery view is an allow-list and the backstop rejects any Community line in it", async () => {
@@ -346,11 +346,10 @@ test("safety mode: worker OFF still isolates and captures; lines wait, never bec
 });
 
 // ---------------------------------------------------------------------------
-// 6. Known Phase-2 blocker, recorded as a TODO (reported, does not fail)
+// 6. Former Phase-2 blocker - fixed by migration 017 (shopify_order_sources)
 // ---------------------------------------------------------------------------
 
-test("PHASE-2 BLOCKER: same order under a NEW delivery id must not double grocery qty or re-bill",
-  { todo: "pre-existing on main: findOpenOrder merges the order into itself. Fix before subscribing to orders/updated or orders/edited." },
+test("017: same order under a NEW delivery id does not double grocery qty or re-bill",
   async () => {
     const lines = [H.line(H.GROCERY.aloo, 2)];
     const first = await sendOrder(lines, { phone: "+92 345 2020202" });

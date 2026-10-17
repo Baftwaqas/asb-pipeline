@@ -48,3 +48,17 @@ Shopify topics handled: `orders/create`, `products/create`, `products/update`, `
 Operator commands: `npm run community:review`, `npm run community:registry`, `npm run community:rehearsal`.
 
 Tests: `npm test` (needs a scratch Postgres; `TEST_PG_URL`, default `postgres://postgres@localhost:54330`).
+
+## Grocery reliability — migration 017 (branch `grocery-reliability-017`)
+
+One `shopify_order_sources` row per Shopify order is reserved before the 200, so a Shopify order is applied to a bag at most once, whatever its delivery id. A durable worker applies orders after the 200; bills are frozen at apply time and sent at most once automatically; WhatsApp receipts are journalled before the 200 and applied monotonically.
+
+New environment switches (both default **off**; each also needs an audited activation record):
+
+- `GROCERY_SOURCE_WORKER=on` — apply captured orders (needs the 017 backfill marker + `npm run grocery:activate -- --worker ...`)
+- `GROCERY_BILL_SEND=on` — send order bills (needs `npm run grocery:activate -- --bills ...`)
+
+- `GROCERY_ALERT_PUSH=on` — push grocery alerts to inbox devices (default off: alerts recorded only)
+- `PUSH_DISABLED=1` — suppress every push (a database marked `asb_environment='rehearsal'` does this automatically)
+
+While the worker is off, orders are captured safely but grocery processing is paused. Full design, cutover runbook, rollback ladder and operator commands: `docs/grocery-reliability-017.md`.

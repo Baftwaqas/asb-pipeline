@@ -68,6 +68,20 @@ async function upsertCustomer(client, { phone, name, shopifyCustomerId }) {
 }
 
 // ---------------------------------------------------------------------------
+// Serialise every bag write for one household (migration 017).
+//
+// Two orders for the same household - two Shopify orders, or a Shopify order
+// and an inbox order - must not both see "no open bag" and race to create
+// one. Locking the customer row makes the second writer wait until the first
+// commits, so its findOpenOrder() sees the committed bag and merges exactly
+// once. (upsertCustomer's ON CONFLICT DO UPDATE happened to take this lock
+// already; this makes it explicit and independent of that detail.)
+// ---------------------------------------------------------------------------
+async function lockHousehold(client, customerId) {
+  await client.query(`SELECT id FROM customers WHERE id = $1 FOR UPDATE`, [customerId]);
+}
+
+// ---------------------------------------------------------------------------
 // The household's live bag for this delivery, if there is one.
 // ---------------------------------------------------------------------------
 async function findOpenOrder(client, customerId, cycleId) {
@@ -166,6 +180,7 @@ async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy
     }
   }
 
+  await lockHousehold(client, customer.id);
   let orderRow = await findOpenOrder(client, customer.id, cycle.id);
   const merged = Boolean(orderRow);
 
@@ -225,6 +240,7 @@ module.exports = {
   resolveCycle,
   upsertCustomer,
   findOpenOrder,
+  lockHousehold,
   loadOrderForBill,
   saveInboxOrder,
   userError,

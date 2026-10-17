@@ -1,0 +1,63 @@
+name: CI - L3/017 In-flight Boundaries
+
+on:
+  push:
+    branches:
+      - grocery-reliability-017-reconcile
+    paths:
+      - scripts/rehearsal-rollback-inflight.js
+      - .github/workflows/ci-rollback-inflight.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inflight:
+    name: Processing / sending / receipts / PostgreSQL 18
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54330:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54330
+      PGSSLMODE: disable
+      ROLLBACK_SHA: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
+    steps:
+      - name: Checkout 017 recovery candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Checkout exact proven L3
+        uses: actions/checkout@v4
+        with:
+          ref: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
+          path: rollback
+          fetch-depth: 1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".node-version"
+          cache: npm
+      - name: Install 017 dependencies
+        run: npm ci
+      - name: Install L3 dependencies
+        working-directory: rollback
+        run: npm ci
+      - name: Run in-flight boundary rehearsal
+        env:
+          AWARE_DIR: ${{ github.workspace }}
+          ROLLBACK_DIR: ${{ github.workspace }}/rollback
+        run: node scripts/rehearsal-rollback-inflight.js

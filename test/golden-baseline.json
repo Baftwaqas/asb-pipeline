@@ -1,0 +1,6 @@
+{
+  "comment": "The ongoing golden baseline = the PREVIOUS production release. Update deliberately, as part of each release, after it is live. A change in golden-covered behaviour must list the changed dump keys in expected_diff and be reviewed.",
+  "tag": "prod-2026-10-08-phase1",
+  "sha": "3296c0f9acac8f645eda2c52e9ab3e1cdfa8c56e",
+  "expected_diff": []
+}

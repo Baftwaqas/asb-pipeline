@@ -105,9 +105,33 @@ async function sendOne(db, row, payload) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Rehearsal / safety guard (migration 017). A Neon branch copied from
+// production carries the real push_subscriptions and VAPID keys, so a
+// rehearsal could otherwise notify the real ASB phones. Push is SUPPRESSED -
+// no network action at all - when either:
+//   * PUSH_DISABLED=1 (or true/on) in the environment, or
+//   * the database is marked app_settings asb_environment = 'rehearsal'.
+// ---------------------------------------------------------------------------
+async function suppressed(db) {
+  if (["1", "true", "on"].includes(String(process.env.PUSH_DISABLED || "").toLowerCase())) return "PUSH_DISABLED";
+  try {
+    const { rows } = await db.query(`SELECT value FROM app_settings WHERE key = 'asb_environment'`);
+    if (rows[0]?.value === "rehearsal") return "rehearsal_environment";
+  } catch (e) {
+    return `environment check failed: ${e.message}`;     // fail closed
+  }
+  return null;
+}
+
 /** Push to every device; `only` limits it to one endpoint (test button). */
 async function notifyAll(db, payload, only = null) {
   try {
+    const why = await suppressed(db);
+    if (why) {
+      console.log(`[push] suppressed (${why}): ${String(payload?.title || "").slice(0, 60)}`);
+      return { devices: 0, delivered: 0, suppressed: why };
+    }
     await loadKeys(db);
     const { rows } = only
       ? await db.query(`SELECT * FROM push_subscriptions WHERE endpoint = $1`, [only])
@@ -137,4 +161,4 @@ async function newMessage(db, { from, name, preview, type }) {
   });
 }
 
-module.exports = { publicKey, subscribe, unsubscribe, notifyAll, newMessage, localPhone };
+module.exports = { publicKey, subscribe, unsubscribe, notifyAll, newMessage, localPhone, suppressed, _webpush: webpush };

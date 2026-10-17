@@ -41,11 +41,32 @@ async function guard(db, base) {
   if (h?.community?.environment !== "rehearsal") {
     throw new RehearsalRefused(`app at ${base} is not wired to a rehearsal database (environment=${h?.community?.environment})`);
   }
-  if (h?.config?.whatsappToken) {
-    throw new RehearsalRefused("app has a WhatsApp token - unset WHATSAPP_TOKEN on staging so no customer can be messaged");
+  // Real WhatsApp stays disabled: either no token, or every Meta call goes to
+  // a LOCAL fake Graph (scripts/fake-graph.js via GRAPH_BASE).
+  const localGraph = ["127.0.0.1", "localhost", "::1"].includes(h?.config?.graphHost);
+  if (h?.config?.whatsappToken && !localGraph) {
+    throw new RehearsalRefused(`app has a WhatsApp token and Meta calls go to ${h?.config?.graphHost} - unset WHATSAPP_TOKEN or point GRAPH_BASE at scripts/fake-graph.js`);
   }
   if (!h?.community?.ready) throw new RehearsalRefused(`app reports Community not ready: ${JSON.stringify(h.community)}`);
   if (!(h.community.variants_resolvable > 0)) throw new RehearsalRefused("registry has no resolvable variant - load the snapshot first");
+  // Migration 017: a full rehearsal exercises the worker, real bill sending
+  // (to the fake Graph) and alert push - so every one of them must be ON, and
+  // push must be suppressed so real ASB phones are never notified from a copy
+  // of production. Strict checks: a missing field refuses.
+  const g = h.grocery;
+  if (!g || g.available !== true) {
+    throw new RehearsalRefused(`app does not report the 017 grocery pipeline as available (${JSON.stringify(g)})`);
+  }
+  const missing = [];
+  if (g.worker_enabled !== true) missing.push("worker_enabled (GROCERY_SOURCE_WORKER=on + backfill marker + grocery:activate --worker)");
+  if (g.bills_enabled !== true) missing.push("bills_enabled (GROCERY_BILL_SEND=on + grocery:activate --bills)");
+  if (g.alert_push !== true) missing.push("alert_push (GROCERY_ALERT_PUSH=on)");
+  if (missing.length) {
+    throw new RehearsalRefused(`grocery switches not all on for a full 017 rehearsal - missing: ${missing.join("; ")}`);
+  }
+  if (!g.push_suppressed) {
+    throw new RehearsalRefused("push notifications are NOT suppressed on staging (mark the database as rehearsal or set PUSH_DISABLED=1)");
+  }
   return h;
 }
 
@@ -59,8 +80,12 @@ async function rehearse({ db, base, secret, log = console.log }) {
   const run = Date.now() % 1e9;
   const shop = process.env.SHOPIFY_SHOP_DOMAIN || "rehearsal.myshopify.com";
   let seq = 0;
+  // Every synthetic id is unique PER RUN (run * 100 + seq; seq stays < 100),
+  // so a second rehearsal on the same database never reuses an earlier run's
+  // ids. Largest value ~9.4e12, far inside Number.MAX_SAFE_INTEGER.
   const lineId = () => 9100000000000 + run * 100 + ++seq;
   const orderId = () => 9200000000000 + run * 100 + ++seq;
+  const customerId = () => 9300000000000 + run * 100 + seq;   // seq of the order just created
 
   const grocery = (await db.query(
     `SELECT shopify_variant_id, shopify_product_id, sku, name_en, asb_price
@@ -77,7 +102,7 @@ async function rehearse({ db, base, secret, log = console.log }) {
   const fakePhone = (n) => `+92 39${String(run % 1e6).padStart(6, "0")}${String(n).padStart(2, "0")}`;
   const mk = (name, lines, phone) => ({
     id: orderId(), name: `#REH-${run}-${name}`, created_at: new Date().toISOString(), currency: "PKR",
-    total_price: "0", customer: { id: 9300000000000 + seq, first_name: "Rehearsal", last_name: name },
+    total_price: "0", customer: { id: customerId(), first_name: "Rehearsal", last_name: name },
     shipping_address: { first_name: "Rehearsal", phone, address1: "Test", address2: "Test" },
     line_items: lines.map(([b, q]) => ({ id: lineId(), quantity: q, vendor: "Apna Sasta Bazaar", ...b })),
   });
@@ -164,6 +189,27 @@ async function rehearse({ db, base, secret, log = console.log }) {
   const hEv = (await db.query(`SELECT status FROM webhook_events WHERE source='shopify' AND event_id=$1`, [hH])).rows[0];
   check("H orders/updated recorded as ignored", hEv?.status === "ignored", JSON.stringify(hEv));
   check("H grocery order A unchanged", (await qtyA()) === qBefore, `qty ${qBefore}`);
+
+  // I. migration 017: the same Shopify order under a NEW delivery id
+  const has017 = (await db.query(`SELECT to_regclass('shopify_order_sources') IS NOT NULL AS t`)).rows[0].t;
+  if (has017) {
+    const hI = `reh-${run}-I`;
+    check("I same order, new delivery id answered 200", (await send(A, hI)) === 200, "");
+    const iEv = await waitDone(hI);
+    check("I recorded as an ignored duplicate", iEv === "ignored", iEv);
+    check("I grocery order A not doubled", (await qtyA()) === qBefore, `qty ${await qtyA()}`);
+    // J. same order, DIFFERENT content, new delivery id: never applied, anomaly recorded
+    const hJ = `reh-${run}-J`;
+    await send({ ...A, line_items: A.line_items.map((l) => ({ ...l, quantity: 7 })) }, hJ);
+    await waitDone(hJ);
+    const jEv = (await db.query(`SELECT status, error_detail FROM webhook_events WHERE source='shopify' AND event_id=$1`, [hJ])).rows[0];
+    check("J different content -> ignored as MISMATCH", jEv?.status === "ignored" && /MISMATCH/.test(jEv.error_detail || ""), JSON.stringify(jEv));
+    check("J grocery order A unchanged", (await qtyA()) === qBefore, "");
+    const srcA = (await db.query(`SELECT status, bill_state FROM shopify_order_sources WHERE shopify_order_id = $1`, [String(A.id)])).rows[0];
+    check("K source A applied once", srcA?.status === "applied", JSON.stringify(srcA));
+    const srcB = (await db.query(`SELECT status, bill_state FROM shopify_order_sources WHERE shopify_order_id = $1`, [String(B.id)])).rows[0];
+    check("K source B Community-only, no bill", srcB?.status === "community_only" && srcB.bill_state === "not_required", JSON.stringify(srcB));
+  }
 
   // G. global: no Community SKU anywhere in grocery tables for this run
   const leak = (await db.query(

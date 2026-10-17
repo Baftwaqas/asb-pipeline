@@ -1,0 +1,82 @@
+name: CI - True L3/017 Concurrency
+
+on:
+  push:
+    branches:
+      - grocery-reliability-017-reconcile
+    paths:
+      - scripts/rehearsal-server-helper.js
+      - scripts/rehearsal-rollback-concurrency.js
+      - scripts/lib/db-target-guard.js
+      - scripts/rehearsal-db.js
+      - package.json
+      - package-lock.json
+      - scripts/migrate.js
+      - scripts/grocery-backfill.js
+      - scripts/rehearsal-pg-dump-restore.js
+      - db/migrations/018_customer_shopify_id_nonunique.sql
+      - .github/workflows/ci-rollback-concurrency.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  concurrency:
+    name: True L3/017 races / PostgreSQL 18
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54330:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54330
+      PGSSLMODE: disable
+      ROLLBACK_SHA: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
+      AWARE_SHA: ${{ github.sha }}
+      RACE_ITERATIONS: "25"
+
+    steps:
+      - name: Checkout current 017 recovery candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout exact proven L3 rollback build
+        uses: actions/checkout@v4
+        with:
+          ref: c3cbecd9a8f05e86ebce4bf51f8933e01d8a8297
+          path: rollback
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".node-version"
+          cache: npm
+
+      - name: Install 017-aware dependencies
+        run: npm ci
+
+      - name: Install rollback dependencies
+        working-directory: rollback
+        run: npm ci
+
+      - name: Run true simultaneous cross-build races
+        env:
+          AWARE_DIR: ${{ github.workspace }}
+          ROLLBACK_DIR: ${{ github.workspace }}/rollback
+        run: node scripts/rehearsal-rollback-concurrency.js
