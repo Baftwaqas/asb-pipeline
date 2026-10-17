@@ -50,7 +50,9 @@ async function loadSendSnapshot(c, sourceId, { withStale = false } = {}) {
 
   const a = (await c.query(
     `SELECT id, detail FROM shopify_order_source_audit
-      WHERE source_id = $1 AND action = 'bill_upgrade_v3'
+      WHERE source_id = $1
+        AND action = 'bill_hold'
+        AND detail->>'kind' = 'v3_test_override'
       ORDER BY id DESC LIMIT 1`, [sourceId])).rows[0];
   if (!a) return snap;
 
