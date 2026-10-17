@@ -122,7 +122,7 @@ const TEMPLATES = {
       "🔴 Market Total: {{4}}\n" +
       "🟢 *ASB Final Total: {{5}}*\n" +
       "🎉 *Aap ki Total Bachat: {{6}}*\n\n" +
-      "{{7}}",
+      "{{7}} Hisaab mein koi sawal ho to isi number par likh dein. Shukriya!",
     footer: "Apna Sasta Bazaar",
     example: [
       "Waqas", "ASB-001017",
