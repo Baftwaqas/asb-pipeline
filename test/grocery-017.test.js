@@ -493,9 +493,11 @@ test("controlled v3 bill upgrade preserves frozen v2 evidence, holds the source,
 
     const au = (await db.query(
       `SELECT action, actor, reason, detail FROM shopify_order_source_audit
-         WHERE source_id = $1 AND action = 'bill_upgrade_v3' ORDER BY id DESC LIMIT 1`, [so.id])).rows[0];
-    assert.equal(au.action, "bill_upgrade_v3");
+         WHERE source_id = $1 AND action = 'bill_hold' AND detail->>'kind' = 'v3_test_override'
+         ORDER BY id DESC LIMIT 1`, [so.id])).rows[0];
+    assert.equal(au.action, "bill_hold");
     assert.equal(au.actor, "Waqas");
+    assert.equal(au.detail.kind, "v3_test_override");
     assert.equal(au.detail.from_template, "asb_order_bill_v2");
     assert.equal(au.detail.to_template, "asb_order_bill_v3");
     assert.equal(au.detail.override.template_name, "asb_order_bill_v3");
