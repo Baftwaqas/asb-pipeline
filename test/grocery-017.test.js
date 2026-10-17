@@ -446,22 +446,25 @@ test("REQ5: transport classification (structured result, not inferred from ok:fa
 });
 
 
-test("controlled v3 bill upgrade targets one unsent source only, is audited, and sends v3", async () => {
+test("controlled v3 bill upgrade preserves frozen v2 evidence, holds the source, and sends only v3", async () => {
   const oldFlag = process.env.GROCERY_BILL_SEND;
   process.env.GROCERY_BILL_SEND = "off";
   let o, so;
   try {
     o = newOrder([H.line(H.GROCERY.aloo, 1)], { phone: phoneN() });
-    await deliver(o);
+    const p = await post(o);
+    assert.equal(p.status, 200);
     await H.waitFor(async () => (await src(o.id))?.bill_state === "pending");
     so = await src(o.id);
-
-    let snap = (await db.query(
-      `SELECT template_name, scope, composed_by FROM shopify_order_bill_snapshots WHERE source_id = $1`, [so.id])).rows[0];
-    assert.equal(snap.template_name, "asb_order_bill_v2");
+    assert.equal(so.status, "applied");
     assert.equal(Number(so.bill_attempts), 0);
 
-    // Even the manual conversion is refused while the effective bill sender is on.
+    const frozenBefore = (await db.query(
+      `SELECT template_name, template_lang, template_params, rich_text, content_sha256, scope, composed_by
+         FROM shopify_order_bill_snapshots WHERE source_id = $1`, [so.id])).rows[0];
+    assert.equal(frozenBefore.template_name, "asb_order_bill_v2");
+
+    // The conversion itself is refused if billing is effectively enabled.
     process.env.GROCERY_BILL_SEND = "on";
     await assert.rejects(
       operator.billUpgradeV3(db, { sourceId: so.id, by: "Waqas", reason: "controlled v3 test" }),
@@ -469,32 +472,24 @@ test("controlled v3 bill upgrade targets one unsent source only, is audited, and
     );
     process.env.GROCERY_BILL_SEND = "off";
 
-    const beforeV3 = Number((await db.query(
-      `SELECT count(*)::int n FROM shopify_order_bill_snapshots WHERE template_name = 'asb_order_bill_v3'`)).rows[0].n);
     const up = await operator.billUpgradeV3(db, {
       sourceId: so.id, by: "Waqas", reason: "controlled v3 test",
     });
     assert.equal(up.template, "asb_order_bill_v3");
     assert.equal(up.bill, "pending");
+    assert.equal(up.held, true);
 
     so = await src(o.id);
     assert.equal(so.bill_state, "pending");
     assert.equal(Number(so.bill_attempts), 0);
     assert.equal(so.bill_current_attempt_id, null);
+    assert.match(so.bill_hold_reason, /v3 controlled test awaiting explicit send approval/);
 
-    snap = (await db.query(
-      `SELECT template_name, template_lang, template_params, rich_text, scope, composed_by
+    // Critical invariant: the migration-017 frozen snapshot is untouched.
+    const frozenAfter = (await db.query(
+      `SELECT template_name, template_lang, template_params, rich_text, content_sha256, scope, composed_by
          FROM shopify_order_bill_snapshots WHERE source_id = $1`, [so.id])).rows[0];
-    assert.equal(snap.template_name, "asb_order_bill_v3");
-    assert.equal(snap.template_lang, "ur");
-    assert.equal(snap.scope, "operator_v3_test");
-    assert.equal(snap.composed_by, "Waqas");
-    assert.match(snap.rich_text, /🔴 Market Rate:/);
-    assert.match(snap.rich_text, /🟢 \*ASB Rate:/);
-    assert.match(snap.rich_text, /🎉 \*Aap ki Bachat:/);
-    assert.equal(Number((await db.query(
-      `SELECT count(*)::int n FROM shopify_order_bill_snapshots WHERE template_name = 'asb_order_bill_v3'`)).rows[0].n),
-      beforeV3 + 1, "exactly one snapshot changed to v3");
+    assert.deepEqual(frozenAfter, frozenBefore);
 
     const au = (await db.query(
       `SELECT action, actor, reason, detail FROM shopify_order_source_audit
@@ -503,11 +498,24 @@ test("controlled v3 bill upgrade targets one unsent source only, is audited, and
     assert.equal(au.actor, "Waqas");
     assert.equal(au.detail.from_template, "asb_order_bill_v2");
     assert.equal(au.detail.to_template, "asb_order_bill_v3");
+    assert.equal(au.detail.override.template_name, "asb_order_bill_v3");
+    assert.match(au.detail.override.rich_text, /🔴 Market Rate:/);
+    assert.match(au.detail.override.rich_text, /🟢 \*ASB Rate:/);
+    assert.match(au.detail.override.rich_text, /🎉 \*Aap ki Bachat:/);
 
-    await assert.rejects(
-      operator.billUpgradeV3(db, { sourceId: so.id, by: "Waqas", reason: "must not convert twice" }),
-      /needs asb_order_bill_v2 snapshot/
-    );
+    const sendView = await db.tx((c) => billing.loadSendSnapshot(c, so.id));
+    assert.equal(sendView.template_name, "asb_order_bill_v3");
+    assert.equal(sendView.render_override_audit_id, up.audit_id);
+
+    // Belt-and-suspenders: global ON still cannot send while the source hold exists.
+    process.env.GROCERY_BILL_SEND = "on";
+    assert.equal(await billing.processBill(db, so.id), null);
+    assert.equal((await attemptsOf(so.id)).length, 0);
+
+    process.env.GROCERY_BILL_SEND = "off";
+    await operator.billRelease(db, {
+      sourceId: so.id, by: "Waqas", reason: "controlled v3 send approved",
+    });
 
     const sc = scriptSends([ACCEPT("wamid.V3CONTROLLED")]);
     try {
@@ -517,11 +525,15 @@ test("controlled v3 bill upgrade targets one unsent source only, is audited, and
       sc.restore();
       process.env.GROCERY_BILL_SEND = "off";
     }
+
     assert.equal(sc.calls.length, 1);
     assert.equal(sc.calls[0].kind, "template");
     assert.equal(sc.calls[0].x.name, "asb_order_bill_v3");
     assert.equal((await src(o.id)).bill_state, "sent");
     assert.equal((await attemptsOf(so.id)).length, 1);
+    const rows = await waRows(`order_confirmed:shopify:${o.id}`);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].template_name, "asb_order_bill_v3");
   } finally {
     process.env.GROCERY_BILL_SEND = oldFlag || "on";
   }
