@@ -118,3 +118,19 @@ test("v3 never invents a market comparison when market data is missing", () => {
   assert.match(out.rich, /🟢 \*ASB Rate: Rs 650\*/);
   assert.match(out.rich, /Aap ki Total Bachat: market rates complete hone ke baad/);
 });
+
+
+test("v3 template bodies never start or end with a variable", () => {
+  for (const t of [T.TEMPLATES.orderBillV3, T.TEMPLATES.finalBillV3]) {
+    const body = t.body.trim();
+    assert.doesNotMatch(body, /^\{\{\d+\}\}/, `${t.name} starts with a variable`);
+    assert.doesNotMatch(body, /\{\{\d+\}\}$/, `${t.name} ends with a variable`);
+  }
+});
+
+test("final bill v3 has fixed closing text after the last variable", () => {
+  assert.match(
+    T.TEMPLATES.finalBillV3.body,
+    /\{\{7\}\} Hisaab mein koi sawal ho to isi number par likh dein\. Shukriya!$/
+  );
+});
