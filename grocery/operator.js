@@ -9,8 +9,12 @@
 
 "use strict";
 
+const crypto = require("crypto");
+const bill = require("../bill");
+const T = require("../templates");
 const outbound = require("./outbound");
 const receipts = require("./receipts");
+const switches = require("./switches");
 const { composeSnapshot, insertSnapshot } = require("./apply");
 const { parseOrderJson } = require("./orderjson");
 
@@ -129,6 +133,77 @@ const billCompose = action(async (c, { sourceId, by, reason }) => {
   return { bill: "pending", authorization_audit_id: id };
 });
 
+
+
+// Controlled v3 test only: rewrite exactly one still-unsent frozen v2 snapshot
+// to the approved v3 template. This is deliberately NOT an automatic selector.
+// The normal worker continues to compose v2 until a later, separately approved
+// production-default change.
+//
+// Safety gates:
+//   * source is already applied
+//   * bill is pending, never attempted, never logged
+//   * current frozen snapshot is v2
+//   * global bill sending is OFF at both effective gates
+//   * one audited transaction, no source/bill state transition
+const billUpgradeV3 = action(async (c, { sourceId, by, reason }) => {
+  const s = await locked(c, sourceId);
+  if (s.status !== "applied") throw new Error(`v3 upgrade needs source applied (is ${s.status})`);
+  if (s.bill_state !== "pending") throw new Error(`v3 upgrade needs bill pending (is ${s.bill_state})`);
+  if (Number(s.bill_attempts) !== 0 || s.bill_current_attempt_id) {
+    throw new Error(`v3 upgrade needs zero bill attempts (has ${s.bill_attempts})`);
+  }
+  if (await switches.billsEnabled(c)) {
+    throw new Error("v3 upgrade refused while bill sending is enabled");
+  }
+  const attempts = Number((await c.query(
+    `SELECT count(*)::int n FROM shopify_order_bill_attempts WHERE source_id = $1`, [s.id])).rows[0].n);
+  if (attempts !== 0) throw new Error(`v3 upgrade needs no attempt rows (has ${attempts})`);
+
+  const snap = (await c.query(
+    `SELECT * FROM shopify_order_bill_snapshots WHERE source_id = $1 FOR UPDATE`, [s.id])).rows[0];
+  if (!snap) throw new Error("no bill snapshot");
+  if (snap.template_name !== T.TEMPLATES.orderBill.name) {
+    throw new Error(`v3 upgrade needs ${T.TEMPLATES.orderBill.name} snapshot (is ${snap.template_name})`);
+  }
+  const priorLog = Number((await c.query(
+    `SELECT count(*)::int n FROM whatsapp_messages WHERE idempotency_key = $1`, [snap.bill_key])).rows[0].n);
+  if (priorLog !== 0) throw new Error(`v3 upgrade refused: bill already has ${priorLog} WhatsApp log row(s)`);
+
+  const frozen = typeof snap.content === "string" ? JSON.parse(snap.content) : snap.content;
+  const composed = bill.orderConfirmationV3(frozen);
+  const t = T.TEMPLATES.orderBillV3;
+  const params = T.orderBillV3Params(composed);
+  const hash = crypto.createHash("sha256")
+    .update(JSON.stringify({ rich: composed.rich, params }), "utf8")
+    .digest("hex");
+
+  await audit(c, s, {
+    action: "bill_upgrade_v3", by, reason,
+    detail: {
+      from_template: snap.template_name,
+      to_template: t.name,
+      bill_key: snap.bill_key,
+      comparison_ready: composed.comparisonReady,
+    },
+  });
+  await c.query(
+    `UPDATE shopify_order_bill_snapshots
+        SET rich_text = $2, template_name = $3, template_lang = $4,
+            template_params = $5, content_sha256 = $6,
+            scope = 'operator_v3_test', composed_by = $7
+      WHERE source_id = $1`,
+    [s.id, composed.rich, t.name, t.language, JSON.stringify(params), hash, by]);
+
+  return {
+    source_id: s.id,
+    bill: s.bill_state,
+    template: t.name,
+    comparison_ready: composed.comparisonReady,
+    total_saving: composed.totalSaving,
+  };
+});
+
 // Lock order everywhere: attempt, then source (as finalize / receipts do).
 async function lockAttemptThenSource(c, sourceId) {
   const cur = (await c.query(`SELECT bill_current_attempt_id FROM shopify_order_sources WHERE id = $1`, [sourceId])).rows[0];
@@ -240,5 +315,5 @@ async function attentionRows(q, { limit = 100 } = {}) {
       ORDER BY s.id LIMIT $1`, [n])).rows;
 }
 
-module.exports = { requeue, dismiss, reopenLegacy, anomalyAck, billResend, billCompose, billConfirmSent,
+module.exports = { requeue, dismiss, reopenLegacy, anomalyAck, billResend, billCompose, billUpgradeV3, billConfirmSent,
                    billAbandon, billHold, billRelease, linkReceipt, attentionRows };
