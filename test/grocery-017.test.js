@@ -445,6 +445,102 @@ test("REQ5: transport classification (structured result, not inferred from ok:fa
   }
 });
 
+
+test("controlled v3 bill upgrade preserves frozen v2 evidence, holds the source, and sends only v3", async () => {
+  const oldFlag = process.env.GROCERY_BILL_SEND;
+  process.env.GROCERY_BILL_SEND = "off";
+  let o, so;
+  try {
+    o = newOrder([H.line(H.GROCERY.aloo, 1)], { phone: phoneN() });
+    const p = await post(o);
+    assert.equal(p.status, 200);
+    await H.waitFor(async () => (await src(o.id))?.bill_state === "pending");
+    so = await src(o.id);
+    assert.equal(so.status, "applied");
+    assert.equal(Number(so.bill_attempts), 0);
+
+    const frozenBefore = (await db.query(
+      `SELECT template_name, template_lang, template_params, rich_text, content_sha256, scope, composed_by
+         FROM shopify_order_bill_snapshots WHERE source_id = $1`, [so.id])).rows[0];
+    assert.equal(frozenBefore.template_name, "asb_order_bill_v2");
+
+    // The conversion itself is refused if billing is effectively enabled.
+    process.env.GROCERY_BILL_SEND = "on";
+    await assert.rejects(
+      operator.billUpgradeV3(db, { sourceId: so.id, by: "Waqas", reason: "controlled v3 test" }),
+      /refused while bill sending is enabled/
+    );
+    process.env.GROCERY_BILL_SEND = "off";
+
+    const up = await operator.billUpgradeV3(db, {
+      sourceId: so.id, by: "Waqas", reason: "controlled v3 test",
+    });
+    assert.equal(up.template, "asb_order_bill_v3");
+    assert.equal(up.bill, "pending");
+    assert.equal(up.held, true);
+
+    so = await src(o.id);
+    assert.equal(so.bill_state, "pending");
+    assert.equal(Number(so.bill_attempts), 0);
+    assert.equal(so.bill_current_attempt_id, null);
+    assert.match(so.bill_hold_reason, /v3 controlled test awaiting explicit send approval/);
+
+    // Critical invariant: the migration-017 frozen snapshot is untouched.
+    const frozenAfter = (await db.query(
+      `SELECT template_name, template_lang, template_params, rich_text, content_sha256, scope, composed_by
+         FROM shopify_order_bill_snapshots WHERE source_id = $1`, [so.id])).rows[0];
+    assert.deepEqual(frozenAfter, frozenBefore);
+
+    const au = (await db.query(
+      `SELECT action, actor, reason, detail FROM shopify_order_source_audit
+         WHERE source_id = $1 AND action = 'bill_hold' AND detail->>'kind' = 'v3_test_override'
+         ORDER BY id DESC LIMIT 1`, [so.id])).rows[0];
+    assert.equal(au.action, "bill_hold");
+    assert.equal(au.actor, "Waqas");
+    assert.equal(au.detail.kind, "v3_test_override");
+    assert.equal(au.detail.from_template, "asb_order_bill_v2");
+    assert.equal(au.detail.to_template, "asb_order_bill_v3");
+    assert.equal(au.detail.override.template_name, "asb_order_bill_v3");
+    assert.match(au.detail.override.rich_text, /🔴 Market Rate:/);
+    assert.match(au.detail.override.rich_text, /🟢 \*ASB Rate:/);
+    assert.match(au.detail.override.rich_text, /🎉 \*Aap ki Bachat:/);
+
+    const sendView = await db.tx((c) => billing.loadSendSnapshot(c, so.id));
+    assert.equal(sendView.template_name, "asb_order_bill_v3");
+    assert.equal(sendView.render_override_audit_id, up.audit_id);
+
+    // Belt-and-suspenders: global ON still cannot send while the source hold exists.
+    process.env.GROCERY_BILL_SEND = "on";
+    assert.equal(await billing.processBill(db, so.id), null);
+    assert.equal((await attemptsOf(so.id)).length, 0);
+
+    process.env.GROCERY_BILL_SEND = "off";
+    await operator.billRelease(db, {
+      sourceId: so.id, by: "Waqas", reason: "controlled v3 send approved",
+    });
+
+    const sc = scriptSends([ACCEPT("wamid.V3CONTROLLED")]);
+    try {
+      process.env.GROCERY_BILL_SEND = "on";
+      assert.equal(await billing.processBill(db, so.id), "sent");
+    } finally {
+      sc.restore();
+      process.env.GROCERY_BILL_SEND = "off";
+    }
+
+    assert.equal(sc.calls.length, 1);
+    assert.equal(sc.calls[0].kind, "template");
+    assert.equal(sc.calls[0].x.name, "asb_order_bill_v3");
+    assert.equal((await src(o.id)).bill_state, "sent");
+    assert.equal((await attemptsOf(so.id)).length, 1);
+    const rows = await waRows(`order_confirmed:shopify:${o.id}`);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].template_name, "asb_order_bill_v3");
+  } finally {
+    process.env.GROCERY_BILL_SEND = oldFlag || "on";
+  }
+});
+
 test("bill staleness uses age (not a locked cycle); a cancelled bag needs no bill; a hold blocks sending", async () => {
   process.env.GROCERY_BILL_SEND = "off";
   const o = newOrder([H.line(H.GROCERY.aloo, 1)], { phone: phoneN() });

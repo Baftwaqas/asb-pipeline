@@ -8,7 +8,7 @@
 //   node scripts/grocery-review.js                         list
 //   node scripts/grocery-review.js --action <a> --source <id> --by "Waqas" --reason "..." --apply
 //     a: requeue | dismiss [--link-order <id>] | reopen-legacy [--with-bill] |
-//        bill-resend | bill-compose | bill-confirm-sent | bill-abandon |
+//        bill-resend | bill-compose | bill-upgrade-v3 | bill-confirm-sent | bill-abandon |
 //        bill-hold | bill-release
 //   node scripts/grocery-review.js --action link-receipt --attempt <attempt id> --wamid <wamid> --by ... --reason ... --apply
 //   node scripts/grocery-review.js --action anomaly-ack --duplicate <id> --by ... --reason ... --apply
@@ -20,7 +20,8 @@ const arg = (n) => { const i = process.argv.indexOf(n); return i > -1 ? process.
 const has = (n) => process.argv.includes(n);
 const ACTIONS = {
   "requeue": op.requeue, "dismiss": op.dismiss, "reopen-legacy": op.reopenLegacy, "anomaly-ack": op.anomalyAck,
-  "bill-resend": op.billResend, "bill-compose": op.billCompose, "bill-confirm-sent": op.billConfirmSent,
+  "bill-resend": op.billResend, "bill-compose": op.billCompose, "bill-upgrade-v3": op.billUpgradeV3,
+  "bill-confirm-sent": op.billConfirmSent,
   "bill-abandon": op.billAbandon, "bill-hold": op.billHold, "bill-release": op.billRelease, "link-receipt": op.linkReceipt,
 };
 

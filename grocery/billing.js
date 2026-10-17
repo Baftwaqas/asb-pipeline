@@ -21,6 +21,7 @@
 "use strict";
 
 const notify = require("../notify");
+const T = require("../templates");
 const alerts = require("./alerts");
 const outbound = require("./outbound");
 const receipts = require("./receipts");
@@ -31,6 +32,47 @@ const BILL_BASE_BACKOFF_S = Number(process.env.GROCERY_BILL_BASE_BACKOFF_S || 60
 const CLAIM_EXPIRY_MIN = Number(process.env.GROCERY_BILL_CLAIM_EXPIRY_MIN || 10);
 const FINALIZE_RETRY_MS = Number(process.env.GROCERY_FINALIZE_RETRY_MS || 5 * 60 * 1000);
 
+/**
+ * Read the immutable frozen snapshot plus an optional append-only controlled
+ * render override. The source snapshot itself is NEVER changed.
+ *
+ * bill_upgrade_v3 audit rows are created only by the guarded operator action.
+ * If an override is malformed, fail closed before any send.
+ */
+async function loadSendSnapshot(c, sourceId, { withStale = false } = {}) {
+  const q = withStale
+    ? `SELECT *, (composed_at < now() - $2::numeric * interval '1 hour') AS stale
+         FROM shopify_order_bill_snapshots WHERE source_id = $1`
+    : `SELECT * FROM shopify_order_bill_snapshots WHERE source_id = $1`;
+  const args = withStale ? [sourceId, BILL_MAX_AGE_H()] : [sourceId];
+  const snap = (await c.query(q, args)).rows[0];
+  if (!snap) throw new Error(`source ${sourceId}: bill snapshot missing`);
+
+  const a = (await c.query(
+    `SELECT id, detail FROM shopify_order_source_audit
+      WHERE source_id = $1
+        AND action = 'bill_hold'
+        AND detail->>'kind' = 'v3_test_override'
+      ORDER BY id DESC LIMIT 1`, [sourceId])).rows[0];
+  if (!a) return snap;
+
+  const o = a.detail?.override;
+  if (!o || o.template_name !== T.TEMPLATES.orderBillV3.name ||
+      o.template_lang !== T.TEMPLATES.orderBillV3.language ||
+      !o.rich_text || !Array.isArray(o.template_params) || !o.content_sha256) {
+    throw new Error(`source ${sourceId}: invalid bill_upgrade_v3 audit override ${a.id}`);
+  }
+  return {
+    ...snap,
+    rich_text: o.rich_text,
+    template_name: o.template_name,
+    template_lang: o.template_lang,
+    template_params: o.template_params,
+    content_sha256: o.content_sha256,
+    render_override_audit_id: a.id,
+  };
+}
+
 /** T2. Returns { attemptId, token, snapshot, channel } | { done: '<reason>' } | null. */
 async function claim(db, sourceId) {
   const alertIds = [];
@@ -39,9 +81,7 @@ async function claim(db, sourceId) {
       `SELECT s.*, (s.bill_next_attempt_at IS NULL OR s.bill_next_attempt_at <= now()) AS due
          FROM shopify_order_sources s WHERE s.id = $1 FOR NO KEY UPDATE`, [sourceId])).rows[0];
     if (!s || s.bill_state !== "pending" || !s.due || s.bill_hold_reason) return null;
-    const snap = (await c.query(
-      `SELECT *, (composed_at < now() - $2::numeric * interval '1 hour') AS stale
-         FROM shopify_order_bill_snapshots WHERE source_id = $1`, [sourceId, BILL_MAX_AGE_H()])).rows[0];
+    const snap = await loadSendSnapshot(c, sourceId, { withStale: true });
 
     // A pre-017 log row for this bill already shows it went out.
     const prior = (await c.query(
@@ -127,7 +167,7 @@ async function finalize(db, attemptId, token, r) {
       `SELECT * FROM shopify_order_bill_attempts WHERE id = $1 AND claim_token = $2 FOR UPDATE`, [attemptId, token])).rows[0];
     if (!a) throw new Error(`bill attempt ${attemptId} not found for this claim`);
     const s = (await c.query(`SELECT * FROM shopify_order_sources WHERE id = $1 FOR NO KEY UPDATE`, [a.source_id])).rows[0];
-    const snap = (await c.query(`SELECT * FROM shopify_order_bill_snapshots WHERE source_id = $1`, [a.source_id])).rows[0];
+    const snap = await loadSendSnapshot(c, a.source_id);
     const transport = { ...r, data: r.data ?? null };
     const logBase = {
       key: a.message_key, customerId: s.customer_id, orderId: s.order_id, phone: snap.phone,
@@ -267,7 +307,7 @@ async function expireClaims(db, { olderThanMin = CLAIM_EXPIRY_MIN } = {}) {
         if (!a) return false;
         const s = (await c.query(`SELECT * FROM shopify_order_sources WHERE id = $1 FOR NO KEY UPDATE`, [a.source_id])).rows[0];
         if (s.bill_state !== "sending" || String(s.bill_current_attempt_id) !== String(a.id)) return false;
-        const snap = (await c.query(`SELECT * FROM shopify_order_bill_snapshots WHERE source_id = $1`, [a.source_id])).rows[0];
+        const snap = await loadSendSnapshot(c, a.source_id);
         await c.query(
           `UPDATE shopify_order_bill_attempts SET outcome = 'claim_expired', retryable = false,
                   transport = $2, finished_at = now() WHERE id = $1`, [a.id, { reason: "claim_expired" }]);
@@ -291,5 +331,5 @@ async function expireClaims(db, { olderThanMin = CLAIM_EXPIRY_MIN } = {}) {
   return n;
 }
 
-module.exports = { claim, finalize, finalizeWithRetry, processBill, expireClaims,
+module.exports = { claim, finalize, finalizeWithRetry, processBill, expireClaims, loadSendSnapshot,
                    billMaxAttempts, BILL_MAX_AGE_H, CLAIM_EXPIRY_MIN };

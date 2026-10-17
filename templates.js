@@ -6,8 +6,10 @@
 // in when sending (server.js, inbox.js). If the wording changes here, the
 // template has to be re-submitted - a template is approved word for word.
 //
-//   asb_order_bill_v2   UTILITY    the bill at checkout ("zyada se zyada")
-//   asb_final_bill_v2   UTILITY    the asal bill after the mandi run
+//   asb_order_bill_v2   UTILITY    current production checkout bill
+//   asb_final_bill_v2   UTILITY    current production final bill
+//   asb_order_bill_v3   UTILITY    staged like-for-like Market vs ASB checkout UX
+//   asb_final_bill_v3   UTILITY    staged like-for-like Market vs ASB final UX
 //   asb_rate_list_v2    MARKETING  the rate-list poster, with booking cut-off
 //
 // Why "_v2": the first submissions (without the suffix) were deleted by
@@ -61,6 +63,31 @@ const TEMPLATES = {
     ],
   },
 
+
+  // STAGED ONLY. Production continues to use orderBill/v2 until Meta approves
+  // this exact body and a controlled live test passes.
+  orderBillV3: {
+    name: "asb_order_bill_v3",
+    language: LANG,
+    category: "UTILITY",
+    body:
+      "Assalam-o-Alaikum {{1}}, aap ka order mil gaya — *{{2}}*\n\n" +
+      "Order diya: {{3}}\n" +
+      "Delivery: *{{4}}*\n\n" +
+      "Har item mein Market aur ASB rate *isi quantity* ke hain:\n" +
+      "{{5}}\n\n" +
+      "🔴 Market Total: {{6}}\n" +
+      "🟢 *ASB Total: {{7}}*\n" +
+      "🎉 *Aap ki Total Bachat: {{8}}*\n\n" +
+      "*ASB Total se zyada nahi hoga.* Delivery ke din ASB rate aur kam hua to final total bhi kam ho jayega.",
+    footer: "Apna Sasta Bazaar",
+    example: [
+      "Waqas", "ASB-001017", "Saturday, 17 October, 4:01 PM", "Monday, 19 October",
+      "Khajoor — aadha kg: 🔴 Market Rate Rs 800 | 🟢 *ASB Rate Rs 650* | 🎉 *Aap ki Bachat Rs 150* • Anarkali Tarbooz — 1 kg: 🔴 Market Rate Rs 200 | 🟢 *ASB Rate Rs 80* | 🎉 *Aap ki Bachat Rs 120*",
+      "Rs 1,000", "Rs 730", "Rs 270",
+    ],
+  },
+
   finalBill: {
     name: "asb_final_bill_v2",
     language: LANG,
@@ -77,6 +104,30 @@ const TEMPLATES = {
       "Ayesha", "ASB-001001",
       "چونسہ آم 1 kg × Rs 220/kg = Rs 220 (pehlay tha Rs 250/kg)",
       "Rs 220", "Rs 350", "Rs 130",
+      "Jo wada kiya tha, wohi liya.",
+    ],
+  },
+
+
+  // STAGED ONLY. Same exact-weight comparison rule, now using final packed
+  // quantity and final ASB charge.
+  finalBillV3: {
+    name: "asb_final_bill_v3",
+    language: LANG,
+    category: "UTILITY",
+    body:
+      "Assalam-o-Alaikum {{1}}, aap ka asal bill — *{{2}}*\n\n" +
+      "Har item mein Market aur ASB rate *isi final quantity* ke hain:\n" +
+      "{{3}}\n\n" +
+      "🔴 Market Total: {{4}}\n" +
+      "🟢 *ASB Final Total: {{5}}*\n" +
+      "🎉 *Aap ki Total Bachat: {{6}}*\n\n" +
+      "{{7}} Hisaab mein koi sawal ho to isi number par likh dein. Shukriya!",
+    footer: "Apna Sasta Bazaar",
+    example: [
+      "Waqas", "ASB-001017",
+      "Khajoor — aadha kg: 🔴 Market Rate Rs 800 | 🟢 *ASB Rate Rs 640* | 🎉 *Aap ki Bachat Rs 160*",
+      "Rs 800", "Rs 640", "Rs 160",
       "Jo wada kiya tha, wohi liya.",
     ],
   },
@@ -164,6 +215,36 @@ function finalBillParams(composed, closingLine) {
   ];
 }
 
+
+/** composed = bill.orderConfirmationV3(order) */
+function orderBillV3Params(composed) {
+  const p = composed.params;
+  return [
+    { name: "customer_name", value: safe(p.customer_name) },
+    { name: "order_id", value: safe(p.order_id) },
+    { name: "ordered", value: safe(p.ordered) },
+    { name: "delivery", value: safe(p.delivery) },
+    { name: "order_items", value: fitItems(p.order_items) },
+    { name: "market_total", value: safe(p.market_total) },
+    { name: "asb_total", value: safe(p.asb_total) },
+    { name: "total_bachat", value: safe(p.total_bachat) },
+  ];
+}
+
+/** composed = bill.finalBillV3(order) */
+function finalBillV3Params(composed) {
+  const p = composed.params;
+  return [
+    { name: "customer_name", value: safe(p.customer_name) },
+    { name: "order_id", value: safe(p.order_id) },
+    { name: "bill_items", value: fitItems(p.bill_items) },
+    { name: "market_total", value: safe(p.market_total) },
+    { name: "asb_total", value: safe(p.asb_total) },
+    { name: "total_bachat", value: safe(p.total_bachat) },
+    { name: "closing", value: safe(p.closing) },
+  ];
+}
+
 /** delivery: "Monday, 5 October"   cutoff: "Sunday, 4 October, 8:00 PM" */
 function rateListParams(delivery, cutoff) {
   return [
@@ -185,6 +266,8 @@ module.exports = {
   definition,
   orderBillParams,
   finalBillParams,
+  orderBillV3Params,
+  finalBillV3Params,
   rateListParams,
   rateListText,
   fitItems,

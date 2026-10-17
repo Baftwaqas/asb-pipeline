@@ -400,6 +400,199 @@ function finalBill(order) {
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// BILL UX V3 — like-for-like Market vs ASB comparison
+//
+// V2 stays untouched and remains the production renderer until Meta approves
+// the matching v3 templates. V3's core rule is non-negotiable:
+//
+//   SAME ITEM + SAME ORDERED/PACKED QUANTITY
+//   Market Rate -> ASB Rate -> Aap ki Bachat
+//
+// We compare the money for the exact quantity on the bill, never a 500 g ASB
+// pack against a 1 kg market rate. This removes mental arithmetic and makes
+// ASB's price advantage visible item by item.
+//
+// WhatsApp cannot change font colour or size, so the text renderer uses:
+//   red circle   = Market Rate (secondary)
+//   green circle = ASB Rate (bold / primary)
+//   celebration  = Aap ki Bachat
+// The web/app UI can render the same semantic hierarchy with actual red/green
+// colour and smaller/larger typography.
+// ---------------------------------------------------------------------------
+function comparableLineV3(line, { final = false } = {}) {
+  const qtyRaw = Number(final ? (line.qty_packed ?? line.qty_ordered) : line.qty_ordered);
+  const asbUnit = Number(final
+    ? (line.billed_unit_price ?? line.ceiling_unit_price)
+    : line.ceiling_unit_price);
+  const marketUnit = Number(line.market_unit_price || 0);
+
+  const asbTotal = qtyRaw * asbUnit;
+  const marketKnown = Number.isFinite(marketUnit) && marketUnit > 0;
+  const marketTotal = marketKnown ? qtyRaw * marketUnit : null;
+  const saving = marketKnown ? Math.max(0, marketTotal - asbTotal) : null;
+
+  return {
+    label: productLabel(line),
+    qty: qtyPhrase(qtyRaw, line.unit, line.pack_size),
+    asbTotal,
+    marketKnown,
+    marketTotal,
+    saving,
+  };
+}
+
+function comparisonRichV3(l) {
+  return [
+    `*${l.label} — ${l.qty}*`,
+    `🔴 Market Rate: ${l.marketKnown ? money(l.marketTotal) : "rate available nahi"}`,
+    `🟢 *ASB Rate: ${money(l.asbTotal)}*`,
+    l.marketKnown
+      ? `🎉 *Aap ki Bachat: ${money(l.saving)}*`
+      : `🎉 *Aap ki Bachat: market rate update ke baad*`,
+  ].join("\n");
+}
+
+function comparisonFlatV3(l) {
+  return `${l.label} — ${l.qty}: 🔴 Market Rate ${l.marketKnown ? money(l.marketTotal) : "available nahi"} | ` +
+         `🟢 *ASB Rate ${money(l.asbTotal)}* | ` +
+         (l.marketKnown
+           ? `🎉 *Aap ki Bachat ${money(l.saving)}*`
+           : `🎉 *Aap ki Bachat market rate update ke baad*`);
+}
+
+/**
+ * Staged checkout bill for asb_order_bill_v3.
+ * Not wired to the production sender until Meta approval + controlled test.
+ */
+function orderConfirmationV3(order) {
+  const name = firstName(order.customer_name);
+  const delivery = deliveryPhrase(order.delivery_date);
+  const ordered = orderedPhrase(order.ordered_at || order.placed_at);
+  const lines = (order.lines || []).map((l) => comparableLineV3(l));
+
+  const asbTotal = lines.reduce((n, l) => n + l.asbTotal, 0);
+  const comparisonReady = lines.length > 0 && lines.every((l) => l.marketKnown);
+  const marketTotal = comparisonReady ? lines.reduce((n, l) => n + l.marketTotal, 0) : null;
+  const totalSaving = comparisonReady ? Math.max(0, marketTotal - asbTotal) : null;
+
+  const richItems = lines.map(comparisonRichV3);
+  const flatItems = lines.map(comparisonFlatV3);
+
+  const summary = comparisonReady
+    ? [
+        `🔴 Market Total: ${money(marketTotal)}`,
+        `🟢 *ASB Total: ${money(asbTotal)}*`,
+        `🎉 *Aap ki Total Bachat: ${money(totalSaving)}*`,
+      ]
+    : [
+        `🔴 Market Total: rate update ho raha hai`,
+        `🟢 *ASB Total: ${money(asbTotal)}*`,
+        `🎉 *Aap ki Total Bachat: market rates complete hone ke baad*`,
+      ];
+
+  const rich = [
+    `Assalam-o-Alaikum ${name} 🌿`,
+    `Aap ka order mil gaya — *${order.order_number}*`,
+    ...(ordered ? [`Order diya: ${ordered}`] : []),
+    ...(delivery ? [`Delivery: *${delivery}*`] : []),
+    ``,
+    `Har item mein Market aur ASB rate *isi quantity* ke hain:`,
+    ``,
+    ...richItems.flatMap((x, i) => i === richItems.length - 1 ? [x] : [x, ``]),
+    ``,
+    ...summary,
+    ``,
+    `*ASB Total se zyada nahi hoga.* Delivery ke din ASB rate aur kam hua to final total bhi kam ho jayega.`,
+    ``,
+    `Apna Sasta Bazaar`,
+  ].join("\n");
+
+  return {
+    rich,
+    flat: flatItems.join(" • "),
+    comparisonReady,
+    totalSaving,
+    params: {
+      customer_name: name,
+      order_id: order.order_number,
+      ordered: ordered || "-",
+      delivery: delivery || "-",
+      order_items: flatItems.join(" • "),
+      market_total: comparisonReady ? money(marketTotal) : "rate update ho raha hai",
+      asb_total: money(asbTotal),
+      total_bachat: comparisonReady ? money(totalSaving) : "market rates complete hone ke baad",
+    },
+  };
+}
+
+/**
+ * Staged final bill for asb_final_bill_v3.
+ * Market and ASB are again compared on the same FINAL packed quantity.
+ */
+function finalBillV3(order) {
+  const name = firstName(order.customer_name);
+  const lines = (order.lines || []).map((l) => comparableLineV3(l, { final: true }));
+
+  const asbTotal = lines.reduce((n, l) => n + l.asbTotal, 0);
+  const comparisonReady = lines.length > 0 && lines.every((l) => l.marketKnown);
+  const marketTotal = comparisonReady ? lines.reduce((n, l) => n + l.marketTotal, 0) : null;
+  const totalSaving = comparisonReady ? Math.max(0, marketTotal - asbTotal) : null;
+
+  const richItems = lines.map(comparisonRichV3);
+  const flatItems = lines.map(comparisonFlatV3);
+  const reweighedAny = (order.lines || []).some((l) =>
+    l.qty_packed != null && Number(l.qty_packed) !== Number(l.qty_ordered));
+
+  const summary = comparisonReady
+    ? [
+        `🔴 Market Total: ${money(marketTotal)}`,
+        `🟢 *ASB Final Total: ${money(asbTotal)}*`,
+        `🎉 *Aap ki Total Bachat: ${money(totalSaving)}*`,
+      ]
+    : [
+        `🔴 Market Total: rate update ho raha hai`,
+        `🟢 *ASB Final Total: ${money(asbTotal)}*`,
+        `🎉 *Aap ki Total Bachat: market rates complete hone ke baad*`,
+      ];
+
+  const closing = reweighedAny
+    ? `Wazan tolne ke baad ka hisaab hai — jitna nikla, utna hi laga.`
+    : `Jo wada kiya tha, wohi liya.`;
+
+  const rich = [
+    `Assalam-o-Alaikum ${name} 🌿`,
+    `Aap ka asal bill — *${order.order_number}*`,
+    ``,
+    `Har item mein Market aur ASB rate *isi final quantity* ke hain:`,
+    ``,
+    ...richItems.flatMap((x, i) => i === richItems.length - 1 ? [x] : [x, ``]),
+    ``,
+    ...summary,
+    ``,
+    closing,
+    ``,
+    `Shukriya — Apna Sasta Bazaar`,
+  ].join("\n");
+
+  return {
+    rich,
+    flat: flatItems.join(" • "),
+    comparisonReady,
+    totalSaving,
+    params: {
+      customer_name: name,
+      order_id: order.order_number,
+      bill_items: flatItems.join(" • "),
+      market_total: comparisonReady ? money(marketTotal) : "rate update ho raha hai",
+      asb_total: money(asbTotal),
+      total_bachat: comparisonReady ? money(totalSaving) : "market rates complete hone ke baad",
+      closing,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 function firstName(full) {
   if (!full) return "Ji";
@@ -422,6 +615,8 @@ function templateSafe(value) {
 module.exports = {
   orderConfirmation,
   finalBill,
+  orderConfirmationV3,
+  finalBillV3,
   templateSafe,
   // exported for tests
   qtyPhrase,

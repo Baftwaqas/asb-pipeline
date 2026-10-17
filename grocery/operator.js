@@ -9,8 +9,12 @@
 
 "use strict";
 
+const crypto = require("crypto");
+const bill = require("../bill");
+const T = require("../templates");
 const outbound = require("./outbound");
 const receipts = require("./receipts");
+const switches = require("./switches");
 const { composeSnapshot, insertSnapshot } = require("./apply");
 const { parseOrderJson } = require("./orderjson");
 
@@ -129,6 +133,94 @@ const billCompose = action(async (c, { sourceId, by, reason }) => {
   return { bill: "pending", authorization_audit_id: id };
 });
 
+
+
+// Controlled v3 test only: create an APPEND-ONLY audited render override for
+// exactly one still-unsent frozen v2 snapshot. The original migration-017
+// snapshot is never updated: it remains immutable evidence of what the worker
+// composed at apply time.
+//
+// The upgrade action also places the bill on hold. Therefore even if the global
+// bill sender is later enabled, this source cannot send until an explicit,
+// separately audited bill-release action occurs.
+const billUpgradeV3 = action(async (c, { sourceId, by, reason }) => {
+  const s = await locked(c, sourceId);
+  if (s.status !== "applied") throw new Error(`v3 upgrade needs source applied (is ${s.status})`);
+  if (s.bill_state !== "pending") throw new Error(`v3 upgrade needs bill pending (is ${s.bill_state})`);
+  if (s.bill_hold_reason) throw new Error(`v3 upgrade needs an unheld bill (held: ${s.bill_hold_reason})`);
+  if (Number(s.bill_attempts) !== 0 || s.bill_current_attempt_id) {
+    throw new Error(`v3 upgrade needs zero bill attempts (has ${s.bill_attempts})`);
+  }
+  if (await switches.billsEnabled(c)) {
+    throw new Error("v3 upgrade refused while bill sending is enabled");
+  }
+
+  const attempts = Number((await c.query(
+    `SELECT count(*)::int n FROM shopify_order_bill_attempts WHERE source_id = $1`, [s.id])).rows[0].n);
+  if (attempts !== 0) throw new Error(`v3 upgrade needs no attempt rows (has ${attempts})`);
+
+  const snap = (await c.query(
+    `SELECT * FROM shopify_order_bill_snapshots WHERE source_id = $1`, [s.id])).rows[0];
+  if (!snap) throw new Error("no bill snapshot");
+  if (snap.template_name !== T.TEMPLATES.orderBill.name) {
+    throw new Error(`v3 upgrade needs ${T.TEMPLATES.orderBill.name} snapshot (is ${snap.template_name})`);
+  }
+
+  const priorLog = Number((await c.query(
+    `SELECT count(*)::int n FROM whatsapp_messages WHERE idempotency_key = $1`, [snap.bill_key])).rows[0].n);
+  if (priorLog !== 0) throw new Error(`v3 upgrade refused: bill already has ${priorLog} WhatsApp log row(s)`);
+
+  const existing = Number((await c.query(
+    `SELECT count(*)::int n FROM shopify_order_source_audit
+      WHERE source_id = $1 AND action = 'bill_hold' AND detail->>'kind' = 'v3_test_override'`, [s.id])).rows[0].n);
+  if (existing !== 0) throw new Error("v3 upgrade already exists for this source");
+
+  const frozen = typeof snap.content === "string" ? JSON.parse(snap.content) : snap.content;
+  const composed = bill.orderConfirmationV3(frozen);
+  const t = T.TEMPLATES.orderBillV3;
+  const params = T.orderBillV3Params(composed);
+  const hash = crypto.createHash("sha256")
+    .update(JSON.stringify({ rich: composed.rich, params }), "utf8")
+    .digest("hex");
+  const holdReason = `v3 controlled test awaiting explicit send approval: ${reason}`;
+
+  const id = await audit(c, s, {
+    action: "bill_hold", by, reason,
+    detail: {
+      kind: "v3_test_override",
+      from_template: snap.template_name,
+      to_template: t.name,
+      bill_key: snap.bill_key,
+      comparison_ready: composed.comparisonReady,
+      total_saving: composed.totalSaving,
+      override: {
+        rich_text: composed.rich,
+        template_name: t.name,
+        template_lang: t.language,
+        template_params: params,
+        content_sha256: hash,
+      },
+    },
+  });
+
+  await c.query(
+    `UPDATE shopify_order_sources
+        SET bill_hold_reason = $2, bill_hold_by = $3, bill_hold_at = now()
+      WHERE id = $1`,
+    [s.id, holdReason, by]);
+
+  return {
+    source_id: s.id,
+    bill: s.bill_state,
+    held: true,
+    hold_reason: holdReason,
+    audit_id: id,
+    template: t.name,
+    comparison_ready: composed.comparisonReady,
+    total_saving: composed.totalSaving,
+  };
+});
+
 // Lock order everywhere: attempt, then source (as finalize / receipts do).
 async function lockAttemptThenSource(c, sourceId) {
   const cur = (await c.query(`SELECT bill_current_attempt_id FROM shopify_order_sources WHERE id = $1`, [sourceId])).rows[0];
@@ -240,5 +332,5 @@ async function attentionRows(q, { limit = 100 } = {}) {
       ORDER BY s.id LIMIT $1`, [n])).rows;
 }
 
-module.exports = { requeue, dismiss, reopenLegacy, anomalyAck, billResend, billCompose, billConfirmSent,
+module.exports = { requeue, dismiss, reopenLegacy, anomalyAck, billResend, billCompose, billUpgradeV3, billConfirmSent,
                    billAbandon, billHold, billRelease, linkReceipt, attentionRows };
