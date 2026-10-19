@@ -18,7 +18,8 @@ const SHOPIFY_ENV = "GROCERY_BILL_TARGET_SHOPIFY_ORDER_ID";
 const MODE_ENV = "GROCERY_BILL_SEND_SCOPE";
 
 const canonicalId = (value) =>
-  typeof value === "string" && /^[1-9][0-9]{0,19}$/.test(value);
+  typeof value === "string" && /^[1-9][0-9]{0,18}$/.test(value) &&
+  BigInt(value) <= 9223372036854775807n;
 
 /** No mode means OFF, not permission to use the old global send path. */
 function config(env = process.env) {
