@@ -13,6 +13,8 @@
 
 "use strict";
 
+const billScope = require("./bill-send-scope");
+
 const KEYS = {
   backfill: "grocery_backfill_marker",
   worker: "grocery_worker_activation",
@@ -32,11 +34,13 @@ async function status(q) {
   const s = await settings(q);
   const workerEnv = envOn("GROCERY_SOURCE_WORKER");
   const billsEnv = envOn("GROCERY_BILL_SEND");
+  const scope = billScope.config();
   return {
     worker_env: workerEnv, bills_env: billsEnv,
     backfill_marker: Boolean(s.backfill), worker_activated: Boolean(s.worker), bills_activated: Boolean(s.bills),
     worker_enabled: workerEnv && Boolean(s.backfill) && Boolean(s.worker),
-    bills_enabled: billsEnv && Boolean(s.bills),
+    bill_scope_mode: scope.mode, bill_scope_valid: scope.valid,
+    bills_enabled: billsEnv && Boolean(s.bills) && scope.valid,
   };
 }
 
@@ -46,7 +50,7 @@ async function workerEnabled(q) {
 }
 
 async function billsEnabled(q) {
-  if (!envOn("GROCERY_BILL_SEND")) return false;
+  if (!envOn("GROCERY_BILL_SEND") || !billScope.config().valid) return false;
   return (await status(q)).bills_enabled;
 }
 

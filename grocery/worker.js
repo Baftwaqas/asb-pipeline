@@ -26,6 +26,7 @@ const billing = require("./billing");
 const receipts = require("./receipts");
 const alerts = require("./alerts");
 const switches = require("./switches");
+const billScope = require("./bill-send-scope");
 
 async function runSource(db, sourceId) {
   if (!(await switches.workerEnabled(db))) return null;
@@ -58,11 +59,17 @@ async function runOnce(db, { limit = 50 } = {}) {
     }
   }
   if (st.bills_enabled) {
+    const scope = billScope.config();
+    // With single-order authorization, do not even select other customers'
+    // pending bills. The row-locked claim enforces the identity again.
+    const onlyTarget = scope.mode === "single";
     const { rows } = await db.query(
       `SELECT id FROM shopify_order_sources
         WHERE bill_state = 'pending' AND bill_hold_reason IS NULL
           AND (bill_next_attempt_at IS NULL OR bill_next_attempt_at <= now())
-        ORDER BY id LIMIT $1`, [limit]);
+          ${onlyTarget ? "AND id = $2::bigint AND shopify_order_id = $3" : ""}
+        ORDER BY id LIMIT $1`,
+      onlyTarget ? [limit, scope.sourceId, scope.shopifyOrderId] : [limit]);
     for (const r of rows) if (await billing.processBill(db, r.id)) tally.bills++;
   }
   tally.claims_expired = await billing.expireClaims(db);
