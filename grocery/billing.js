@@ -25,6 +25,7 @@ const alerts = require("./alerts");
 const outbound = require("./outbound");
 const receipts = require("./receipts");
 const switches = require("./switches");
+const billScope = require("./bill-send-scope");
 
 const { billMaxAttempts, billMaxAgeH: BILL_MAX_AGE_H } = require("./config");
 const BILL_BASE_BACKOFF_S = Number(process.env.GROCERY_BILL_BASE_BACKOFF_S || 60);
@@ -38,7 +39,11 @@ async function claim(db, sourceId) {
     const s = (await c.query(
       `SELECT s.*, (s.bill_next_attempt_at IS NULL OR s.bill_next_attempt_at <= now()) AS due
          FROM shopify_order_sources s WHERE s.id = $1 FOR NO KEY UPDATE`, [sourceId])).rows[0];
-    if (!s || s.bill_state !== "pending" || !s.due || s.bill_hold_reason) return null;
+    // Critical: recheck the exact source AND Shopify order while its row is
+    // locked, before inserting an attempt or reaching any network send.
+    // Also protects direct calls, webhook kicks and sweeper races.
+    if (!s || s.bill_state !== "pending" || !s.due || s.bill_hold_reason ||
+        !billScope.allowsSource(s)) return null;
     const snap = (await c.query(
       `SELECT *, (composed_at < now() - $2::numeric * interval '1 hour') AS stale
          FROM shopify_order_bill_snapshots WHERE source_id = $1`, [sourceId, BILL_MAX_AGE_H()])).rows[0];
