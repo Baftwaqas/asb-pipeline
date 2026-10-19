@@ -53,6 +53,11 @@ function setEnv(url) {
     COMMUNITY_INTAKE_WORKER: "off",   // tests drive the worker explicitly
     GROCERY_SOURCE_WORKER: "on",      // 017: the kick applies orders (no sweeper timer in tests)
     GROCERY_BILL_SEND: "on",
+    // Isolated test PostgreSQL and stubbed Meta only. Explicit broad mode
+    // preserves existing regression scenarios; production defaults to OFF.
+    GROCERY_BILL_SEND_SCOPE: "all",
+    GROCERY_BILL_TARGET_SOURCE_ID: "",
+    GROCERY_BILL_TARGET_SHOPIFY_ORDER_ID: "",
     GROCERY_FINALIZE_RETRY_MS: "300",
     GROCERY_ALERT_PUSH: "on",          // alert delivery is exercised against stubs / empty subscriptions
     PORT: process.env.PORT || "0",
