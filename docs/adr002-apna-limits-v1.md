@@ -47,3 +47,11 @@ Tests: `node --test test/apna-limits.test.js`. GitHub CI also runs the full repo
 - **C3 (minor):** `Cancelled` and `cancelled` release reserved cap; unexpected status strings produce `UNKNOWN_ORDER_STATUS` rather than silently distorting limits.
 
 The original three counterexamples are now **opposite-result regression assertions**, not documented failures. This PR remains nonproduction until the integration obligations above are completed. Community's founder-approved verification policy is documented at `docs/community-verification-policy-v1.md` on the `five-door-v1` integration branch (not implemented here).
+
+## Claude review CX4 (5 Nov) — legacy-product isolation
+
+An earlier order can contain a product that has no approved Apna quantity ladder yet (e.g., LEMON), while the customer is placing a new order for ONION. Previously the evaluator attempted to load **every** earlier Apna line's rule and incorrectly threw `MISSING_APNA_LIMIT: LEMON`. This could block unrelated legitimate orders during staged SKU rollout.
+
+**Fixed:** only previous lines whose `canonicalProductId` occurs in the current proposed Apna lines are included in this evaluator's cap/status inspection. All current proposed Apna lines **still** require a configured quantity ladder and fail closed if absent; earlier ONION lines still aggregate across orders. Unrelated legacy statuses do not block ONION. Relevant unknown statuses still fail visibly.
+
+Four new CX4 regression cases cover this; total focused tests: **32**. This is distinct from the broader checkout/product-master duty to validate all new items and to monitor legacy orders independently.
