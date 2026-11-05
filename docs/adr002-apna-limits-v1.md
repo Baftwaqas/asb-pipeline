@@ -39,3 +39,11 @@ This rule evaluator does **not** determine selling price, physical packaging, wh
 Tests: `node --test test/apna-limits.test.js`. GitHub CI also runs the full repository test suite.
 
 **Passing unit tests do not mean production checkout is enforcing these rules.**
+
+## Claude's 5 Nov review — C1/C2/C3 resolution
+
+- **C1 (blocking):** each trusted product rule includes `minQuantity`, `maxQuantity` and an explicit approved `allowedSizes` pack set **or** `stepQuantity`. Apna ginger 40 g now returns `APNA_BELOW_PRODUCT_MINIMUM`, while Dish-derived 40 g does not consume Apna eligibility. Ladders are independent of any **basket-spend** minimum.
+- **C2 (contract):** the evaluator now consumes quote-contract `canonicalProductId`, integer `qty` and `unit: "g"|"piece"`. It no longer requires `productId`, `quantityBaseUnits` or `pcs`.
+- **C3 (minor):** `Cancelled` and `cancelled` release reserved cap; unexpected status strings produce `UNKNOWN_ORDER_STATUS` rather than silently distorting limits.
+
+The original three counterexamples are now **opposite-result regression assertions**, not documented failures. This PR remains nonproduction until the integration obligations above are completed. Community's founder-approved verification policy is documented at `docs/community-verification-policy-v1.md` on the `five-door-v1` integration branch (not implemented here).
