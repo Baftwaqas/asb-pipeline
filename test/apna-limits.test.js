@@ -145,3 +145,23 @@ test("empty Apna selection does not invent a basket minimum",()=>{
   assert.deepEqual(check([apna("GINGER",40,{door:"dish_to_cart"})]),
     {allowed:true,violations:[],products:[]});
 });
+
+test("CX4: an old unconfigured lemon line cannot block an unrelated new onion order",()=>{
+  const r=check([apna("ONION",1000)],[previous("LEMON",200)]);
+  assert.equal(r.allowed,true);
+  assert.equal(r.products[0].alreadyCommittedQuantity,0);
+});
+test("CX4: unrelated legacy product is ignored, but prior onions still consume the cap",()=>{
+  const r=check([apna("ONION",1000)],[
+    previous("LEMON",200),previous("ONION",1500,{orderId:"order-2"})
+  ]);
+  assert.equal(r.allowed,false);
+  assert.equal(r.violations.find(v=>v.code==="APNA_CYCLE_MAX_EXCEEDED").totalQuantity,2500);
+});
+test("CX4: incoming unconfigured lemons still fail closed; old lemons do not bypass rule checks",()=>{
+  assert.throws(()=>check([apna("LEMON",200)],[previous("LEMON",200)]),/MISSING_APNA_LIMIT/);
+});
+test("CX4: unrelated legacy status is ignored, but relevant unknown status fails closed",()=>{
+  assert.equal(check([apna("ONION",1000)],[previous("LEMON",200,{status:"legacy"})]).allowed,true);
+  assert.throws(()=>check([apna("ONION",1000)],[previous("ONION",500,{status:"legacy"})]),/UNKNOWN_ORDER_STATUS/);
+});
