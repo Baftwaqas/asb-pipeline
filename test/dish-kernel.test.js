@@ -14,7 +14,8 @@ const POLICY = { version: "DISH-PRICING-DRAFT-1", maxServings: 50, maxRecipes: 1
 const GRAM = { symbol: "g", dimension: "Mass", factorToBase: "1.0", active: true, verificationStatus: "Verified " };
 const KG = { symbol: "kg", dimension: "Mass", factorToBase: "1000.0", active: true, verificationStatus: "Verified " };
 const PIECE = { symbol: "pc", dimension: "Piece", factorToBase: "1.0", active: true, verificationStatus: "Verified " };
-const TSP = { symbol: "tsp", dimension: "Volume", factorToBase: "5.0", active: true, verificationStatus: "Verified " };
+const TSP = { id: "UNT-000007", baseUnitId: "UNT-000003", symbol: "tsp", dimension: "Volume", factorToBase: "5.0", active: true, verificationStatus: "Verified " };
+const PIECE_U = { id: "UNT-000005", baseUnitId: "UNT-000005", symbol: "pc", dimension: "Piece", factorToBase: "1.0", active: true, verificationStatus: "Verified " };
 const LINEAR = { method: "Linear ", active: true, verificationStatus: "Verified " };
 const FIXED = { method: "Fixed", active: true, verificationStatus: "Verified " };
 const POWER = { method: "Power Curve", exponent: "0.85", active: true, verificationStatus: "Needs Review" };
@@ -28,7 +29,7 @@ const catalog = () => ({
   "ING-ONION": { canonicalProductId: "ASB-CANON-ONION", name: "Payaz", unit: "g", packProfile: PCK("PCK-000002", 250), edibleYield: "0.90",
     packs: [{ variantGid: "gid://shopify/ProductVariant/47322505052418", unit: "g", qty: 500, pricePaisa: 10500, live: true, verified: true }] },
   "ING-SALT": { canonicalProductId: "ASB-CANON-SALT", name: "Namak", unit: "g", pantryExcludable: true, packProfile: PCK("PCK-X", 100),
-    volumeConversion: { gramsPerMl: "1.2", active: true, verificationStatus: "Verified" },
+    conversions: [{ sourceUnitId: "UNT-000003", sourceQuantity: "1.0", canonicalQuantity: "1.2", active: true, verificationStatus: "Verified" }],
     packs: [{ variantGid: "gid://shopify/ProductVariant/9", unit: "g", qty: 800, pricePaisa: 6000, live: true, verified: true }] },
   "ING-EGG": { canonicalProductId: "ASB-CANON-EGG", name: "Anday", unit: "piece", packProfile: PCK("PCK-E", 12),
     packs: [{ variantGid: "gid://shopify/ProductVariant/12", unit: "piece", qty: 12, pricePaisa: 42000, live: true, verified: true }] },
@@ -167,8 +168,10 @@ test("fail closed: unverified recipe, line, unit, scaling profile or pack profil
   assert.equal(run([{ recipeId: "RCP-000007", servings: 4 }], { catalog: cat }).problems[0].code, "PACK_PROFILE_NOT_APPROVED");
   const cat2 = catalog(); cat2["ING-GINGER"].packs.forEach((p) => { p.live = false; });
   assert.equal(run([{ recipeId: "RCP-000007", servings: 4 }], { catalog: cat2 }).problems[0].code, "NO_VERIFIED_LIVE_PRICE");
-  const cat3 = catalog(); delete cat3["ING-SALT"].volumeConversion;
-  assert.equal(run([{ recipeId: "RCP-000007", servings: 4 }], { catalog: cat3 }).problems[0].code, "NO_VERIFIED_VOLUME_CONVERSION");
+  const cat3 = catalog(); delete cat3["ING-SALT"].conversions;
+  assert.equal(run([{ recipeId: "RCP-000007", servings: 4 }], { catalog: cat3 }).problems[0].code, "NO_VERIFIED_CONVERSION");
+  const cat5 = catalog(); cat5["ING-SALT"].conversions[0].verificationStatus = "Needs Review"; // like IMC-000001 today
+  assert.equal(run([{ recipeId: "RCP-000007", servings: 4 }], { catalog: cat5 }).problems[0].code, "NO_VERIFIED_CONVERSION");
   const cat4 = catalog(); delete cat4["ING-GINGER"];
   assert.equal(run([{ recipeId: "RCP-000007", servings: 4 }], { catalog: cat4 }).problems[0].code, "INGREDIENT_NOT_SELLABLE");
 });
@@ -199,6 +202,16 @@ test("policy must be explicit", () => {
   assert.throws(() => validatePolicy(null), /NO_POLICY/);
   assert.throws(() => validatePolicy({ ...POLICY, allowedScalingMethods: ["power curve"] }), /INVALID_POLICY/);
   assert.equal(run([{ recipeId: "RCP-000007", servings: 4 }], { policy: { ...POLICY, maxServings: 0 } }).ok, false);
+});
+
+test("1 medium onion (piece) becomes grams through a verified conversion (IMC shape: 1 pc = 130 g)", () => {
+  const rec = recipes();
+  rec["RCP-000007"].ingredients = [line("RIN-9", "ING-ONION", "2", { unit: PIECE_U })];
+  const cat = catalog();
+  cat["ING-ONION"].conversions = [{ sourceUnitId: "UNT-000005", sourceQuantity: "1.0", canonicalQuantity: "130.0",
+    active: true, verificationStatus: "Verified" }];
+  const o = byCanon(run([{ recipeId: "RCP-000007", servings: 6 }], { recipes: rec, catalog: cat }))["ASB-CANON-ONION"];
+  assert.equal(o.qty, 390); // 2 x 6/4 = 3 onions x 130 g
 });
 
 test("qtyLabel", () => {

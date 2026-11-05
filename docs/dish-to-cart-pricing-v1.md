@@ -48,9 +48,27 @@ All arithmetic uses exact BigInt rationals. If anything fails, the whole quote r
 3. **Small-pack premium on top of a small pack.** Adrak 125 g is already Rs 0.70/g, against Rs 0.58/g for the 250 g pack. The 20% premium is added on top of that 125 g price. Is that intended?
 4. **Who verifies the recipes, and which 20 go first?** As of 5 Nov the Recipe Master holds 152 recipes, and the sampled ingredient lines are `Needs Review`. The kernel will refuse every one of them until they are verified.
 
+## Read-only adapter (`dish/recipe-source.js`, `dish/shopify-read.js`, `scripts/dish-readiness.js`)
+
+The adapter maps the Recipe Master metaobjects and the Product Master metafields into the kernel's input. It only **reads**: every request is a `query`, and a test checks this. It reads everything or nothing, and refuses to work from a partial read.
+
+**How it picks the product that sells an ingredient (fail-closed):**
+- Only ACTIVE products qualify.
+- `asb_product_master.verification_status` must be Verified.
+- `dish_to_cart_enabled` must be **true**.
+- The product needs an ingredient concept and an approved pack profile.
+- Products are keyed by ingredient concept plus sell preparation form. If several products share a key, that is **ambiguous**: none of them is used and a person must choose. Example: Moti, Choti and Pakora mirch are all raw green chilli.
+
+**How it reads pack sizes and conversions:**
+- A variant's pack size is read only from an exact variant title ("125 g", "1 kg", "12 pcs", "1 dozen", "1 gaddi"). For "Default Title" it uses the product's `pack_quantity` and `pack_unit`. "1/2 kg" and "2 x 500 g" count as unreadable; their size is never guessed.
+- Unit conversions come from `asb_ingredient_measurement_conversion`, for example 1 medium onion = 130 g. The kernel uses one only when it is Active and Verified.
+
+`node scripts/dish-readiness.js` reports how many recipes can be priced today and what blocks the rest. The token needs read_products and read_metaobjects only.
+
+**Live state on 5 Nov (read-only check):** **0 of 134 products have `dish_to_cart_enabled` set**, and every ingredient line I sampled is `Needs Review`. So today 0 recipes can be priced, and that is correct. Several ingredient concepts map to more than one product (green chilli, eggplant, spinach, garlic, guar phali), so someone must say which product Dish should use.
+
 ## Not in this PR
 
-- An adapter that reads Recipe Master metaobjects and live variants into the kernel's input shape, using read-only Admin GraphQL.
 - Persisting Dish quotes and redeeming them (contract §5).
 - Dish-door Community eligibility. `heroTier` is null here.
 - Packing and billing for exact-weight lines. PR #11's line ceiling already caps them.

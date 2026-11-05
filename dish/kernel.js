@@ -76,25 +76,35 @@ const str = (s, name) => {
 };
 
 // ---------------------------------------------------------------------------
-// Units. Mass and count map to the contract's base units g | piece. Volume
-// needs a VERIFIED per-ingredient conversion to grams (catalogue
-// gramsPerMl); without one the recipe fails closed.
+// Units. Mass and count map to the contract's base units g | piece. When the
+// recipe's dimension differs from how the product is sold (1 medium onion,
+// 1 tsp salt, both sold by the gram), a VERIFIED, ACTIVE per-ingredient
+// conversion is required (asb_ingredient_measurement_conversion:
+// sourceQuantity of sourceUnit = canonicalQuantity of the sold unit). It is
+// matched on the recipe's own unit, or on that dimension's base unit.
+// Without one the recipe fails closed.
 // ---------------------------------------------------------------------------
+const DIMENSION_UNIT = { mass: "g", piece: "piece", count: "piece", volume: "ml" };
+
 function toBaseUnit(qty, unit, ingredient, where) {
   if (!unit || unit.active !== true || !isVerified(unit.verificationStatus))
     throw new DishError("UNIT_NOT_VERIFIED", where);
   const factor = dec(unit.factorToBase, where + " unit.factorToBase");
-  const dim = norm(unit.dimension);
+  const dim = DIMENSION_UNIT[norm(unit.dimension)];
+  if (!dim) throw new DishError("UNKNOWN_UNIT_DIMENSION", where + " " + unit.dimension);
   const base = mul(qty, factor);
-  if (dim === "mass") return { unit: "g", qty: base };
-  if (dim === "piece" || dim === "count") return { unit: "piece", qty: base };
-  if (dim === "volume") {
-    const c = ingredient.volumeConversion;
-    if (!c || !isVerified(c.verificationStatus) || c.active !== true)
-      throw new DishError("NO_VERIFIED_VOLUME_CONVERSION", where);
-    return { unit: "g", qty: mul(base, dec(c.gramsPerMl, where + " gramsPerMl")) };
+  if (dim === ingredient.unit) return { unit: dim, qty: base };
+
+  for (const c of ingredient.conversions || []) {
+    if (c.active !== true || !isVerified(c.verificationStatus)) continue;
+    const src = dec(c.sourceQuantity, where + " conversion.sourceQuantity");
+    const eq = dec(c.canonicalQuantity, where + " conversion.canonicalQuantity");
+    if (cmp(src, frac(0n)) <= 0 || cmp(eq, frac(0n)) <= 0) throw new DishError("INVALID_CONVERSION", where);
+    const rate = div(eq, src);
+    if (c.sourceUnitId && c.sourceUnitId === unit.id) return { unit: ingredient.unit, qty: mul(qty, rate) };
+    if (c.sourceUnitId && c.sourceUnitId === unit.baseUnitId) return { unit: ingredient.unit, qty: mul(base, rate) };
   }
-  throw new DishError("UNKNOWN_UNIT_DIMENSION", where + " " + unit.dimension);
+  throw new DishError("NO_VERIFIED_CONVERSION", `${where} ${dim} -> ${ingredient.unit}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +206,7 @@ function qtyLabel(unit, qty) {
 //                    quantityBasis, minQuantity, maxQuantity, optionChoiceIds,
 //                    active, verificationStatus }] } }
 //   catalog:    { [ingredientId]: { canonicalProductId, name, unit, pantryExcludable,
-//                  edibleYield, volumeConversion, packProfile, packs: [...] } }
+//                  edibleYield, conversions: [...], packProfile, packs: [...] } }
 //
 // Returns { ok, lines, problems, totalPaisa }.
 // ---------------------------------------------------------------------------
@@ -261,8 +271,8 @@ function buildDishLines({ cycleCode, selections, recipes, catalog, policy }) {
         if (l.minQuantity != null) { const mn = dec(l.minQuantity, where + " min"); if (cmp(q, mn) < 0) q = mn; }
         if (l.maxQuantity != null) { const mx = dec(l.maxQuantity, where + " max"); if (cmp(q, mx) > 0) q = mx; }
 
+        if (ing.unit !== "g" && ing.unit !== "piece") throw new DishError("INVALID_SOLD_UNIT", `${where} ${ing.unit}`);
         let b = toBaseUnit(q, l.unit, ing, where);
-        if (b.unit !== ing.unit) throw new DishError("UNIT_MISMATCH", `${where} recipe ${b.unit} vs sold ${ing.unit}`);
         const basis = norm(l.quantityBasis);
         if (basis === "edible") {
           const y = dec(ing.edibleYield, where + " edibleYield");
