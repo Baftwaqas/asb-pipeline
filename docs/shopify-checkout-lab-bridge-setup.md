@@ -1,11 +1,14 @@
 # ASB Checkout Lab Bridge — Shopify Dev Dashboard app (5 November 2026)
 
+**VERIFIED INSTALLED (read-only Shopify Admin GraphQL):** App title `ASB Checkout Lab Bridge.`, non-embedded (`embedded=false`), installed on `asb-checkout-lab.myshopify.com` with granted `read_products` and `write_orders`. The blank Shopify Admin panel is expected for a non-embedded API-only app. This does NOT grant the ChatGPT connection an offline token for the Bridge app; separate server-held client credentials are still required for actual order creation.
+
+
 ## Why a separate app is required
 The connected ChatGPT Shopify app can READ/WRITE catalog fixtures and reports `write_orders`, but the isolated dev-shop `orderCreate` mutation rejected its session with:
 `Access denied for orderCreate field. Required access: write_orders access scope. Also: This mutation is only accessible to apps authenticated using offline tokens.`
 This was a genuine Shopify API attempt: **no order was created**. The connector does not expose a server-held application token usable by our code. **Do not use a production app or change its scopes.**
 
-## One-time store-owner setup (no Plugins, no token sharing)
+## Completed store-owner setup (no Plugins, no token sharing)
 1. Sign in at https://dev.shopify.com/ and choose the organization containing the already-created dev shop **ASB Checkout Lab**.
 2. Select **Apps → Create app → Start from Dev Dashboard**. Name it **ASB Checkout Lab Bridge**. This is a NEW, API-only DEV app, not a clone/configuration change to the production ASB Data Manager.
 3. In the app's **Versions**, create a version with **`read_products,write_orders`** as the minimal scopes for catalogue checking and order creation. The default non-embedded App URL is acceptable if no admin UI is needed. **Release** the version.
