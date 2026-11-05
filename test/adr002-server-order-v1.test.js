@@ -50,7 +50,7 @@ function storage(quote=makeQuote()){
         assert.equal(q.quoteId,quote.quoteId);
         assert.equal(i.householdKey,identity.householdKey);
         assert.equal(redemptionKey,redemptionKeyFor(q.quoteId,q.version));
-        assert.equal(at,NOW);
+        assert.equal(at,new Date(NOW).toISOString());
         if(state==="completed")return {state:"completed",shopifyOrderGid:orderId};
         if(state)return {state};
         // Durable DB implementation must perform this under Postgres lock.
