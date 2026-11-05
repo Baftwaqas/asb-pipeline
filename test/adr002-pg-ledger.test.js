@@ -176,4 +176,11 @@ test("T1: signed fixture + real PG ledger + mocked Shopify create one COD order 
   assert.equal(two.status,"already_created");
   assert.equal(calls,1);
   assert.equal(one.codPaisa,4500);
+  // The quote may expire after a successful COD order. A legitimate retry
+  // must find the SAME durable order, rather than trigger a second charge.
+  const expired=await confirmCodOrder({...kwargs,
+    now:()=>new Date(Date.parse(q.expiresAt)+1000)});
+  assert.equal(expired.status,"already_created");
+  assert.equal(expired.shopifyOrderGid,"gid://shopify/Order/7000007");
+  assert.equal(calls,1);
 });
