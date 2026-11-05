@@ -1,0 +1,193 @@
+# ASB ADR-002 — Quote Contract V1 (review candidate)
+
+**5 November 2026 · Status: NONPRODUCTION, awaiting Claude acceptance and T0–T8 acceptance proofs.**
+
+This is the **joint interface contract** for ASB Data Manager / Shopify storefront, the `asb-pipeline` price kernel, COD order creation, cycle locks, the packed-weight bill, and WhatsApp. It is **not executable checkout code**. The Five-Door founder-approved strategy is unchanged.
+
+## 1. Commercial invariants
+
+1. Each line has one trusted `door`: `apna_order`, `community_order`, `dish_to_cart`, `budget_to_cart`, or `bhao_tao`. Never pool *customer eligibility* across doors.
+2. Only Community Hero product lines meeting their *own* tier/pack requirement contribute to that door's Rs 1,200 qualifying **ceiling** subtotal. For Dish/Budget, same conditions are evaluated **independently** within each door. Apna never obtains Community prices.
+3. Eligibility persists after a **price-driven** decrease but is recomputed when the customer changes committed quantities before cutoff. Monday and Thursday are independent cycles.
+4. Apna has no minimum order total but strictly configured *product-specific* quantities and same-household/per-cycle caps. Dish quantities originate from verified recipes and may exceed Apna caps, including sub-Apna sizes (e.g. 40 g ginger). Dish items are aggregated **before** pricing. No forced extras.
+5. Bhao Tao applies to **non-grocery** items only; it neither pools eligibility with grocery doors nor shares grocery pricing.
+6. An unchanged order must never cost more than the customer-approved ceiling, at the **line and whole-order level**, notwithstanding final unit rates, packing overage or a later price drop.
+7. One customer-facing confirmation, one final COD obligation, one WhatsApp bill, even if Shopify internally stores line-specific `door` metadata.
+
+## 2. Quote V1 — conceptual JSON shape
+
+All money is an integer in **paisa** (1 PKR = 100 paisa); `qty` is a **positive integer** in `g` or `piece`, with no floating-point kilos and no implied Shopify inventory movement. `ceilingLinePaisa` is the **total approved ceiling for that line**, not a per-gram or per-pack unit rate. `quotedLinePaisa` is the currently quoted total (at confirmation it must not exceed the ceiling). `shopifyVariantGid` is the required merchandise identifier for catalogue-backed orders. `sku` is OPTIONAL informational metadata and MUST NOT be the primary key; many current variants have no SKU.
+
+```json
+{
+  "quoteId": "Q-opaque-unique",
+  "version": 3,
+  "issuedAt": "2026-11-05T05:10:00Z",
+  "expiresAt": "2026-11-05T05:25:00Z",
+  "cycleCode": "MON-2026-11-09",
+  "deliveryDate": "2026-11-09",
+  "customerReference": "server-resolved-household-key",
+  "currency": "PKR",
+  "lines": [
+    {
+      "lineId": "L1",
+      "door": "apna_order",
+      "shopifyVariantGid": "gid://shopify/ProductVariant/111111",
+      "canonicalProductId": "ASB-CANON-ONION",
+      "sku": null,
+      "unit": "g",
+      "qty": 1000,
+      "sellUnitLabel": "1 kg",
+      "heroTier": null,
+      "provenance": {"kind": "apna_selection"},
+      "ceilingLinePaisa": 21000,
+      "quotedLinePaisa": 21000
+    },
+    {
+      "lineId": "L2",
+      "door": "dish_to_cart",
+      "shopifyVariantGid": "gid://shopify/ProductVariant/222222",
+      "canonicalProductId": "ASB-CANON-GINGER",
+      "sku": null,
+      "unit": "g",
+      "qty": 40,
+      "sellUnitLabel": "40 g",
+      "heroTier": null,
+      "provenance": {"kind": "recipe", "recipeIds": ["RCP-000007"]},
+      "ceilingLinePaisa": 5000,
+      "quotedLinePaisa": 5000
+    },
+    {
+      "lineId": "L3",
+      "door": "community_order",
+      "shopifyVariantGid": "gid://shopify/ProductVariant/333333",
+      "canonicalProductId": "ASB-CANON-ONION",
+      "sku": null,
+      "unit": "g",
+      "qty": 5000,
+      "sellUnitLabel": "5 kg pack",
+      "heroTier": {"heroWeekId": "H-WEEK-001", "tierId": "ONION-5KG"},
+      "provenance": {"kind": "community_pack"},
+      "ceilingLinePaisa": 75000,
+      "quotedLinePaisa": 75000
+    }
+  ],
+  "communityEligibilityByDoor": {
+    "community_order": {"qualifyingCeilingPaisa": 75000, "eligible": false},
+    "dish_to_cart": {"qualifyingCeilingPaisa": 0, "eligible": false},
+    "budget_to_cart": {"qualifyingCeilingPaisa": 0, "eligible": false}
+  },
+  "ceilingTotalPaisa": 101000,
+  "quotedTotalPaisa": 101000,
+  "serverSignature": "opaque-HMAC-over-canonical-versioned-quote"
+}
+```
+
+**Example only:** the numeric variant IDs, SKUs, prices and tier records are not live product assertions. In this example the Community subcart is under Rs 1,200, so its final rate must be the applicable non-Community alternative or its Community checkout must be blocked/nudged according to founder policy; a production quote cannot present an unearned discount. The sample demonstrates how to record eligibility **without crossing door boundaries**.
+
+## 3. Field meanings and validation
+
+| Field | Required validation |
+| --- | --- |
+| `quoteId`, `version` | Opaque ID + positive integer; database unique; all versions of a quote share an editing chain. Only the current unexpired version is redeemable. |
+| `issuedAt`, `expiresAt`, `cycleCode`, `deliveryDate` | Set by server in PKT-aware cycle logic; no cross-cycle carryover. Validate cutoff and expiry at confirmation. |
+| `customerReference` | Canonical internal household record, resolved by server. App proxy's shop signature is **not** customer authentication. |
+| `lines[].lineId` | Unique within quote; required to reconcile packed weight, Shopify line and WhatsApp billing. |
+| `door` | Required per line; allowed values from founder policy; never assign wholesale rights using a cart-global door. |
+| `shopifyVariantGid` | Required for catalogue-backed lines; `gid://shopify/ProductVariant/<numeric ID>`; server confirms active mapping and correct product. No `sku` fallback for missing variant GID. |
+| `canonicalProductId` | Stable internal ID, used for product-specific Apna caps and ingredient aggregation across variants. Separate from variant GID. |
+| `sku` | Optional informational string; backfill in a later catalogue cleanup. |
+| `unit`, `qty` | `g` or `piece`, positive safe integer; `sellUnitLabel` clarifies `1 gaddi`, `dozen`, `400 g dahi pack`, etc.; if piece means a sealed pack, record its pack definition in the canonical product master. |
+| `heroTier` | Null for non-qualified/non-Hero lines; for potential Hero lines, server-resolved week/tier references. **Tier presence alone does not confer discount.** Evaluate entry and tier together. |
+| `provenance` | `apna_selection`, `community_pack`, `recipe` (`recipeIds`), `budget_plan` (`planId`), or `bhao_offer` (`offerId`). Never trust the client-supplied source; engine must validate and recompute quantities against approved records. |
+| `ceilingLinePaisa`, `quotedLinePaisa` | Both integer >=0; quoted <= ceiling. Must equal sum of client-presented line totals with precise rounding policy. |
+| `communityEligibilityByDoor` | Feature-local qualifying totals computed from tier-qualified Hero lines at ceiling. Threshold 120000 paisa. Never sum between doors. |
+| `ceilingTotalPaisa`, `quotedTotalPaisa` | Server recomputes from line totals plus any approved fees/credits; never trusts client total. Free Mon/Thu delivery remains. |
+| `serverSignature` | Authenticity and integrity of canonical quote, with key rotation support; **not** a substitute for database status, shopper confirmation, identity/abuse checks or idempotency. |
+
+The **committed quotation** is immutable. Changing ingredients/quantities/feature before cutoff creates a new version and immediately invalidates previous unredeemed versions.
+
+### Mixed-door examples
+- Two different doors may contain the **same variant GID** in two separately identified lines; they must not lose `door` or `provenance` during deduplication.
+- Within Dish-to-Cart, aggregate matching recipe ingredients after pantry exclusions and edible/purchase-weight conversion; store the authoritative recipe IDs on the resulting line.
+- Community packs remain fixed configurations; two 5 kg packs do **not** automatically earn a 10 kg tier where the 10 kg tier requires a distinct approved pack configuration.
+
+## 4. Shopify order representation — separate from the quote
+
+For an **exact-weight quote line** (e.g. 40 g ginger), use one Shopify order line with **`quantity: 1`** and **`priceSet` equal to the TOTAL agreed line price** in PKR. `title` may describe the measured quantity; `properties` should store source feature, `lineId`, `unit`, `qty`, canonical product, recipe provenance and approved ceiling. **Do not** use Shopify `quantity: 40` at a tiny per-gram unit price. This avoids sub-paisa unit rounding; Shopify quantity counts order line units, not grams. Shopify `weight` may express shipping weight, but is **not** an inventory deduction mechanism.
+
+The live API must be probed for (a) preserving custom title when a `variantId` is supplied, (b) line-item properties survival after order edits, (c) price and tax behaviour on Grow, and (d) COD and WhatsApp reconciliation.
+
+Shopify `orderCreate` uses `write_orders` with an **offline token**; configure `write_app_proxy` if using an app proxy. Test installed app scopes, not just committed `shopify.app.toml`. Shopify orderCreate does **not** recreate checkout's automatic discount behaviour; the server must fully author correct final prices.
+
+**Inventory:** existing sampled Shopify variants are not inventory-tracked. Thus one may use existing cycle procurement and measured packing records as V1 operational stock truth **only if** an actual adjustment/reconciliation process and shortage checks are demonstrated. Record gram-level fulfilled totals internally; do not assume Shopify inventory was decremented. Do not claim complete inventory integrity from the order alone.
+
+## 5. Atomic quote redemption / COD idempotency
+
+An app-proxy HMAC validates the store route, not the identity of the shopper. The server must validate customer confirmation/identity separately.
+
+1. Within a Postgres transaction: acquire stable household+cycle lock, check signed current quote version, read current Apna limits and existing reservations, validate Hero tiers and expiry, and reserve quote state and demand atomically.
+2. Commit the reservation **before** Shopify network call; record a unique external-order correlation key and mark `creating`.
+3. Call `orderCreate` with a safe explicit inventory behaviour; attach the opaque correlation ID to the order. Never submit two independent Shopify creates on a network timeout. Recover by looking up the correlation ID in Shopify or by an operator-controlled reconciliation path.
+4. On success, persist Shopify order ID and mark redeemed. On ambiguous timeout, mark `needs_reconcile`, block automatic retry. On permanent failure, cancel reservation with an auditable reason.
+5. A retry for an already-redeemed quote returns the same Shopify order ID; must not create a duplicate commitment, WhatsApp message or COD obligation.
+6. A customer edit invalidates superseded unredeemed quote versions; the new version must revalidate the whole quote under one household/cycle lock.
+
+**Required:** a transaction-safe reservation table unique across `quoteId+version` **and** quote-chain order consumption, and tests for concurrent requests, timeout/retry and duplicate webhook delivery.
+
+## 6. Apna cap in native checkout — A3 provisional exception
+
+For the **server-authored confirmation path**: reject any Apna per-product quantity over its household/cycle maximum **before** accepting COD commitment.
+
+For **pure Apna native Shopify checkout while it remains live**: a backend cannot stop Shopify's Grow checkout from accepting an oversized cart using our own custom validation Function. Therefore detect immediately upon the authoritative `orders/create` event, place a **hold / review** on oversize purchases, and notify the customer promptly; do not silently wait until packing, fulfill an over-limit quantity, or quietly change the order. If fulfillment holds need an unsupported API or conflicting operational behaviour, use an internal hold and block allocation with clear staff alerts. This exception is temporary and is **not** equivalent to pre-checkout enforcement. Final single-path enforcement requires moving Apna into the validated server-owned path or a supported checkout-validation alternative.
+
+Household identity should be derived from **normalised phone plus confirmed delivery address/flat and society**, not naive equality of phone alone. This can flag rather than automatically reject multi-household scenarios. Clarify genuine household merges through customer support.
+
+## 7. Line ceiling safety — confirmed defect and owner boundaries
+
+Current line billing is based on `COALESCE(qty_packed,qty_ordered) × price` and may exceed the approved **line** amount after a small packing overage.
+
+Illustration:
+- Accepted: 1,000 g at Rs 100/kg ⇒ line ceiling Rs 100.
+- Packed: 1,080 g; final rate Rs 95/kg ⇒ arithmetic Rs 102.60.
+- **Maximum collectible for that unchanged line remains Rs 100.**
+
+Formula (single consistent billing unit; rounded deterministically in paisa):
+
+```
+line_billed_paisa = min(
+  ceiling_line_paisa,
+  rounded_actual_billable_quantity × final_unit_price
+)
+```
+
+A short pack is charged for delivered weight and flagged for quality remediation; don't treat under-delivery as an ordinary acceptable substitution. A packing overage may be given free within documented operational tolerances. Do not bill an item that is absent. Discounts must not lift another line above its ceiling, and the **whole order must never exceed its accepted ceiling**, aside from separately customer-approved post-commitment additions.
+
+**Shared ownership:** Claude drafts migration for persisted line ceiling inside its agreed migration range; ChatGPT reviews schema and bill change. `bill.js` and `order_items` changes should be made in a dedicated joint PR, not by two developers simultaneously.
+
+## 8. Minimum acceptance tests before rollout
+
+- **T0**: expired, forged, tampered, replayed and concurrent quote redemptions never create duplicate COD obligations or double-count a Rate Meter commitment.
+- **T1**: a mixed-door quote has separate door tags and pricing rights, but one customer-facing checkout/confirmation and bill.
+- **T2 / F05**: price-drop + overpacking/underpacking results in no greater than confirmed **line and order** ceiling; Shopify total, packing record and WhatsApp final bill match to paisa.
+- **T3**: tampering with `door`, `heroTier`, `qty`, `provenance`, `price`, `household` or `cycle` never unlocks unearned prices.
+- **T4**: Apna caps aggregate variants and same-cycle commitments; reject on server confirmation; separate documented native-checkout hold until fully migrated. Dish 40 g remains allowed.
+- **T5**: every WhatsApp confirmation and `asal bill` equals the Shopify authoritative payable amount; retries never double-send.
+- **T6**: 40 g exact-weight order remains 40 g in quote, pack record, bill and procurement-consumption measurement; do not assume `quantity:1` reduces 40 g stock in Shopify.
+- **T7**: a separately approved staff-order test on the real **Grow** store, after dev-store success, confirms parity without customer-visible defects.
+- **T8**: editing before cutoff issues a new quote version; previous version cannot create a Shopify order; late edits obey lock-state policy.
+
+**Release gate:** no customer rollout until all relevant tests pass, appropriate app scopes installed, and founder authorizes specific production changes. The existing Shopify storefront and live pipeline remain untouched by this document.
+
+## 9. Handoff to Claude
+
+**Request:** Please accept or reject the quote contract above as the shared `docs/quote-contract-v1.md`, specifically review:
+- `variantGid` mandatory / SKU optional and canon product mapping;
+- `unit` g|piece, `heroTier`, server-recomputed `provenance`;
+- native Apna interim hold and the non-equivalence to blocking checkout;
+- Shopify quantity=1 custom price/weight + inventory reconciliation;
+- line ceiling/underweight handling and transaction idempotency.
+
+If accepted, proceed with Lane C commitments migration and F03/F04 kernel tests. Flag **only actionable counterexamples** or factual Shopify API incompatibilities. No strategy reopening.
+
+References: Shopify GraphQL Admin API 2026-10 `OrderCreateLineItemInput`, `orderCreate`; Shopify app proxy configuration, which needs `write_app_proxy`.
