@@ -121,6 +121,30 @@ function createPgRedemptionLedger({
     });
   }
 
+  // READ ONLY. Once the pending claim was completed, the original COD
+  // order remains retrievable after quote expiry; never restart Shopify.
+  async function lookupCompletedQuote({quote,identity,redemptionKey}={}){
+    const quoteId=required(quote?.quoteId,"QUOTE_ID");
+    const hh=required(identity?.householdKey,"HOUSEHOLD_KEY");
+    const key=required(redemptionKey,"REDEMPTION_KEY");
+    if(identity?.serverAuthenticated!==true||identity?.phoneVerified!==true||
+       quote.customerReference!==hh)throw new QuoteError("CUSTOMER_NOT_AUTHENTICATED");
+    const db=await pool.connect();
+    try {
+      const r=(await db.query(
+        `SELECT r.state,r.shopify_order_gid,r.redemption_key,r.quote_version,
+                q.signed_quote
+           FROM checkout_redemptions r JOIN checkout_quotes q ON q.quote_id=r.quote_id
+          WHERE r.quote_id=$1 AND r.shop_domain=$2 AND r.household_key=$3`,
+        [quoteId,shopDomain,hh])).rows[0];
+      if(!r||r.redemption_key!==key||r.quote_version!==quote.version||
+         canonical(r.signed_quote)!==canonical(quote))return {state:"not_completed"};
+      if(r.state==="completed"&&GID.test(r.shopify_order_gid||""))
+        return {state:"completed",shopifyOrderGid:r.shopify_order_gid};
+      return {state:"not_completed"};
+    } finally {db.release();}
+  }
+
   async function completeQuote({claimId,shopifyOrderGid,redemptionKey,expectedCodPaisa}={}){
     const claim=required(claimId,"CLAIM_ID");
     const order=required(shopifyOrderGid,"ORDER_GID");
@@ -168,6 +192,6 @@ function createPgRedemptionLedger({
       return {state:"needs_reconcile"};
     });
   }
-  return {claimQuote,completeQuote,needsReconcile};
+  return {claimQuote,lookupCompletedQuote,completeQuote,needsReconcile};
 }
 module.exports={createPgRedemptionLedger};
