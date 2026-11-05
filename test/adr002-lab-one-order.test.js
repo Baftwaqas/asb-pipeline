@@ -71,7 +71,7 @@ test("LAB: preflight requires exact dev DB host and explicit approval",()=>{
   const backup={...process.env};
   try{
     Object.assign(process.env,{ASB_LAB_SHOP_DOMAIN:SHOP,ASB_LAB_WRITE_MODE:"disabled",
-      ASB_ENV:"development",DATABASE_URL:"postgres://lab:pass@db.lab.internal/asb_checkout_lab_pg18",
+      ASB_ENV:"development",DATABASE_URL:"postgres://lab:pass@dpg-dbm8v3qjnfac738pc31g-a.internal/asb_checkout_lab_pg18",
       ASB_MUTATION_DB_HOST:"db.lab.internal",
       ASB_MUTATION_DB_NAME:"asb_checkout_lab_pg18",
       ASB_LAB_APP_CLIENT_ID:"TEST-ID-12345",
@@ -81,9 +81,9 @@ test("LAB: preflight requires exact dev DB host and explicit approval",()=>{
     // process.argv from node test has neither --check-only nor an explicit
     // manual --create-single-order command; it MUST fail closed.
     assert.throws(()=>preflight(),/EXPLICIT_MANUAL_SINGLE_ORDER_APPROVAL_REQUIRED/);
-    process.env.ASB_MUTATION_DB_HOST="neon.production.example";
-    assert.throws(()=>preflight(),/DATABASE_URL host/);
-    process.env.ASB_MUTATION_DB_HOST="db.lab.internal";
+    process.env.DATABASE_URL="postgres://lab:pass@neon.production.example/asb_checkout_lab_pg18";
+    assert.throws(()=>preflight(),/LAB_MUST_USE_OWN_ISOLATED_RENDER_DATABASE/);
+    process.env.DATABASE_URL="postgres://lab:pass@dpg-dbm8v3qjnfac738pc31g-a.internal/asb_checkout_lab_pg18";
     process.env.ASB_LAB_SHOP_DOMAIN="some-other-store.myshopify.com";
     assert.throws(()=>preflight(),/LAB_MODE_OR_DOMAIN_GUARD_REFUSED/);
   }finally{
