@@ -37,22 +37,50 @@ server.listen(port,"0.0.0.0",()=>console.log("[checkout-lab] safe-locked health 
 
 const {execFile}=require("node:child_process");
 const pathModule=require("node:path");
-// Optional, isolated ONE-SHOT startup action: public HTTP still has zero
-// write endpoints. It is intentionally dormant until an operator explicitly
-// arms a separate dev-service variable and supplies server-held credentials.
-// PostgreSQL's unique quote and household/cycle reservation is the durable
-// second guard if Render restarts the process after an uncertain API result.
-if(process.env.ASB_LAB_ONE_SHOT_RUN==="RUN_NOW_ONCE"){
-  const script=pathModule.join(__dirname,"../scripts/lab-one-order-v1.js");
-  const env={...process.env,ASB_LAB_CLI_APPROVAL:"ASB_LAB_ONLY_ONE_TEST_ORDER"};
-  execFile(process.execPath,[script,"--create-single-order"],{
-    env,timeout:100000,maxBuffer:128*1024
-  },(err,stdout,stderr)=>{
-    // script is deliberately prohibited from printing credentials or PII.
-    if(stdout)console.log(String(stdout).slice(0,3000));
-    if(err)console.error("[checkout-lab] one-shot outcome: action refused or needs reconciliation",{
-      code:err.code||null});
-    else console.log("[checkout-lab] one-shot completed");
-    if(stderr)console.error("[checkout-lab] one-shot diagnostic",String(stderr).slice(0,750));
+const {targetOf}=require("../scripts/lib/db-target-guard");
+const DB_ID="dpg-dbm8v3qjnfac738pc31g-a";
+const DB_NAME="asb_checkout_lab_pg18";
+function assertExactLabDatabase(){
+  const t=targetOf(process.env.DATABASE_URL);
+  const hosts=new Set([DB_ID,DB_ID+".internal",DB_ID+".singapore-postgres.render.com"]);
+  if(t.database!==DB_NAME||!hosts.has(t.host)||
+     process.env.ASB_MUTATION_DB_HOST!==t.host||
+     process.env.ASB_MUTATION_DB_NAME!==DB_NAME)
+    throw new Error("REFUSED_NOT_ISOLATED_ASB_CHECKOUT_LAB_DATABASE");
+}
+// The public health server NEVER offers an HTTP order endpoint. The Render
+// operator can arm an exact one-shot startup operation on this dedicated
+// DEV service. The postgres ledger prevents duplicate orders on restarts.
+function launch(argv,extraEnv,onFinish){
+  execFile(process.execPath,argv,{env:{...process.env,...extraEnv},
+    timeout:150000,maxBuffer:128*1024},(err,stdout,stderr)=>{
+    if(stdout)console.log("[checkout-lab] operator task:",String(stdout).slice(0,2500));
+    if(stderr)console.error("[checkout-lab] operator task diagnostic:",String(stderr).slice(0,700));
+    if(err)console.error("[checkout-lab] operator task blocked/failed",{code:err.code||null});
+    onFinish?.(err||null);
   });
+}
+function runOrder(){
+  try{assertExactLabDatabase();}
+  catch(e){console.error("[checkout-lab] order blocked: unsafe DB target");return;}
+  const runner=pathModule.join(__dirname,"../scripts/lab-one-order-v1.js");
+  launch([runner,"--create-single-order"],{
+    ASB_LAB_CLI_APPROVAL:"ASB_LAB_ONLY_ONE_TEST_ORDER"
+  },(err)=>{if(!err)console.log("[checkout-lab] test order stage completed safely");});
+}
+if(process.env.ASB_LAB_MIGRATE_ONCE==="RUN_LAB_MIGRATIONS"){
+  try{assertExactLabDatabase();}
+  catch(e){console.error("[checkout-lab] migration blocked: unsafe DB target");}
+  if(process.env.DATABASE_URL&&process.env.ASB_MUTATION_DB_HOST){
+    try{
+      assertExactLabDatabase();
+      const migration=pathModule.join(__dirname,"../scripts/migrate.js");
+      launch([migration],{},(err)=>{
+        if(!err&&process.env.ASB_LAB_ONE_SHOT_RUN==="RUN_NOW_ONCE")runOrder();
+      });
+    }catch{ /* already blocked; refuse silently */ }
+  }
+}else if(process.env.ASB_LAB_ONE_SHOT_RUN==="RUN_NOW_ONCE"){
+  // For a DB that was explicitly migrated in a previous safe deployment.
+  runOrder();
 }
