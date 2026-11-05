@@ -20,12 +20,16 @@ function preflight(){
      process.env.ASB_ENV!=="development")
     throw Error("LAB_MODE_OR_DOMAIN_GUARD_REFUSED");
   const url=process.env.DATABASE_URL;
-  const t=assertMutationTarget({databaseUrl:url,
-    expectedHost:process.env.ASB_MUTATION_DB_HOST,
-    expectedDatabase:process.env.ASB_MUTATION_DB_NAME,
-    operation:"ASB LAB TEST ORDER"});
-  if(t.database!==DB||/neon\.tech$/i.test(t.host))
+  const target=targetOf(url);
+  const DB_ID="dpg-dbm8v3qjnfac738pc31g-a";
+  const allowedHosts=new Set([DB_ID,DB_ID+".internal",
+    DB_ID+".singapore-postgres.render.com"]);
+  if(target.database!==DB||!allowedHosts.has(target.host)||
+     process.env.ASB_MUTATION_DB_NAME!==DB)
     throw Error("LAB_MUST_USE_OWN_ISOLATED_RENDER_DATABASE");
+  assertMutationTarget({databaseUrl:url,
+    expectedHost:target.host,expectedDatabase:DB,
+    operation:"ASB LAB TEST ORDER"});
   if(typeof process.env.ASB_LAB_APP_CLIENT_ID!=="string"||
      typeof process.env.ASB_LAB_APP_CLIENT_SECRET!=="string"||
      typeof process.env.ASB_QUOTE_SECRET!=="string"||
