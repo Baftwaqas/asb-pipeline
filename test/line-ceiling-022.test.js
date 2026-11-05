@@ -128,15 +128,17 @@ test("randomised rows: never above ceiling; identical to 001 when not over-packe
   const h = await header(o.id);
   const b = bill.finalBill({ order_number: o.order_number, customer_name: "T", billed_total: h.billed_total,
     lines: rows.map((r) => ({ ...r, unit: "kg", pack_size: 1, name_en: "Onion" })) });
-  assert.equal(b.billedPaisa, b.linePaisa.reduce((s, p) => s + p, 0));
-  assert.equal(b.billedPaisa, Math.round(Number(h.billed_total) * 100));
-  assert.equal(b.payablePaisa + b.roundingCreditPaisa, b.billedPaisa);
+  assert.equal(b.subtotalPaisa, b.linePaisa.reduce((s, p) => s + p, 0));
+  assert.equal(b.subtotalPaisa, Math.round(Number(h.billed_total) * 100));
+  assert.equal(b.payablePaisa + b.roundingCreditPaisa, b.totalPaisa);
   assert.equal(b.payablePaisa % 100, 0);
 });
 
-test("migration on existing rows: unbilled header refreshed, sent bill left as the customer saw it", async () => {
-  // Put order_items back to the 001 shape, load the bug, then run 022 for real.
+test("migration on existing rows: unbilled refreshed; draft+queued voided and quarantined; sent held in a durable review queue", async () => {
+  // Put order_items back to the 001 shape, load the bug in every bill state,
+  // then run 022 for real.
   const restore001 = `
+    DROP VIEW v_bill_ceiling_review_queue; DROP TABLE bill_ceiling_reviews;
     DROP VIEW v_order_totals;
     ALTER TABLE order_items DROP COLUMN line_total, DROP COLUMN ceiling_line_total, DROP COLUMN line_savings;
     ALTER TABLE order_items
@@ -153,16 +155,23 @@ test("migration on existing rows: unbilled header refreshed, sent bill left as t
   await db.query(restore001);
 
   const unbilled = await newOrder();
+  const draft = await newOrder();
   const sent = await newOrder();
   const ua = await item(unbilled.id, { packed: "1.080" });
-  const sa = await item(sent.id, { packed: "1.080" });
   const keep = await item(unbilled.id, { packed: "0.920" });
+  await item(draft.id, { packed: "1.080" });
+  const sa = await item(sent.id, { packed: "1.080" });
   assert.equal((await row(ua)).line_total, "102.60"); // the bug, reproduced
-  await db.query(`SELECT asb_refresh_order_totals($1)`, [unbilled.id]);
-  await db.query(`SELECT asb_refresh_order_totals($1)`, [sent.id]);
-  await db.query(
-    `INSERT INTO bills (order_id, cycle_id, customer_id, subtotal, grand_total, status)
-     VALUES ($1, $2, $3, 102.60, 102.60, 'sent')`, [sent.id, cycleId, sent.customerId]);
+  for (const o of [unbilled, draft, sent]) await db.query(`SELECT asb_refresh_order_totals($1)`, [o.id]);
+
+  // Draft: the real bill engine, exactly as production would have run it.
+  await db.query(`UPDATE orders SET status = 'packed' WHERE id = ANY($1)`, [[draft.id, sent.id]]);
+  const d1 = (await db.query(`SELECT * FROM asb_generate_bill($1)`, [draft.id])).rows[0];
+  assert.equal(d1.grand_total, "102.60");
+  // Sent: same engine, then marked sent.
+  const s1 = (await db.query(`SELECT * FROM asb_generate_bill($1)`, [sent.id])).rows[0];
+  await db.query(`UPDATE bills SET status = 'sent', sent_at = now() WHERE id = $1`, [s1.bill_id]);
+  await db.query(`UPDATE whatsapp_messages SET status = 'sent', wamid = 'wamid.T022' WHERE id = $1`, [s1.message_id]);
   const keepBefore = await row(keep);
 
   const notices = [];
@@ -171,11 +180,83 @@ test("migration on existing rows: unbilled header refreshed, sent bill left as t
   await db.query(fs.readFileSync(path.join(ROOT, "db", "migrations", "022_line_ceiling_billing.sql"), "utf8"));
   db.off("notice", onNotice);
 
+  // Lines: all capped; the under-packed line did not move.
   assert.equal((await row(ua)).line_total, "100.00");
   assert.equal((await row(sa)).line_total, "100.00");
   assert.deepEqual(await row(keep), keepBefore);
+
+  // Unbilled: header refreshed.
   assert.equal((await header(unbilled.id)).billed_total, "187.40"); // 100.00 + 87.40
-  assert.equal((await header(sent.id)).billed_total, "102.60");     // untouched: founder review
+
+  // Draft: old bill voided with a reason, old message out of the outbox, header refreshed,
+  // and the next generate issues a NEW capped bill with a NEW queued message.
+  const oldBill = (await db.query(`SELECT status::text, void_reason FROM bills WHERE id = $1`, [d1.bill_id])).rows[0];
+  assert.equal(oldBill.status, "void");
+  assert.match(oldBill.void_reason, /Migration 022/);
+  const oldMsg = (await db.query(`SELECT status::text, error_code, attempts FROM whatsapp_messages WHERE id = $1`, [d1.message_id])).rows[0];
+  assert.deepEqual([oldMsg.status, oldMsg.error_code, oldMsg.attempts >= 5], ["failed", "ASB022_STALE_ABOVE_CEILING", true]);
+  const outbox = (await db.query(`SELECT count(*)::int n FROM v_whatsapp_outbox WHERE message_id = $1`, [d1.message_id])).rows[0].n;
+  assert.equal(outbox, 0);
+  assert.equal((await header(draft.id)).grand_total, "100.00");
+  const d2 = (await db.query(`SELECT * FROM asb_generate_bill($1)`, [draft.id])).rows[0];
+  assert.notEqual(d2.bill_id, d1.bill_id);
+  assert.equal(d2.was_existing, false);
+  assert.equal(d2.grand_total, "100.00");
+  assert.notEqual(d2.message_id, d1.message_id);
+
+  // Sent: bill, message and header exactly as the customer saw them.
+  const sentBill = (await db.query(`SELECT status::text, grand_total FROM bills WHERE id = $1`, [s1.bill_id])).rows[0];
+  assert.deepEqual(sentBill, { status: "sent", grand_total: "102.60" });
+  assert.equal((await header(sent.id)).billed_total, "102.60");
+  const sentMsg = (await db.query(`SELECT status::text FROM whatsapp_messages WHERE id = $1`, [s1.message_id])).rows[0];
+  assert.equal(sentMsg.status, "sent");
+
+  // Durable record, one row per corrected order; only the sent one needs a decision.
+  const rev = (await db.query(
+    `SELECT order_id, classification, bill_status, needs_decision, bill_amount_sent, corrected_liability,
+            overcharge, messages_quarantined, lines FROM bill_ceiling_reviews WHERE order_id = ANY($1) ORDER BY order_id`,
+    [[unbilled.id, draft.id, sent.id]])).rows;
+  assert.deepEqual(rev.map((r) => [r.classification, r.bill_status, r.needs_decision]), [
+    ["unbilled_refreshed", "none", false],
+    ["draft_voided_refreshed", "draft", false],
+    ["sent_founder_review", "sent", true],
+  ]);
+  assert.equal(rev[1].messages_quarantined, 1);
+  assert.deepEqual([rev[2].bill_amount_sent, rev[2].corrected_liability, rev[2].overcharge], ["102.60", "100.00", "2.60"]);
+  assert.deepEqual(rev[2].lines, [{ order_item_id: Number(sa), old_line_total: 102.6, new_line_total: 100.0 }]);
+  const queue = (await db.query(`SELECT order_id FROM v_bill_ceiling_review_queue`)).rows.map((r) => r.order_id);
+  assert.ok(queue.includes(sent.id) && !queue.includes(draft.id) && !queue.includes(unbilled.id));
   assert.ok(notices.some((m) => m.includes(sent.order_number) && m.includes("founder review")), notices.join("\n"));
-  assert.ok(notices.some((m) => /ASB022: [1-9][0-9]* unbilled order header\(s\) refreshed/.test(m)), notices.join("\n"));
+
+  // A decision must be attributed.
+  await assert.rejects(db.query(`UPDATE bill_ceiling_reviews SET decision = 'refund' WHERE order_id = $1`, [sent.id]),
+    /decision_is_attributed/);
+  await db.query(`UPDATE bill_ceiling_reviews SET decision = 'refund', decided_by = 'founder', decided_at = now()
+                   WHERE order_id = $1`, [sent.id]);
+  assert.equal((await db.query(`SELECT count(*)::int n FROM v_bill_ceiling_review_queue WHERE order_id = $1`, [sent.id])).rows[0].n, 0);
+
+  // B3: the bill composer refuses the sent order (stale header vs corrected lines),
+  // so it can never be re-sent or collected from by mistake.
+  const lines = (await db.query(
+    `SELECT qty_ordered, qty_packed, ceiling_unit_price, final_unit_price, billed_unit_price, line_total, is_unavailable,
+            'Onion' AS name_en, 'kg' AS unit, 1 AS pack_size FROM order_items WHERE order_id = $1`, [sent.id])).rows;
+  const h = (await db.query(`SELECT billed_total, grand_total, delivery_fee, discount FROM orders WHERE id = $1`, [sent.id])).rows[0];
+  assert.throws(() => bill.finalBill({ order_number: sent.order_number, customer_name: "T", ...h, lines }), /BILL_HEADER_MISMATCH/);
+});
+
+test("B4: an unavailable line is excluded from the header and from the bill, which agree", async () => {
+  const o = await newOrder();
+  await item(o.id, { packed: "1.000" }); // 95.00
+  const gone = await item(o.id, { packed: "0.500" });
+  await db.query(`UPDATE order_items SET is_unavailable = true WHERE id = $1`, [gone]);
+  await db.query(`UPDATE orders SET delivery_fee = 50, discount = 20 WHERE id = $1`, [o.id]);
+  await db.query(`SELECT asb_refresh_order_totals($1)`, [o.id]);
+  const h = (await db.query(`SELECT billed_total, grand_total, delivery_fee, discount FROM orders WHERE id = $1`, [o.id])).rows[0];
+  assert.deepEqual([h.billed_total, h.grand_total], ["95.00", "125.00"]);
+  const lines = (await db.query(
+    `SELECT qty_ordered, qty_packed, ceiling_unit_price, final_unit_price, billed_unit_price, line_total, is_unavailable,
+            'Onion' AS name_en, 'kg' AS unit, 1 AS pack_size FROM order_items WHERE order_id = $1 ORDER BY id`, [o.id])).rows;
+  const b = bill.finalBill({ order_number: o.order_number, customer_name: "T", ...h, lines });
+  assert.deepEqual([b.subtotalPaisa, b.totalPaisa, b.payablePaisa], [9500, 12500, 12500]);
+  assert.match(b.rich, /dastiyab nahi, Rs 0/);
 });

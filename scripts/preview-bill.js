@@ -36,7 +36,7 @@ async function main() {
   const head = await db.query(
     `SELECT o.id, o.order_number, o.status::text AS status,
             o.ceiling_total, o.billed_total, o.savings_total, o.grand_total,
-            o.market_total, o.community_total,
+            o.market_total, o.community_total, o.delivery_fee, o.discount,
             cy.code AS cycle_code, cy.delivery_date, o.placed_at,
             COALESCE(c.name, 'Customer') AS customer_name,
             c.phone
@@ -60,7 +60,7 @@ async function main() {
             oi.ceiling_unit_price, oi.final_unit_price, oi.billed_unit_price,
             oi.market_unit_price, oi.market_line_total, oi.community_savings,
             p.min_qty AS pack_size,
-            oi.line_total, oi.ceiling_line_total, oi.line_savings
+            oi.line_total, oi.ceiling_line_total, oi.line_savings, oi.is_unavailable
        FROM order_items oi
        JOIN products p ON p.id = oi.product_id
       WHERE oi.order_id = $1
@@ -96,8 +96,8 @@ async function main() {
       const next = {
         ...l,
         qty_packed: packed,
-        final_unit_price: finalPrice,
-        billed_unit_price: billedRate,
+        final_unit_price: String(finalPrice),
+        billed_unit_price: String(billedRate),
         line_total: null,
       };
       const overPacked = Math.round(billedQty * 1000) > Math.round(Number(l.qty_ordered) * 1000);
@@ -110,9 +110,16 @@ async function main() {
       };
     }),
   };
-  after.ceiling_total = after.lines.reduce((s, l) => s + Number(l.ceiling_line_total), 0);
-  after.billed_total = after.lines.reduce((s, l) => s + Math.round(Number(l.line_total) * 100), 0) / 100;
-  after.market_total = after.lines.reduce(
+  // Header recomputed exactly as asb_refresh_order_totals does: unavailable
+  // lines excluded, sums in integer paisa, grand total floored at zero.
+  const live = after.lines.filter((l) => !l.is_unavailable);
+  const sumPaisa = (f) => live.reduce((s, l) => s + Math.round(Number(f(l)) * 100), 0);
+  after.ceiling_total = sumPaisa((l) => l.ceiling_line_total) / 100;
+  after.billed_total = sumPaisa((l) => l.line_total) / 100;
+  after.grand_total = Math.max(
+    sumPaisa((l) => l.line_total) + Math.round(Number(order.delivery_fee || 0) * 100)
+      - Math.round(Number(order.discount || 0) * 100), 0) / 100;
+  after.market_total = live.reduce(
     (s, l) => s + Number(l.qty_packed ?? l.qty_ordered) * Number(l.market_unit_price ?? l.ceiling_unit_price), 0);
 
   const final = bill.finalBill(after);
