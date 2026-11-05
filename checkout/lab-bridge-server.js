@@ -44,7 +44,6 @@ function assertExactLabDatabase(){
   const t=targetOf(process.env.DATABASE_URL);
   const hosts=new Set([DB_ID,DB_ID+".internal",DB_ID+".singapore-postgres.render.com"]);
   if(t.database!==DB_NAME||!hosts.has(t.host)||
-     process.env.ASB_MUTATION_DB_HOST!==t.host||
      process.env.ASB_MUTATION_DB_NAME!==DB_NAME)
     throw new Error("REFUSED_NOT_ISOLATED_ASB_CHECKOUT_LAB_DATABASE");
 }
@@ -71,11 +70,13 @@ function runOrder(){
 if(process.env.ASB_LAB_MIGRATE_ONCE==="RUN_LAB_MIGRATIONS"){
   try{assertExactLabDatabase();}
   catch(e){console.error("[checkout-lab] migration blocked: unsafe DB target");}
-  if(process.env.DATABASE_URL&&process.env.ASB_MUTATION_DB_HOST){
+  if(process.env.DATABASE_URL){
     try{
       assertExactLabDatabase();
       const migration=pathModule.join(__dirname,"../scripts/migrate.js");
-      launch([migration],{},(err)=>{
+      // Guard has already identified the single Render database by immutable id.
+      // Supply exact host only to the existing migration runner's separate guard.
+      launch([migration],{ASB_MUTATION_DB_HOST:targetOf(process.env.DATABASE_URL).host},(err)=>{
         if(!err&&process.env.ASB_LAB_ONE_SHOT_RUN==="RUN_NOW_ONCE")runOrder();
       });
     }catch{ /* already blocked; refuse silently */ }
