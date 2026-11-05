@@ -18,9 +18,6 @@ const ELIGIBLE_DOORS = Object.freeze(["community_order", "dish_to_cart", "budget
 const ALL_DOORS = new Set([...ELIGIBLE_DOORS, "apna_order", "bhao_tao"]);
 const UNITS = new Set(["g", "piece"]);
 
-// Commitment lifecycle (F13). Only these count toward the live meter.
-const METER_STATUSES = new Set(["verified", "locked", "fulfilled", "paid"]);
-const ALL_STATUSES = new Set(["pending", "verified", "locked", "fulfilled", "paid", "cancelled", "refused"]);
 
 class KernelError extends Error {
   constructor(code, detail) { super(code + (detail ? ": " + detail : "")); this.code = code; }
@@ -166,30 +163,103 @@ function codPayable({ lineBilledPaisa: lines, orderCeilingPaisa }) {
   return { billedPaisa: capped, payablePaisa: payable, roundingCreditPaisa: capped - payable };
 }
 
+// ---------------------------------------------------------------------------
+// Verification (docs/community-verification-policy-v1.md, ADR-002-VERIFY-001,
+// founder-approved 5 Nov 2026). Three SEPARATE dimensions:
+//   verificationState   pending | under_review | verified | rejected | cancelled
+//   fulfillmentState    none | locked | packed | fulfilled | paid | refused
+//   paymentSecurityState unsecured_cod | deposit_confirmed | prepaid_confirmed
+// ---------------------------------------------------------------------------
+const VERIFICATION_STATES = new Set(["pending", "under_review", "verified", "rejected", "cancelled"]);
+const FULFILLMENT_STATES = new Set(["none", "locked", "packed", "fulfilled", "paid", "refused"]);
+const SECURED = new Set(["deposit_confirmed", "prepaid_confirmed"]);
+
 /**
- * Promote a pending commitment to verified ONLY under an explicitly approved,
- * versioned verification rule (R3, E1). No rule, or an unapproved rule, fails
- * closed: the commitment stays pending and is not counted.
- *
- * rule = { version, approved: true, requires: [ ...evidence keys ] }
- * evidence = { server_order_before_cutoff: true, whatsapp_confirmation: true, ... }
+ * The V1 baseline is NOT optional: a policy that switches off any of the four
+ * evidence classes, counts pending, or skips WhatsApp is refused outright, so
+ * configuration can never approve a weaker rule (fail closed).
  */
-function verifyCommitment({ commitment, rule, evidence }) {
-  if (!commitment || commitment.status !== "pending") return { status: commitment && commitment.status, changed: false, reason: "NOT_PENDING" };
-  if (!rule || rule.approved !== true || typeof rule.version !== "string" || !Array.isArray(rule.requires) || rule.requires.length === 0) {
-    return { status: "pending", changed: false, reason: "NO_APPROVED_RULE" };
+function validatePolicy(policy) {
+  if (!policy || typeof policy !== "object") return { ok: false, reason: "NO_POLICY" };
+  if (typeof policy.policyVersion !== "string" || !policy.policyVersion.trim()) return { ok: false, reason: "NO_POLICY_VERSION" };
+  for (const k of ["requireOrderBeforeCutoff", "requireOrderSpecificWhatsappConfirmation",
+                   "requireServiceableHouseholdAddress", "requireRiskGateApproval"]) {
+    if (policy[k] !== true) return { ok: false, reason: "BASELINE_WEAKENED:" + k };
   }
-  for (const key of rule.requires) {
-    if (!evidence || evidence[key] !== true) return { status: "pending", changed: false, reason: "MISSING_EVIDENCE:" + key };
+  if (policy.countPendingTowardUnlock !== false) return { ok: false, reason: "BASELINE_WEAKENED:countPendingTowardUnlock" };
+  if (policy.allowTrustedSkipWhatsapp !== false) return { ok: false, reason: "BASELINE_WEAKENED:allowTrustedSkipWhatsapp" };
+  return { ok: true };
+}
+
+const time = (v) => { const t = typeof v === "string" ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
+
+/**
+ * Decide a commitment's verification state from SERVER-SIDE evidence records
+ * (never client booleans). Returns { state, reasons, policyVersion? }.
+ *
+ * commitment: { quoteId, quoteVersion, customerPhone, locksAt,
+ *               paymentSecurityRequired, paymentSecurityState }
+ * evidence:
+ *   order    { serverOrderId, acceptedAt, cutoffAt }             // class 1
+ *   whatsapp { quoteId, quoteVersion, fromPhone, messageId,
+ *              webhookSignatureValid }                             // class 2
+ *   address  { state: "serviceable" | "trusted_delivered" | ... }  // class 3
+ *   risk     { state: "passed" | "overridden" | "flagged" | ..., operator?, reason? } // class 4
+ *   payment  { state, providerRef }   only when security is required // class 5
+ *   at       ISO time of this verification decision
+ */
+function verifyCommitment({ commitment, policy, evidence }) {
+  const p = validatePolicy(policy);
+  if (!p.ok) return { state: "pending", reasons: [p.reason] };
+  if (!commitment || typeof commitment !== "object") return { state: "pending", reasons: ["NO_COMMITMENT"] };
+  const e = evidence || {};
+  const reasons = [];
+
+  // 1. accepted on ASB's server before the cutoff
+  const accepted = e.order && time(e.order.acceptedAt), cutoff = e.order && time(e.order.cutoffAt);
+  if (!e.order || typeof e.order.serverOrderId !== "string" || !e.order.serverOrderId) reasons.push("NO_SERVER_ORDER");
+  else if (accepted === null || cutoff === null || accepted >= cutoff) reasons.push("ORDER_NOT_BEFORE_CUTOFF");
+
+  // 2. order-specific WhatsApp confirmation for THIS quote version, from the customer's phone
+  const w = e.whatsapp;
+  if (!w || w.webhookSignatureValid !== true || typeof w.messageId !== "string" || !w.messageId) reasons.push("NO_VALID_WHATSAPP_CONFIRMATION");
+  else if (w.quoteId !== commitment.quoteId || w.quoteVersion !== commitment.quoteVersion) reasons.push("WHATSAPP_FOR_OTHER_QUOTE_VERSION");
+  else if (!commitment.customerPhone || w.fromPhone !== commitment.customerPhone) reasons.push("WHATSAPP_FROM_OTHER_PHONE");
+
+  // 3. serviceable household address
+  if (!e.address || (e.address.state !== "serviceable" && e.address.state !== "trusted_delivered")) reasons.push("ADDRESS_NOT_SERVICEABLE");
+
+  // 5. payment security, only when required for this order: provider-confirmed only
+  if (commitment.paymentSecurityRequired === true) {
+    if (!e.payment || !SECURED.has(e.payment.state) || typeof e.payment.providerRef !== "string" || !e.payment.providerRef) {
+      reasons.push("PAYMENT_SECURITY_NOT_PROVIDER_CONFIRMED");
+    }
   }
-  return { status: "verified", changed: true, ruleVersion: rule.version };
+
+  // verification after lock never counts
+  const at = time(e.at), locksAt = time(commitment.locksAt);
+  if (at === null || locksAt === null || at > locksAt) reasons.push("AFTER_LOCK_OR_NO_TIME");
+
+  // 4. risk gate: a flag sends the commitment to human review, not rejection
+  const risk = e.risk && e.risk.state;
+  const riskPassed = risk === "passed" || (risk === "overridden" && typeof e.risk.operator === "string" && e.risk.operator && typeof e.risk.reason === "string" && e.risk.reason);
+  if (!riskPassed) {
+    if (risk === "flagged") return { state: "under_review", reasons: ["RISK_FLAGGED", ...reasons] };
+    reasons.push("RISK_GATE_NOT_PASSED");
+  }
+
+  if (reasons.length) return { state: "pending", reasons };
+  return { state: "verified", reasons: [], policyVersion: policy.policyVersion };
 }
 
 /**
- * Collective Rate Meter for one cycle (F02, F13, R3).
- * Counts packs of VERIFIED-or-later commitments, once per commitmentId, from
- * Community, Dish-to-Cart and Budget-to-Cart, in THIS cycle only. Pending,
- * cancelled and refused are reported separately and never counted.
+ * Collective Rate Meter for one cycle (F02, F13; policy tests 1-5, 8).
+ * Counts packs only from commitments that are:
+ *   - in THIS cycle, from Community / Dish-to-Cart / Budget-to-Cart,
+ *   - verificationState "verified" and fulfillmentState not "refused",
+ *   - the LATEST version of their quote chain (an edited order supersedes its
+ *     earlier versions, whatever state they were left in).
+ * A replay of the same commitment counts once; a conflicting replay fails.
  */
 function rateMeter({ cycleCode, commitments }) {
   str(cycleCode, "cycleCode");
@@ -197,27 +267,43 @@ function rateMeter({ cycleCode, commitments }) {
   const byId = new Map();
   for (const c of commitments) {
     str(c.commitmentId, "commitmentId");
-    if (!ALL_STATUSES.has(c.status)) throw new KernelError("UNKNOWN_STATUS", c.status);
+    str(c.quoteId, "quoteId");
+    posInt(c.quoteVersion, "quoteVersion");
+    if (!VERIFICATION_STATES.has(c.verificationState)) throw new KernelError("UNKNOWN_VERIFICATION_STATE", c.verificationState);
+    if (!FULFILLMENT_STATES.has(c.fulfillmentState)) throw new KernelError("UNKNOWN_FULFILLMENT_STATE", c.fulfillmentState);
     const prev = byId.get(c.commitmentId);
     if (prev) {
-      // The same commitment delivered twice must be identical, else refuse.
-      if (prev.tierId !== c.tierId || prev.packs !== c.packs || prev.cycleCode !== c.cycleCode || prev.door !== c.door) {
+      if (prev.tierId !== c.tierId || prev.packs !== c.packs || prev.cycleCode !== c.cycleCode || prev.door !== c.door
+          || prev.quoteId !== c.quoteId || prev.quoteVersion !== c.quoteVersion) {
         throw new KernelError("CONFLICTING_DUPLICATE_COMMITMENT", c.commitmentId);
       }
       continue;
     }
     byId.set(c.commitmentId, c);
   }
+  // a quote chain lives in one cycle; its latest version wins
+  const latest = new Map(), chainCycle = new Map();
+  for (const c of byId.values()) {
+    const cyc = chainCycle.get(c.quoteId);
+    if (cyc !== undefined && cyc !== c.cycleCode) throw new KernelError("QUOTE_CHAIN_CROSSES_CYCLES", c.quoteId);
+    chainCycle.set(c.quoteId, c.cycleCode);
+    latest.set(c.quoteId, Math.max(latest.get(c.quoteId) || 0, c.quoteVersion));
+  }
   const tiers = {};
+  const bucket = (id) => tiers[id] || (tiers[id] = { verifiedPacks: 0, pendingPacks: 0, underReviewPacks: 0,
+    refusedPacks: 0, cancelledOrRejectedPacks: 0, supersededPacks: 0, paymentSecuredPacks: 0, commitments: 0 });
   for (const c of byId.values()) {
     if (c.cycleCode !== cycleCode) continue;
     if (!ELIGIBLE_DOORS.includes(c.door)) throw new KernelError("DOOR_CANNOT_COMMIT", c.door);
-    const t = tiers[c.tierId] || (tiers[c.tierId] = { verifiedPacks: 0, pendingPacks: 0, cancelledPacks: 0, refusedPacks: 0, commitments: 0 });
-    const packs = posInt(c.packs, "packs");
-    if (METER_STATUSES.has(c.status)) { t.verifiedPacks = checkedSum(t.verifiedPacks, packs); t.commitments += 1; }
-    else if (c.status === "pending") t.pendingPacks = checkedSum(t.pendingPacks, packs);
-    else if (c.status === "cancelled") t.cancelledPacks = checkedSum(t.cancelledPacks, packs);
-    else if (c.status === "refused") t.refusedPacks = checkedSum(t.refusedPacks, packs);
+    const t = bucket(c.tierId), packs = posInt(c.packs, "packs");
+    if (c.quoteVersion < latest.get(c.quoteId)) { t.supersededPacks = checkedSum(t.supersededPacks, packs); continue; }
+    if (c.verificationState === "verified" && c.fulfillmentState !== "refused") {
+      t.verifiedPacks = checkedSum(t.verifiedPacks, packs); t.commitments += 1;
+      if (SECURED.has(c.paymentSecurityState)) t.paymentSecuredPacks = checkedSum(t.paymentSecuredPacks, packs);
+    } else if (c.fulfillmentState === "refused") t.refusedPacks = checkedSum(t.refusedPacks, packs);
+    else if (c.verificationState === "pending") t.pendingPacks = checkedSum(t.pendingPacks, packs);
+    else if (c.verificationState === "under_review") t.underReviewPacks = checkedSum(t.underReviewPacks, packs);
+    else t.cancelledOrRejectedPacks = checkedSum(t.cancelledOrRejectedPacks, packs);
   }
   return tiers;
 }
@@ -225,5 +311,5 @@ function rateMeter({ cycleCode, commitments }) {
 module.exports = {
   THRESHOLD_PAISA, ELIGIBLE_DOORS, KernelError,
   lineQualifiesForTier, eligibilityByDoor, eligibilityAfterChange,
-  lineBilledPaisa, codPayable, verifyCommitment, rateMeter,
+  lineBilledPaisa, codPayable, validatePolicy, verifyCommitment, rateMeter,
 };

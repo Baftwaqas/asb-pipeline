@@ -146,51 +146,127 @@ test("float or negative money fails closed", () => {
   assert.throws(() => K.codPayable({ lineBilledPaisa: [-1], orderCeilingPaisa: 100 }), /INVALID_INTEGER/);
 });
 
-// ---------- R3 / E1: verification is configured, fail closed ----------
-const pending = { commitmentId: "C1", status: "pending" };
-const allEvidence = { server_order_before_cutoff: true, whatsapp_confirmation: true };
-test("R3 with no approved rule, a commitment stays pending", () => {
-  assert.equal(K.verifyCommitment({ commitment: pending, rule: null, evidence: allEvidence }).status, "pending");
-  assert.equal(K.verifyCommitment({ commitment: pending, rule: { version: "E1-proposed", approved: false, requires: ["whatsapp_confirmation"] }, evidence: allEvidence }).status, "pending");
+// ---------- Option A verification (ADR-002-VERIFY-001) ----------
+const POLICY = {
+  policyVersion: "ADR-002-VERIFY-001",
+  requireOrderBeforeCutoff: true, requireOrderSpecificWhatsappConfirmation: true,
+  requireServiceableHouseholdAddress: true, requireRiskGateApproval: true,
+  countPendingTowardUnlock: false, allowTrustedSkipWhatsapp: false,
+};
+const CM = { quoteId: "Q1", quoteVersion: 2, customerPhone: "+923001234567", locksAt: "2026-11-08T15:00:00Z", paymentSecurityRequired: false };
+const EV = () => ({
+  order: { serverOrderId: "gid://shopify/Order/1", acceptedAt: "2026-11-07T10:00:00Z", cutoffAt: "2026-11-08T15:00:00Z" },
+  whatsapp: { quoteId: "Q1", quoteVersion: 2, fromPhone: "+923001234567", messageId: "wamid.1", webhookSignatureValid: true },
+  address: { state: "serviceable" },
+  risk: { state: "passed" },
+  at: "2026-11-07T11:00:00Z",
 });
-test("R3 an approved rule verifies only when every required evidence is present", () => {
-  const rule = { version: "E1-v1", approved: true, requires: ["server_order_before_cutoff", "whatsapp_confirmation"] };
-  assert.equal(K.verifyCommitment({ commitment: pending, rule, evidence: { server_order_before_cutoff: true } }).status, "pending");
-  assert.deepEqual(K.verifyCommitment({ commitment: pending, rule, evidence: allEvidence }), { status: "verified", changed: true, ruleVersion: "E1-v1" });
+const v = (ev, cm = CM, policy = POLICY) => K.verifyCommitment({ commitment: cm, policy, evidence: ev });
+
+test("Option A all four evidence classes verify, with the policy version recorded", () => {
+  assert.deepEqual(v(EV()), { state: "verified", reasons: [], policyVersion: "ADR-002-VERIFY-001" });
+});
+test("Option A a weakened policy can never verify (WhatsApp-only, pending counted, skip WhatsApp)", () => {
+  for (const k of ["requireOrderBeforeCutoff", "requireServiceableHouseholdAddress", "requireRiskGateApproval", "requireOrderSpecificWhatsappConfirmation"]) {
+    const r = v(EV(), CM, { ...POLICY, [k]: false });
+    assert.equal(r.state, "pending"); assert.match(r.reasons[0], /BASELINE_WEAKENED/);
+  }
+  assert.equal(v(EV(), CM, { ...POLICY, countPendingTowardUnlock: true }).state, "pending");
+  assert.equal(v(EV(), CM, { ...POLICY, allowTrustedSkipWhatsapp: true }).state, "pending");
+  assert.equal(v(EV(), CM, null).state, "pending");
+});
+test("policy test 1: a Shopify order with no WhatsApp acknowledgment stays pending", () => {
+  const ev = EV(); delete ev.whatsapp;
+  assert.deepEqual(v(ev).reasons, ["NO_VALID_WHATSAPP_CONFIRMATION"]);
+});
+test("policy test 3: a WhatsApp reply to a superseded quote version does not verify", () => {
+  const ev = EV(); ev.whatsapp.quoteVersion = 1;
+  assert.deepEqual(v(ev).reasons, ["WHATSAPP_FOR_OTHER_QUOTE_VERSION"]);
+});
+test("Option A a reply from another phone, or an unsigned webhook, does not verify", () => {
+  const a = EV(); a.whatsapp.fromPhone = "+923009999999";
+  assert.deepEqual(v(a).reasons, ["WHATSAPP_FROM_OTHER_PHONE"]);
+  const b = EV(); b.whatsapp.webhookSignatureValid = false;
+  assert.deepEqual(v(b).reasons, ["NO_VALID_WHATSAPP_CONFIRMATION"]);
+});
+test("Option A an order accepted at or after cutoff does not verify", () => {
+  const ev = EV(); ev.order.acceptedAt = ev.order.cutoffAt;
+  assert.deepEqual(v(ev).reasons, ["ORDER_NOT_BEFORE_CUTOFF"]);
+});
+test("Option A an unserviceable address does not verify; a trusted delivered address does", () => {
+  const a = EV(); a.address.state = "incomplete";
+  assert.deepEqual(v(a).reasons, ["ADDRESS_NOT_SERVICEABLE"]);
+  const b = EV(); b.address.state = "trusted_delivered";
+  assert.equal(v(b).state, "verified");
+});
+test("policy test 4: a risk-flagged order goes under_review, and an operator override with a reason verifies", () => {
+  const a = EV(); a.risk = { state: "flagged" };
+  assert.equal(v(a).state, "under_review");
+  const b = EV(); b.risk = { state: "overridden", operator: "ops-reviewer-1" };
+  assert.equal(v(b).state, "pending"); // override without a reason is not enough
+  const c = EV(); c.risk = { state: "overridden", operator: "ops-reviewer-1", reason: "family shares one phone" };
+  assert.equal(v(c).state, "verified");
+});
+test("policy test 4: verification after lock never counts", () => {
+  const ev = EV(); ev.at = "2026-11-08T15:00:01Z";
+  assert.deepEqual(v(ev).reasons, ["AFTER_LOCK_OR_NO_TIME"]);
+});
+test("policy test 6: required payment security needs a provider-confirmed reference, not a screenshot", () => {
+  const cm = { ...CM, paymentSecurityRequired: true };
+  const a = EV(); a.payment = { state: "deposit_confirmed" };
+  assert.deepEqual(v(a, cm).reasons, ["PAYMENT_SECURITY_NOT_PROVIDER_CONFIRMED"]);
+  const b = EV(); b.payment = { state: "deposit_confirmed", providerRef: "psp-tx-88" };
+  assert.equal(v(b, cm).state, "verified");
 });
 
 // ---------- F02 / F13: Rate Meter ----------
-const c = (id, status, packs = 1, extra = {}) => ({ commitmentId: id, status, packs, tierId: "ONION-10KG", cycleCode: CYCLE, door: "community_order", ...extra });
-test("F13 pending commitments never count toward the meter", () => {
-  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", "pending", 3)] });
-  assert.equal(m["ONION-10KG"].verifiedPacks, 0);
-  assert.equal(m["ONION-10KG"].pendingPacks, 3);
+const c = (id, ver, packs, extra = {}) => ({
+  commitmentId: id + ":" + ver, quoteId: id, quoteVersion: ver, packs, tierId: "ONION-5KG", cycleCode: CYCLE,
+  door: "community_order", verificationState: "verified", fulfillmentState: "none", paymentSecurityState: "unsecured_cod", ...extra,
 });
-test("F13 verified, locked, fulfilled and paid count; cancelled and refused do not", () => {
-  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [
-    c("A", "verified"), c("B", "locked"), c("C", "fulfilled"), c("D", "paid"), c("E", "cancelled"), c("F", "refused"),
-  ] });
-  assert.equal(m["ONION-10KG"].verifiedPacks, 4);
-  assert.equal(m["ONION-10KG"].cancelledPacks, 1);
-  assert.equal(m["ONION-10KG"].refusedPacks, 1);
+const kg = (m) => m["ONION-5KG"].verifiedPacks * 5;
+test("policy test 1: pending and under_review count 0", () => {
+  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 2, { verificationState: "pending" }), c("B", 1, 1, { verificationState: "under_review" })] });
+  assert.equal(m["ONION-5KG"].verifiedPacks, 0);
+  assert.equal(m["ONION-5KG"].pendingPacks, 2);
+  assert.equal(m["ONION-5KG"].underReviewPacks, 1);
 });
-test("F13 / T0 a replayed commitment is counted once", () => {
-  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", "verified", 2), c("A", "verified", 2)] });
-  assert.equal(m["ONION-10KG"].verifiedPacks, 2);
+test("ChatGPT caution 3: v1 10 kg verified, edited to v2 5 kg verified -> meter counts 5 kg, not 15", () => {
+  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("Q1", 1, 2), c("Q1", 2, 1)] });
+  assert.equal(kg(m), 5);
+  assert.equal(m["ONION-5KG"].supersededPacks, 2);
+});
+test("policy test 3: an edited order whose new version is not yet confirmed counts 0, not its old version", () => {
+  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("Q1", 1, 2), c("Q1", 2, 1, { verificationState: "pending" })] });
+  assert.equal(m["ONION-5KG"].verifiedPacks, 0);
+});
+test("policy test 2: repeated webhook delivery of the same commitment counts once", () => {
+  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 2), c("A", 1, 2)] });
+  assert.equal(kg(m), 10);
 });
 test("F13 a conflicting duplicate commitment fails closed", () => {
-  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", "verified", 2), c("A", "verified", 5)] }), /CONFLICTING_DUPLICATE/);
+  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 2), c("A", 1, 5)] }), /CONFLICTING_DUPLICATE/);
+});
+test("policy test 8: refused, cancelled and rejected are reported separately and never counted", () => {
+  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [
+    c("A", 1, 1), c("B", 1, 1, { fulfillmentState: "paid" }), c("C", 1, 1, { fulfillmentState: "refused" }),
+    c("D", 1, 1, { verificationState: "cancelled" }), c("E", 1, 1, { verificationState: "rejected" }),
+  ] });
+  const t = m["ONION-5KG"];
+  assert.deepEqual([t.verifiedPacks, t.refusedPacks, t.cancelledOrRejectedPacks], [2, 1, 2]);
+});
+test("policy: payment-secured packs are reported separately from verified COD packs", () => {
+  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 2), c("B", 1, 1, { paymentSecurityState: "deposit_confirmed" })] });
+  assert.deepEqual([m["ONION-5KG"].verifiedPacks, m["ONION-5KG"].paymentSecuredPacks], [3, 1]);
 });
 test("F02 Dish and Budget commitments add to the same supplier meter", () => {
-  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [
-    c("A", "verified"), c("B", "verified", 1, { door: "dish_to_cart" }), c("C", "verified", 1, { door: "budget_to_cart" }),
-  ] });
-  assert.equal(m["ONION-10KG"].verifiedPacks, 3);
+  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 1), c("B", 1, 1, { door: "dish_to_cart" }), c("C", 1, 1, { door: "budget_to_cart" })] });
+  assert.equal(m["ONION-5KG"].verifiedPacks, 3);
 });
 test("F02 Apna can never commit to the meter", () => {
-  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", "verified", 1, { door: "apna_order" })] }), /DOOR_CANNOT_COMMIT/);
+  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 1, { door: "apna_order" })] }), /DOOR_CANNOT_COMMIT/);
 });
-test("T10 commitments from the other cycle are ignored", () => {
-  const m = K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", "verified", 1, { cycleCode: "THU-2026-11-12" })] });
-  assert.deepEqual(m, {});
+test("policy test 5: Monday commitments never count on Thursday; a quote chain cannot span cycles", () => {
+  assert.deepEqual(K.rateMeter({ cycleCode: "THU-2026-11-12", commitments: [c("A", 1, 1)] }), {});
+  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 1), c("A", 2, 1, { cycleCode: "THU-2026-11-12" })] }), /CROSSES_CYCLES/);
 });
