@@ -45,9 +45,27 @@ const linesFor = (q, packs, t = TIER) => JSON.stringify([{ line_id: "L1", househ
   tier_id: t, packs, ceiling_line_paisa: 80000 * packs }]);
 const replace = (q, v, packs, client = db) =>
   client.query("SELECT community_replace_quote($1, $2, $3::jsonb) AS id", [q, v, linesFor(q, packs)]);
-const verify = (id, client = db) => client.query(
-  `UPDATE community_commitments SET verification_state='verified', verified_at=clock_timestamp(),
-     verification_policy_version='ADR-002-VERIFY-001' WHERE id=$1`, [id]);
+// Option A evidence as the server would resolve it from trusted sources.
+async function evidenceFor(id, over = {}, client = db) {
+  const c = (await client.query(
+    `SELECT quote_id, quote_version, household_key, clock_timestamp() AS now FROM community_commitments WHERE id=$1`, [id])).rows[0];
+  const now = new Date(c.now);
+  const iso = (ms) => new Date(now.getTime() + ms).toISOString();
+  const e = {
+    order: { serverOrderId: "srv-" + c.quote_id, quoteId: c.quote_id, quoteVersion: c.quote_version,
+             acceptedAt: iso(-60000) },
+    whatsapp: { quoteId: c.quote_id, quoteVersion: c.quote_version, fromPhone: "+923000000000", messageId: "wamid." + id,
+                webhookSignatureValid: true, action: "confirm", confirmationTokenId: "tok-" + id, receivedAt: iso(-30000) },
+    address: { householdKey: c.household_key, approved: true },
+    risk: { flagged: false },
+  };
+  for (const [k, v] of Object.entries(over)) e[k] = v === null ? undefined : { ...e[k], ...v };
+  return e;
+}
+const verifyWith = (id, evidence, client = db) => client.query(
+  "SELECT community_verify_commitment($1, 'ADR-002-VERIFY-001', $2::jsonb, 'ops-reviewer-1') AS outcome",
+  [id, JSON.stringify(evidence)]);
+const verify = async (id, client = db) => verifyWith(id, await evidenceFor(id, {}, client), client);
 const meter = async (code = "ONION-5KG") => (await db.query("SELECT * FROM community_rate_meter WHERE tier_code=$1", [code])).rows[0];
 const verifiedKg = async (code) => Number((await meter(code)).verified_packs) * 5;
 
@@ -119,7 +137,7 @@ test("B4 / policy 4: no commitment, verification or replacement after the cutoff
   const id = await commit("Q-cut", 1, { locks: soon });
   await db.query("SELECT pg_sleep(1.2)");
   await assert.rejects(commit("Q-cut2", 1, { locks: soon }), /past its cutoff; no new commitments/);
-  await assert.rejects(verify(id), /cannot be verified now|verified_before_lock/);
+  await assert.rejects(verify(id), /cannot be verified now|verified_before_lock|out of order/);
   await assert.rejects(replace("Q-cut", 2, 1), /past its cutoff; it cannot be replaced/);
 });
 
@@ -141,13 +159,82 @@ test("policy test 4: under_review counts 0; verified after review counts", async
 
 test("R3 verified needs its event; the event can't be back-dated before creation or changed", async () => {
   const id = await commit("Q-event", 1);
-  await assert.rejects(db.query("UPDATE community_commitments SET verification_state='verified' WHERE id=$1", [id]), /verified_has_event/);
+  await assert.rejects(db.query("UPDATE community_commitments SET verification_state='verified' WHERE id=$1", [id]),
+    /only by community_verify_commitment/);
   await assert.rejects(db.query(
     `UPDATE community_commitments SET verification_state='verified', verified_at=created_at - interval '1 day',
-       verification_policy_version='X' WHERE id=$1`, [id]), /verified_after_creation/);
+       verification_policy_version='X' WHERE id=$1`, [id]), /only by community_verify_commitment/);
   await verify(id);
+  const c = (await db.query("SELECT verified_at, created_at FROM community_commitments WHERE id=$1", [id])).rows[0];
+  assert.ok(c.verified_at >= c.created_at); // stamped by the database clock
   await assert.rejects(db.query(
     "UPDATE community_commitments SET verification_policy_version='forged' WHERE id=$1", [id]), /cannot change once set/);
+});
+
+// ---------- hardening: the only way to verify (Lane A "DB writers cannot bypass Option A") ----------
+test("SQL B1: a cancel / edit / free-form reply or a missing confirmation token never verifies", async () => {
+  const id = await commit("Q-sqlb1", 1);
+  for (const action of ["cancel", "edit", "reply", null]) {
+    await assert.rejects(verifyWith(id, await evidenceFor(id, { whatsapp: { action } })), /token-bound WhatsApp CONFIRM/);
+  }
+  await assert.rejects(verifyWith(id, await evidenceFor(id, { whatsapp: { confirmationTokenId: " " } })), /token-bound/);
+  assert.equal((await db.query("SELECT verification_state FROM community_commitments WHERE id=$1", [id])).rows[0].verification_state, "pending");
+});
+
+test("SQL B2: evidence must be in order accepted <= received <= now <= cutoff, for THIS quote version", async () => {
+  const id = await commit("Q-sqlb2", 1);
+  const future = new Date(Date.now() + 3600e3).toISOString();
+  await assert.rejects(verifyWith(id, await evidenceFor(id, { whatsapp: { receivedAt: future } })), /out of order/);
+  await assert.rejects(verifyWith(id, await evidenceFor(id, { order: { acceptedAt: future } })), /out of order/);
+  await assert.rejects(verifyWith(id, await evidenceFor(id, { whatsapp: { receivedAt: null } })), /out of order/);
+  await assert.rejects(verifyWith(id, await evidenceFor(id, { whatsapp: { quoteVersion: 2 } })), /another quote or version/);
+  await assert.rejects(verifyWith(id, await evidenceFor(id, { address: null })), /order, whatsapp, address and risk/);
+});
+
+test("SQL: a risk flag sends the commitment to under_review (counts 0); evidence is append-only", async () => {
+  const base = await verifiedKg();
+  const id = await commit("Q-risk", 1);
+  const r = await verifyWith(id, await evidenceFor(id, { risk: { flagged: true, reason: "new address" } }));
+  assert.equal(r.rows[0].outcome, "under_review");
+  assert.equal(await verifiedKg(), base);
+  assert.equal((await verify(id)).rows[0].outcome, "verified"); // cleared on review
+  assert.equal(await verifiedKg(), base + 5);
+  const ev = (await db.query("SELECT outcome FROM community_verification_evidence WHERE commitment_id=$1 ORDER BY id", [id])).rows;
+  assert.deepEqual(ev.map((e) => e.outcome), ["under_review", "verified"]);
+  await assert.rejects(db.query("UPDATE community_verification_evidence SET outcome='verified' WHERE commitment_id=$1", [id]), /not allowed/);
+  await assert.rejects(db.query("DELETE FROM community_verification_evidence WHERE commitment_id=$1", [id]), /not allowed/);
+  await assert.rejects(verify(id), /is verified; it cannot be verified/);
+});
+
+test("SQL: forging the session setting without an evidence row is still refused", async () => {
+  const id = await commit("Q-forge", 1);
+  await db.query("BEGIN");
+  await db.query("SELECT set_config('asb021.verifying', $1, true)", [String(id)]);
+  await assert.rejects(db.query(
+    `UPDATE community_commitments SET verification_state='verified', verified_at=clock_timestamp(),
+       verification_policy_version='X' WHERE id=$1`, [id]), /no matching verified evidence/);
+  await db.query("ROLLBACK");
+});
+
+test("isolation contract: replace / verify / lock refuse REPEATABLE READ and SERIALIZABLE", async () => {
+  const id = await commit("Q-iso", 1);
+  for (const level of ["REPEATABLE READ", "SERIALIZABLE"]) {
+    await db2.query("BEGIN ISOLATION LEVEL " + level);
+    await assert.rejects(verify(id, db2), /only under READ COMMITTED/);
+    await db2.query("ROLLBACK");
+    await db2.query("BEGIN ISOLATION LEVEL " + level);
+    await assert.rejects(replace("Q-iso", 2, 1, db2), /only under READ COMMITTED/);
+    await db2.query("ROLLBACK");
+    await db2.query("BEGIN ISOLATION LEVEL " + level);
+    await assert.rejects(db2.query("SELECT community_lock_meter('MON-TEST', 'x')"), /only under READ COMMITTED/);
+    await db2.query("ROLLBACK");
+  }
+});
+
+test("invariant: at most one live row per (quote, line), even for a writer that skips the chain lock", async () => {
+  const ix = (await db.query(
+    "SELECT indexdef FROM pg_indexes WHERE indexname='uq_community_commitments_live_line'")).rows[0];
+  assert.match(ix.indexdef, /UNIQUE INDEX .* \(quote_id, line_id\) WHERE \(verification_state <> ALL/);
 });
 
 test("fulfillment only for verified; it moves forward; refused leaves the live meter", async () => {
@@ -199,26 +286,31 @@ test("race: two concurrent replacements to the same version -> exactly one wins"
   assert.deepEqual(rows.map(r => r.packs), [1]);
 });
 
-test("race: a verifier that does not take the chain lock waits on the row lock, then cannot verify a superseded line", async () => {
+test("race: a verifier waits on the chain lock, then cannot verify a superseded line", async () => {
   const v1 = await commit("Q-race2", 1);
   await db.query("BEGIN");
   await replace("Q-race2", 2, 1);                        // A cancels v1 (row lock held)
-  const b = verify(v1, db2).then(() => "ok", e => e.message); // B waits on the row
+  const b = verify(v1, db2).then(() => "ok", e => e.message); // B waits on the chain lock
   await new Promise(r => setTimeout(r, 300));
   await db.query("COMMIT");
-  assert.match(await b, /cancelled -> verified/);
+  assert.match(await b, /is cancelled; it cannot be verified/);
 });
 
-test("race: under REPEATABLE READ the losing writer gets a serialization error, never a double count", async () => {
-  const v1 = await commit("Q-race3", 1);
-  await db2.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
-  await db2.query("SELECT 1 FROM community_commitments WHERE id=$1", [v1]); // B's snapshot
-  await replace("Q-race3", 2, 1);                        // A commits (autocommit)
-  await assert.rejects(verify(v1, db2), /could not serialize|cancelled -> verified/);
-  await db2.query("ROLLBACK");
-  const live = (await db.query(
-    "SELECT count(*)::int AS n FROM community_commitments WHERE quote_id='Q-race3' AND verification_state NOT IN ('cancelled','rejected')")).rows[0].n;
-  assert.equal(live, 1);
+test("race: a verification in flight at cutoff is in the frozen meter (SHARE lock waits for it)", async () => {
+  const t = await tier("RACE-LOCK", "ONION-RACE", 1, 70000);
+  const soon = (await db.query("SELECT (clock_timestamp() + interval '1500 milliseconds') AS t")).rows[0].t;
+  const id = await commit("Q-race4", 1, { cycle: "RACE-LOCK", tier: t, locks: soon });
+  await db2.query("BEGIN");
+  await verify(id, db2);                                   // verified before cutoff, not yet committed
+  await db.query("SELECT pg_sleep(1.7)");                  // cutoff passes
+  let done = false;
+  const lock = db.query("SELECT community_lock_meter('RACE-LOCK', 'test-job') AS n").then((r) => { done = true; return r; });
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(done, false, "the freeze must wait for the in-flight verifier");
+  await db2.query("COMMIT");
+  assert.equal((await lock).rows[0].n, 1);
+  const s = (await db.query("SELECT locked_verified_packs, locked_unlocked FROM community_meter_locks WHERE cycle_code='RACE-LOCK'")).rows[0];
+  assert.deepEqual([s.locked_verified_packs, s.locked_unlocked], [1, true]);
 });
 
 // ---------- frozen meter at lock (review point b) ----------

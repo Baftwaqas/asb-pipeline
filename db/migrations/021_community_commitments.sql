@@ -14,7 +14,12 @@
 --   community_rate_meter         view: LIVE verified packs per tier per cycle (pre-lock progress)
 --   community_meter_locks        immutable snapshot frozen at cycle lock (the price decision)
 --   community_replace_quote()    the ONLY way to apply a customer edit (atomic supersede + insert)
---   community_lock_meter()       freezes the snapshot; asb_lock_cycle integration is a later PR
+--   community_verify_commitment() the ONLY way to verify: Option A evidence re-checked, stored
+--                                append-only (community_verification_evidence), DB-clock verified_at
+--   community_lock_meter()       freezes the snapshot (SHARE lock); asb_lock_cycle integration is 023
+--
+-- Isolation contract: replace / verify / lock run only under READ COMMITTED
+-- (refused otherwise); at most one live row per (quote, line) by unique index.
 --
 -- Three SEPARATE dimensions on every commitment (policy, Option A):
 --   verification_state      pending | under_review | verified | rejected | cancelled
@@ -219,6 +224,19 @@ BEGIN
     IF NEW.verification_state = 'verified' AND clock_timestamp() > NEW.locks_at THEN
       RAISE EXCEPTION 'ASB021: cycle % is past its cutoff; a commitment cannot be verified now', NEW.cycle_code;
     END IF;
+    -- Verification is granted ONLY through community_verify_commitment(), which
+    -- records the Option A evidence and stamps verified_at from the database
+    -- clock. A direct UPDATE (any role, any client) cannot mark verified.
+    IF NEW.verification_state = 'verified'
+       AND current_setting('asb021.verifying', true) IS DISTINCT FROM NEW.id::text THEN
+      RAISE EXCEPTION 'ASB021: commitment % can be verified only by community_verify_commitment()', NEW.id;
+    END IF;
+    IF NEW.verification_state = 'verified' AND NOT EXISTS (
+         SELECT 1 FROM community_verification_evidence e
+          WHERE e.commitment_id = NEW.id AND e.outcome = 'verified'
+            AND e.decided_at = NEW.verified_at AND e.policy_version = NEW.verification_policy_version) THEN
+      RAISE EXCEPTION 'ASB021: commitment % has no matching verified evidence record', NEW.id;
+    END IF;
     INSERT INTO community_commitment_events (commitment_id, dimension, from_state, to_state)
       VALUES (NEW.id, 'verification', OLD.verification_state, NEW.verification_state);
   END IF;
@@ -272,6 +290,7 @@ DECLARE
   l JSONB;
   new_id BIGINT;
 BEGIN
+  PERFORM asb021_require_read_committed('community_replace_quote');
   IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) = 0 THEN
     RAISE EXCEPTION 'ASB021: a replacement must carry the new version''s lines';
   END IF;
@@ -312,6 +331,143 @@ BEGIN
   RETURN;
 END $$;
 
+CREATE FUNCTION asb021_refuse_early() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'ASB021: % on % is not allowed', TG_OP, TG_TABLE_NAME;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Isolation contract (Lane A review, concurrency note a).
+--
+-- Every function below that reads-then-writes a quote chain or the meter runs
+-- only under READ COMMITTED. Its locks (the chain advisory lock, row locks,
+-- the SHARE lock at meter freeze) are taken INSIDE the function, so under
+-- READ COMMITTED each statement after a lock sees the rows committed before
+-- it. Under REPEATABLE READ / SERIALIZABLE the snapshot would date from the
+-- transaction's first statement, before the lock - so those levels are
+-- refused outright rather than half-supported.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION asb021_require_read_committed(p_fn TEXT) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF current_setting('transaction_isolation') <> 'read committed' THEN
+    RAISE EXCEPTION 'ASB021: % runs only under READ COMMITTED (got %)', p_fn, current_setting('transaction_isolation')
+      USING HINT = 'Call it in its own READ COMMITTED transaction; on a lock conflict, retry the whole call.';
+  END IF;
+END $$;
+
+-- A database invariant that holds even if a writer forgets the chain lock:
+-- at most ONE live row per (quote, line). A superseded version is cancelled.
+CREATE UNIQUE INDEX uq_community_commitments_live_line
+  ON community_commitments (quote_id, line_id)
+  WHERE verification_state NOT IN ('cancelled', 'rejected');
+
+-- ---------------------------------------------------------------------------
+-- Verification entry point (Lane A hardening: "DB writers cannot bypass the
+-- trusted Option A evidence verification").
+--
+-- The server runs kernel.verifyCommitment() on evidence it resolved from
+-- trusted persisted sources, then calls this with that evidence. The database
+-- re-checks what it can check itself, stores the evidence append-only, and
+-- stamps verified_at from ITS clock (never a caller timestamp):
+--   * all four Option A evidence classes are present (order, whatsapp,
+--     address, risk); payment too when the payment state requires it
+--   * the WhatsApp action is 'confirm' with a server-issued token id
+--   * order + WhatsApp evidence name THIS quote id and version
+--   * order.acceptedAt <= whatsapp.receivedAt <= now() <= locks_at
+--   * a risk flag sends the commitment to under_review, not verified
+-- Under the chain lock and a row lock, so it serialises with
+-- community_replace_quote() and cannot verify a superseded line.
+--
+-- WHAT THIS IS AND IS NOT. The transaction-local setting plus the evidence-row
+-- check stop every accidental or buggy bypass (an UPDATE in a script, a
+-- worker that forgot the policy). They are NOT a security boundary against
+-- someone holding the table OWNER role, who can do anything. The boundary is
+-- a least-privilege application role: EXECUTE on these functions, SELECT on
+-- the tables, no direct INSERT/UPDATE on community_commitments or
+-- community_verification_evidence. That role split is a production gate
+-- (docs/community-verification-policy-v1.md), not something a migration run
+-- as owner can prove.
+-- ---------------------------------------------------------------------------
+CREATE TABLE community_verification_evidence (
+  id              BIGSERIAL PRIMARY KEY,
+  commitment_id   BIGINT NOT NULL REFERENCES community_commitments(id) ON DELETE RESTRICT,
+  policy_version  TEXT NOT NULL CHECK (length(btrim(policy_version)) > 0),
+  decided_by      TEXT NOT NULL CHECK (length(btrim(decided_by)) > 0),
+  outcome         TEXT NOT NULL CHECK (outcome IN ('verified', 'under_review')),
+  evidence        JSONB NOT NULL,
+  decided_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER community_verification_evidence_append_only
+  BEFORE UPDATE OR DELETE ON community_verification_evidence FOR EACH ROW EXECUTE FUNCTION asb021_refuse_early();
+
+CREATE FUNCTION community_verify_commitment(p_commitment_id BIGINT, p_policy_version TEXT,
+                                            p_evidence JSONB, p_decided_by TEXT)
+RETURNS TEXT LANGUAGE plpgsql AS $$
+DECLARE
+  c        community_commitments;
+  v_now    TIMESTAMPTZ;
+  v_acc    TIMESTAMPTZ;
+  v_rcv    TIMESTAMPTZ;
+  v_out    TEXT;
+BEGIN
+  PERFORM asb021_require_read_committed('community_verify_commitment');
+  IF p_policy_version IS NULL OR length(btrim(p_policy_version)) = 0
+     OR p_decided_by IS NULL OR length(btrim(p_decided_by)) = 0 THEN
+    RAISE EXCEPTION 'ASB021: verification needs a policy version and a decider';
+  END IF;
+  SELECT * INTO c FROM community_commitments WHERE id = p_commitment_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'ASB021: commitment % does not exist', p_commitment_id; END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('asb021:' || c.quote_id));
+  SELECT * INTO c FROM community_commitments WHERE id = p_commitment_id FOR UPDATE;
+  IF c.verification_state NOT IN ('pending', 'under_review') THEN
+    RAISE EXCEPTION 'ASB021: commitment % is %; it cannot be verified', p_commitment_id, c.verification_state;
+  END IF;
+
+  -- IS DISTINCT FROM, not <>: a MISSING class gives NULL, and NULL <> 'object'
+  -- is NULL, which an IF treats as false - the class would silently pass.
+  IF jsonb_typeof(p_evidence) IS DISTINCT FROM 'object'
+     OR jsonb_typeof(p_evidence->'order') IS DISTINCT FROM 'object'
+     OR jsonb_typeof(p_evidence->'whatsapp') IS DISTINCT FROM 'object'
+     OR jsonb_typeof(p_evidence->'address') IS DISTINCT FROM 'object'
+     OR jsonb_typeof(p_evidence->'risk') IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'ASB021: Option A needs order, whatsapp, address and risk evidence';
+  END IF;
+  IF c.payment_security_state = 'unsecured_cod' AND (p_evidence->'payment'->>'required')::boolean IS TRUE THEN
+    RAISE EXCEPTION 'ASB021: payment security is required and not yet confirmed';
+  END IF;
+  IF p_evidence->'whatsapp'->>'action' IS DISTINCT FROM 'confirm'
+     OR coalesce(btrim(p_evidence->'whatsapp'->>'confirmationTokenId'), '') = '' THEN
+    RAISE EXCEPTION 'ASB021: only a token-bound WhatsApp CONFIRM verifies (got %)', p_evidence->'whatsapp'->>'action';
+  END IF;
+  IF p_evidence->'order'->>'quoteId' IS DISTINCT FROM c.quote_id
+     OR p_evidence->'whatsapp'->>'quoteId' IS DISTINCT FROM c.quote_id
+     OR (p_evidence->'order'->>'quoteVersion')::int IS DISTINCT FROM c.quote_version
+     OR (p_evidence->'whatsapp'->>'quoteVersion')::int IS DISTINCT FROM c.quote_version THEN
+    RAISE EXCEPTION 'ASB021: evidence is for another quote or version than commitment %', p_commitment_id;
+  END IF;
+  v_now := clock_timestamp();
+  v_acc := (p_evidence->'order'->>'acceptedAt')::timestamptz;
+  v_rcv := (p_evidence->'whatsapp'->>'receivedAt')::timestamptz;
+  IF v_acc IS NULL OR v_rcv IS NULL OR NOT (v_acc <= v_rcv AND v_rcv <= v_now AND v_now <= c.locks_at) THEN
+    RAISE EXCEPTION 'ASB021: evidence out of order: accepted % <= received % <= now % <= cutoff % must hold',
+      v_acc, v_rcv, v_now, c.locks_at;
+  END IF;
+
+  v_out := CASE WHEN (p_evidence->'risk'->>'flagged')::boolean IS TRUE THEN 'under_review' ELSE 'verified' END;
+  INSERT INTO community_verification_evidence (commitment_id, policy_version, decided_by, outcome, evidence, decided_at)
+    VALUES (c.id, p_policy_version, p_decided_by, v_out, p_evidence, v_now);
+  IF v_out = 'verified' THEN
+    PERFORM set_config('asb021.verifying', c.id::text, true);
+    UPDATE community_commitments
+       SET verification_state = 'verified', verified_at = v_now, verification_policy_version = p_policy_version
+     WHERE id = c.id;
+    PERFORM set_config('asb021.verifying', '', true);
+  ELSIF c.verification_state = 'pending' THEN
+    UPDATE community_commitments SET verification_state = 'under_review' WHERE id = c.id;
+  END IF;
+  RETURN v_out;
+END $$;
+
 -- ---------------------------------------------------------------------------
 -- Frozen meter at cycle lock. The live view can change after lock (a refusal
 -- leaves it); the LOCKED price decision must not. One immutable row per tier.
@@ -338,9 +494,16 @@ RETURNS INTEGER LANGUAGE plpgsql AS $$
 DECLARE
   n INTEGER;
 BEGIN
+  PERFORM asb021_require_read_committed('community_lock_meter');
   IF p_locked_by IS NULL OR length(btrim(p_locked_by)) = 0 THEN
     RAISE EXCEPTION 'ASB021: a meter lock needs an operator or job name';
   END IF;
+  -- SHARE blocks every insert/update of commitments until this transaction
+  -- ends, and WAITS for any in-flight writer (a verifier that passed the
+  -- cutoff check a moment before cutoff) to commit first. So the frozen
+  -- snapshot includes every verification made before cutoff, and nothing can
+  -- change underneath it while it is taken.
+  LOCK TABLE community_commitments IN SHARE MODE;
   IF EXISTS (SELECT 1 FROM community_commitments
               WHERE cycle_code = p_cycle_code AND locks_at > clock_timestamp()) THEN
     RAISE EXCEPTION 'ASB021: cycle % has not reached its cutoff', p_cycle_code;
