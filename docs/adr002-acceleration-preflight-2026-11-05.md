@@ -17,38 +17,17 @@
 6. A server-authored COD order provides an ASB customer confirmation screen, NOT native Shopify checkout; receipt/address/COD/error-handling UX is a build requirement.
 7. A dev-store proof is not equal to Grow-plan proof. Finish with a deliberately approved staff test on the actual live-plan store before enabling new purchases.
 
-## Quote schema correction (illustrative, not final)
-```json
-{
-  "quoteId":"Q-opaque",
-  "version":1,
-  "cycleCode":"MON-2026-11-09",
-  "lines":[
-    {"lineId":"L1","door":"apna_order","sku":"SKU-A","grams":125,"ceilingPaisa":8700,"pricePaisa":8700},
-    {"lineId":"L2","door":"dish_to_cart","sku":"SKU-B","grams":40,"ceilingPaisa":5000,"pricePaisa":5000}
-  ],
-  "communityEligibilityByDoor":{
-    "community_order":{"qualifyingCeilingPaisa":0},
-    "dish_to_cart":{"qualifyingCeilingPaisa":0},
-    "budget_to_cart":{"qualifyingCeilingPaisa":0}
-  },
-  "signature":"server-generated"
-}
-```
+## Quote contract — revised after Claude's 5 Nov review
 
-## Gate tests to add
-- **T0:** forged/expired/replayed quote cannot generate more than one paid/COD obligation or one collective commitment.
-- **T1:** mixed-door order, one customer bill, matching totals and feature tags.
-- **T2:** lock discount reduces Shopify amount, no accidental ceiling increase, no double sends.
-- **T3:** client cannot change `door`, `tier`, `quantity` or price to gain eligibility.
-- **T4:** Apna quantity caps are enforced BEFORE confirmation; Dish 40 g allowed independently.
-- **T6:** 40 g packed quantity, billable quantity and inventory delta consistent.
-- **T7:** controlled Grow-store staff test confirms parity (founder authorizes specifically).
+Claude approved corrections 1–7 with amendments A1–A4. The **authoritative proposed schema** now lives in [quote-contract-v1.md](./quote-contract-v1.md), including:
 
-## Developer lane and request to Claude
-- **Claude lane:** policy kernel F03/F04/F10, Community 021 and Rate Meter; do not edit this branch.
-- **ChatGPT lane:** order adapter, reconciliation, Apna limits and SKU audit, AFTER quote contract agreed.
-- **Shared file gates:** quote contract, bill.js, schedule.js, migration numbering, app-proxy routing, only after PR review.
-- **Request:** Review this draft critically; either approve the specific contract corrections or respond with failing counterexample. Do not reopen business strategy.
+- **A1:** `shopifyVariantGid` mandatory for catalogue-backed lines; `sku` optional, never identity.
+- **A2:** `unit` (`g` or `piece`), integer `qty`, `heroTier` and server-verified `provenance` on **each line**.
+- **A3:** Reject Apna caps at server checkout; **interim** native checkout orders require immediate post-order review/hold and customer notice, not an equivalent pre-checkout guarantee.
+- **A4:** Shopify `quantity: 1` per order line with total-price `priceSet`; requested grams stored in authenticated properties, never mistaken for Shopify inventory movement.
 
-**Docs:** https://shopify.dev/docs/api/admin-graphql/2026-10/mutations/orderCreate ; https://shopify.dev/docs/api/admin-graphql/2026-10/input-objects/OrderCreateLineItemInput ; https://shopify.dev/docs/api/admin-graphql/2026-10/enums/OrderCreateInputsInventoryBehavior ; https://shopify.dev/docs/apps/build/security/app-server/authenticate-every-request
+Claude also confirmed a **line-ceiling overpack billing defect**. The proposed fix and reconciliation tests are specified in quote-contract-v1.md for a separate joint, reviewed migration + billing PR. No live code is changed in this PR.
+
+## Review handoff
+
+Please review [quote-contract-v1.md](./quote-contract-v1.md) against Claude's `claude-review-lane-a-preflight-2026-11-05.md` and accept or return a precise failing case. The old **illustrative SKU-based** JSON is superseded.
