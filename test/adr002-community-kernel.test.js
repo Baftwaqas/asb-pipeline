@@ -88,6 +88,9 @@ test("a tampered heroWeekId on the line does not qualify (T3)", () => {
   l.heroTier.heroWeekId = "HW-FORGED";
   assert.equal(K.lineQualifiesForTier(l, tiers, CYCLE).reason, "HERO_WEEK_MISMATCH");
 });
+test("lineQualifiesForTier rejects a zero quantity used on its own", () => {
+  assert.throws(() => K.lineQualifiesForTier(line("community_order", 10, 0, 150000, "ONION-10KG"), tiers, CYCLE), /INVALID_INTEGER/);
+});
 test("duplicate line ids and unknown doors fail closed", () => {
   const a = line("community_order", 10, 10000, 150000, "ONION-10KG");
   assert.throws(() => elig([a, { ...a }]), /DUPLICATE_LINE_ID/);
@@ -155,11 +158,12 @@ const POLICY = {
 };
 const CM = { quoteId: "Q1", quoteVersion: 2, customerPhone: "+923001234567", locksAt: "2026-11-08T15:00:00Z", paymentSecurityRequired: false };
 const EV = () => ({
-  order: { serverOrderId: "gid://shopify/Order/1", acceptedAt: "2026-11-07T10:00:00Z", cutoffAt: "2026-11-08T15:00:00Z" },
-  whatsapp: { quoteId: "Q1", quoteVersion: 2, fromPhone: "+923001234567", messageId: "wamid.1", webhookSignatureValid: true },
+  order: { serverOrderId: "gid://shopify/Order/1", quoteId: "Q1", quoteVersion: 2, acceptedAt: "2026-11-07T10:00:00Z", cutoffAt: "2026-11-08T15:00:00Z" },
+  whatsapp: { quoteId: "Q1", quoteVersion: 2, fromPhone: "+923001234567", messageId: "wamid.1", webhookSignatureValid: true,
+              action: "confirm", confirmationTokenId: "ct-1", receivedAt: "2026-11-07T10:30:00Z" },
   address: { state: "serviceable" },
   risk: { state: "passed" },
-  at: "2026-11-07T11:00:00Z",
+  decisionAt: "2026-11-07T11:00:00Z",
 });
 const v = (ev, cm = CM, policy = POLICY) => K.verifyCommitment({ commitment: cm, policy, evidence: ev });
 
@@ -177,7 +181,9 @@ test("Option A a weakened policy can never verify (WhatsApp-only, pending counte
 });
 test("policy test 1: a Shopify order with no WhatsApp acknowledgment stays pending", () => {
   const ev = EV(); delete ev.whatsapp;
-  assert.deepEqual(v(ev).reasons, ["NO_VALID_WHATSAPP_CONFIRMATION"]);
+  const r = v(ev);
+  assert.equal(r.state, "pending");
+  assert.ok(r.reasons.includes("NO_VALID_WHATSAPP_CONFIRMATION"));
 });
 test("policy test 3: a WhatsApp reply to a superseded quote version does not verify", () => {
   const ev = EV(); ev.whatsapp.quoteVersion = 1;
@@ -191,7 +197,9 @@ test("Option A a reply from another phone, or an unsigned webhook, does not veri
 });
 test("Option A an order accepted at or after cutoff does not verify", () => {
   const ev = EV(); ev.order.acceptedAt = ev.order.cutoffAt;
-  assert.deepEqual(v(ev).reasons, ["ORDER_NOT_BEFORE_CUTOFF"]);
+  const r = v(ev);
+  assert.equal(r.state, "pending");
+  assert.ok(r.reasons.includes("ORDER_NOT_BEFORE_CUTOFF"));
 });
 test("Option A an unserviceable address does not verify; a trusted delivered address does", () => {
   const a = EV(); a.address.state = "incomplete";
@@ -207,9 +215,31 @@ test("policy test 4: a risk-flagged order goes under_review, and an operator ove
   const c = EV(); c.risk = { state: "overridden", operator: "ops-reviewer-1", reason: "family shares one phone" };
   assert.equal(v(c).state, "verified");
 });
-test("policy test 4: verification after lock never counts", () => {
-  const ev = EV(); ev.at = "2026-11-08T15:00:01Z";
-  assert.deepEqual(v(ev).reasons, ["AFTER_LOCK_OR_NO_TIME"]);
+test("policy test 4: a decision after lock never verifies", () => {
+  const ev = EV(); ev.decisionAt = "2026-11-08T15:00:01Z";
+  assert.deepEqual(v(ev).reasons, ["EVENTS_OUT_OF_ORDER_OR_AFTER_LOCK"]);
+});
+test("B1 a signed CANCEL (or edit, or free-form) reply never verifies", () => {
+  for (const action of ["cancel", "edit", "free_text", undefined]) {
+    const ev = EV(); ev.whatsapp.action = action;
+    assert.deepEqual(v(ev).reasons, ["WHATSAPP_NOT_A_CONFIRMATION"], String(action));
+  }
+  const ev = EV(); delete ev.whatsapp.confirmationTokenId;
+  assert.deepEqual(v(ev).reasons, ["NO_CONFIRMATION_TOKEN"]);
+});
+test("B2 a reply received after lock cannot verify through a back-dated decision time", () => {
+  const ev = EV(); ev.whatsapp.receivedAt = "2026-11-08T15:00:01Z"; ev.decisionAt = "2026-11-07T11:00:00Z";
+  assert.deepEqual(v(ev).reasons, ["EVENTS_OUT_OF_ORDER_OR_AFTER_LOCK"]);
+});
+test("B2 a reply received before the order was accepted, or a missing time, does not verify", () => {
+  const a = EV(); a.whatsapp.receivedAt = "2026-11-07T09:00:00Z";
+  assert.deepEqual(v(a).reasons, ["EVENTS_OUT_OF_ORDER_OR_AFTER_LOCK"]);
+  const b = EV(); delete b.decisionAt;
+  assert.deepEqual(v(b).reasons, ["MISSING_EVENT_TIME"]);
+});
+test("Option A the server order must be for this quote version", () => {
+  const ev = EV(); ev.order.quoteVersion = 1;
+  assert.deepEqual(v(ev).reasons, ["ORDER_FOR_OTHER_QUOTE_VERSION"]);
 });
 test("policy test 6: required payment security needs a provider-confirmed reference, not a screenshot", () => {
   const cm = { ...CM, paymentSecurityRequired: true };
@@ -246,6 +276,13 @@ test("policy test 2: repeated webhook delivery of the same commitment counts onc
 });
 test("F13 a conflicting duplicate commitment fails closed", () => {
   assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [c("A", 1, 2), c("A", 1, 5)] }), /CONFLICTING_DUPLICATE/);
+});
+test("B3 snapshots of one commitment with different states fail closed, in either order", () => {
+  const p = c("A", 1, 1, { verificationState: "pending" }), q = c("A", 1, 1);
+  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [p, q] }), /CONFLICTING_DUPLICATE/);
+  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [q, p] }), /CONFLICTING_DUPLICATE/);
+  const r = c("A", 1, 1, { fulfillmentState: "refused" });
+  assert.throws(() => K.rateMeter({ cycleCode: CYCLE, commitments: [q, r] }), /CONFLICTING_DUPLICATE/);
 });
 test("policy test 8: refused, cancelled and rejected are reported separately and never counted", () => {
   const m = K.rateMeter({ cycleCode: CYCLE, commitments: [

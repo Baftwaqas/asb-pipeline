@@ -52,6 +52,7 @@ function checkedSum(a, b) {
  * pack variant (F11).
  */
 function lineQualifiesForTier(line, tiersById, cycleCode) {
+  posInt(line.qty, "qty");
   if (!line.heroTier) return { qualifies: false, reason: "NOT_A_HERO_LINE" };
   const tierId = str(line.heroTier.tierId, "heroTier.tierId");
   const tier = tiersById && Object.prototype.hasOwnProperty.call(tiersById, tierId) ? tiersById[tierId] : null;
@@ -199,14 +200,15 @@ const time = (v) => { const t = typeof v === "string" ? Date.parse(v) : NaN; ret
  *
  * commitment: { quoteId, quoteVersion, customerPhone, locksAt,
  *               paymentSecurityRequired, paymentSecurityState }
- * evidence:
- *   order    { serverOrderId, acceptedAt, cutoffAt }             // class 1
- *   whatsapp { quoteId, quoteVersion, fromPhone, messageId,
- *              webhookSignatureValid }                             // class 2
- *   address  { state: "serviceable" | "trusted_delivered" | ... }  // class 3
+ * evidence (all resolved by the server from persisted records):
+ *   order    { serverOrderId, quoteId, quoteVersion, acceptedAt, cutoffAt }      // class 1
+ *   whatsapp { quoteId, quoteVersion, fromPhone, messageId, webhookSignatureValid,
+ *              action: "confirm", confirmationTokenId, receivedAt }              // class 2
+ *   address  { state: "serviceable" | "trusted_delivered" | ... }               // class 3
  *   risk     { state: "passed" | "overridden" | "flagged" | ..., operator?, reason? } // class 4
- *   payment  { state, providerRef }   only when security is required // class 5
- *   at       ISO time of this verification decision
+ *   payment  { state, providerRef }   only when security is required            // class 5
+ *   decisionAt  the SERVER clock time of this decision (never a browser value)
+ * Required order of events: order.acceptedAt <= whatsapp.receivedAt <= decisionAt <= locksAt.
  */
 function verifyCommitment({ commitment, policy, evidence }) {
   const p = validatePolicy(policy);
@@ -215,14 +217,18 @@ function verifyCommitment({ commitment, policy, evidence }) {
   const e = evidence || {};
   const reasons = [];
 
-  // 1. accepted on ASB's server before the cutoff
+  // 1. accepted on ASB's server before the cutoff, for THIS quote version
   const accepted = e.order && time(e.order.acceptedAt), cutoff = e.order && time(e.order.cutoffAt);
   if (!e.order || typeof e.order.serverOrderId !== "string" || !e.order.serverOrderId) reasons.push("NO_SERVER_ORDER");
+  else if (e.order.quoteId !== commitment.quoteId || e.order.quoteVersion !== commitment.quoteVersion) reasons.push("ORDER_FOR_OTHER_QUOTE_VERSION");
   else if (accepted === null || cutoff === null || accepted >= cutoff) reasons.push("ORDER_NOT_BEFORE_CUTOFF");
 
-  // 2. order-specific WhatsApp confirmation for THIS quote version, from the customer's phone
+  // 2. an explicit CONFIRM reply for THIS quote version, from the customer's phone, bound to a
+  //    server-issued confirmation token. A signature proves transport, not meaning (B1).
   const w = e.whatsapp;
   if (!w || w.webhookSignatureValid !== true || typeof w.messageId !== "string" || !w.messageId) reasons.push("NO_VALID_WHATSAPP_CONFIRMATION");
+  else if (w.action !== "confirm") reasons.push("WHATSAPP_NOT_A_CONFIRMATION");
+  else if (typeof w.confirmationTokenId !== "string" || !w.confirmationTokenId) reasons.push("NO_CONFIRMATION_TOKEN");
   else if (w.quoteId !== commitment.quoteId || w.quoteVersion !== commitment.quoteVersion) reasons.push("WHATSAPP_FOR_OTHER_QUOTE_VERSION");
   else if (!commitment.customerPhone || w.fromPhone !== commitment.customerPhone) reasons.push("WHATSAPP_FROM_OTHER_PHONE");
 
@@ -236,9 +242,10 @@ function verifyCommitment({ commitment, policy, evidence }) {
     }
   }
 
-  // verification after lock never counts
-  const at = time(e.at), locksAt = time(commitment.locksAt);
-  if (at === null || locksAt === null || at > locksAt) reasons.push("AFTER_LOCK_OR_NO_TIME");
+  // event order (B2): order accepted <= reply received <= server decision <= lock
+  const received = w && time(w.receivedAt), decided = time(e.decisionAt), locksAt = time(commitment.locksAt);
+  if (decided === null || locksAt === null || received === null || accepted === null) reasons.push("MISSING_EVENT_TIME");
+  else if (!(accepted <= received && received <= decided && decided <= locksAt)) reasons.push("EVENTS_OUT_OF_ORDER_OR_AFTER_LOCK");
 
   // 4. risk gate: a flag sends the commitment to human review, not rejection
   const risk = e.risk && e.risk.state;
@@ -273,8 +280,10 @@ function rateMeter({ cycleCode, commitments }) {
     if (!FULFILLMENT_STATES.has(c.fulfillmentState)) throw new KernelError("UNKNOWN_FULFILLMENT_STATE", c.fulfillmentState);
     const prev = byId.get(c.commitmentId);
     if (prev) {
-      if (prev.tierId !== c.tierId || prev.packs !== c.packs || prev.cycleCode !== c.cycleCode || prev.door !== c.door
-          || prev.quoteId !== c.quoteId || prev.quoteVersion !== c.quoteVersion) {
+      // Input must be CURRENT rows. Two snapshots of one commitment must agree on
+      // every field, lifecycle included, or the result would depend on order (B3).
+      if (["tierId", "packs", "cycleCode", "door", "quoteId", "quoteVersion",
+           "verificationState", "fulfillmentState", "paymentSecurityState"].some(k => prev[k] !== c[k])) {
         throw new KernelError("CONFLICTING_DUPLICATE_COMMITMENT", c.commitmentId);
       }
       continue;

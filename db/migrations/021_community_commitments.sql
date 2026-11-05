@@ -11,8 +11,10 @@
 --   community_hero_tiers         each Hero's distinct pack configuration (F11)
 --   community_commitments        one row per committed quote line
 --   community_commitment_events  append-only history of every state change
---   community_rate_meter         view: verified packs per tier per cycle
---   community_supersede_quote()  the ONLY way to replace an edited quote
+--   community_rate_meter         view: LIVE verified packs per tier per cycle (pre-lock progress)
+--   community_meter_locks        immutable snapshot frozen at cycle lock (the price decision)
+--   community_replace_quote()    the ONLY way to apply a customer edit (atomic supersede + insert)
+--   community_lock_meter()       freezes the snapshot; asb_lock_cycle integration is a later PR
 --
 -- Three SEPARATE dimensions on every commitment (policy, Option A):
 --   verification_state      pending | under_review | verified | rejected | cancelled
@@ -32,11 +34,14 @@
 --                          locked | packed | fulfilled -> refused ; paid, refused final
 --   * payment security only moves up, and needs a provider reference (a
 --     screenshot is not a provider reference)
---   * verified needs verified_at + policy version; verified_at <= locks_at;
---     both are fixed once set (R3; policy: verified after lock never counts)
---   * committed facts are immutable; a quote edit is a NEW version, and a new
---     version cannot be inserted while an older version of the same quote is
---     still live — call community_supersede_quote() first (no double count)
+--   * verified needs verified_at + policy version; created_at <= verified_at <= locks_at,
+--     and the transition itself must happen before locks_at by the DATABASE clock;
+--     both fields are fixed once set (R3; policy: verified after lock never counts)
+--   * no commitment is inserted at or after its cycle's locks_at (database clock)
+--   * committed facts are immutable; a quote edit is a NEW version written only by
+--     community_replace_quote(), which cancels older versions and inserts the new
+--     lines in one call, before cutoff, never after lock (no double count, no
+--     silent loss of verified demand). Direct inserts of version > 1 are refused.
 --   * a quote chain lives in exactly one cycle (policy test 5)
 --   * a commitment's tier belongs to the same cycle (T10)
 --   * no row is deleted; no table can be TRUNCATEd
@@ -107,8 +112,10 @@ CREATE TABLE community_commitments (
   CONSTRAINT verified_fields_together CHECK ((verified_at IS NULL) = (verification_policy_version IS NULL)),
   CONSTRAINT verified_has_event CHECK (verification_state <> 'verified' OR verified_at IS NOT NULL),
   CONSTRAINT verified_before_lock CHECK (verified_at IS NULL OR verified_at <= locks_at),
+  CONSTRAINT verified_after_creation CHECK (verified_at IS NULL OR verified_at >= created_at),
   CONSTRAINT fulfillment_needs_verified CHECK (fulfillment_state = 'none' OR verified_at IS NOT NULL),
-  CONSTRAINT secured_needs_provider_ref CHECK (payment_security_state = 'unsecured_cod' OR payment_provider_ref IS NOT NULL),
+  CONSTRAINT secured_needs_provider_ref CHECK (payment_security_state = 'unsecured_cod'
+    OR (payment_provider_ref IS NOT NULL AND length(btrim(payment_provider_ref)) > 0)),
   CONSTRAINT superseded_is_cancelled CHECK (superseded_by_version IS NULL OR
     (verification_state = 'cancelled' AND superseded_by_version > quote_version))
 );
@@ -143,6 +150,12 @@ BEGIN
   IF tier_cycle IS DISTINCT FROM NEW.cycle_code THEN
     RAISE EXCEPTION 'ASB021: tier % belongs to cycle %, not %', NEW.tier_id, tier_cycle, NEW.cycle_code;
   END IF;
+  IF clock_timestamp() >= NEW.locks_at THEN
+    RAISE EXCEPTION 'ASB021: cycle % is past its cutoff; no new commitments', NEW.cycle_code;
+  END IF;
+  IF NEW.quote_version > 1 AND current_setting('asb021.replacing', true) IS DISTINCT FROM NEW.quote_id THEN
+    RAISE EXCEPTION 'ASB021: version % of quote % must be written by community_replace_quote()', NEW.quote_version, NEW.quote_id;
+  END IF;
   -- serialise inserts per quote chain, then check the chain
   PERFORM pg_advisory_xact_lock(hashtext('asb021:' || NEW.quote_id));
   IF EXISTS (SELECT 1 FROM community_commitments
@@ -156,7 +169,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM community_commitments
               WHERE quote_id = NEW.quote_id AND quote_version < NEW.quote_version
                 AND verification_state NOT IN ('cancelled', 'rejected')) THEN
-    RAISE EXCEPTION 'ASB021: quote % has a live older version; call community_supersede_quote() first', NEW.quote_id;
+    RAISE EXCEPTION 'ASB021: quote % has a live older version; use community_replace_quote()', NEW.quote_id;
   END IF;
   RETURN NEW;
 END $$;
@@ -190,8 +203,9 @@ BEGIN
   IF OLD.superseded_by_version IS NOT NULL AND NEW.superseded_by_version IS DISTINCT FROM OLD.superseded_by_version THEN
     RAISE EXCEPTION 'ASB021: superseded_by_version cannot change once set';
   END IF;
-  IF OLD.payment_provider_ref IS NOT NULL AND NEW.payment_provider_ref IS DISTINCT FROM OLD.payment_provider_ref THEN
-    RAISE EXCEPTION 'ASB021: payment_provider_ref cannot change once set';
+  IF OLD.payment_provider_ref IS NOT NULL AND NEW.payment_provider_ref IS DISTINCT FROM OLD.payment_provider_ref
+     AND NOT (OLD.payment_security_state = 'deposit_confirmed' AND NEW.payment_security_state = 'prepaid_confirmed') THEN
+    RAISE EXCEPTION 'ASB021: payment_provider_ref changes only when a deposit is upgraded to prepaid';
   END IF;
 
   IF NEW.verification_state IS DISTINCT FROM OLD.verification_state THEN
@@ -201,6 +215,9 @@ BEGIN
       OR (OLD.verification_state = 'verified'     AND NEW.verification_state = 'cancelled' AND OLD.fulfillment_state = 'none')
     ) THEN
       RAISE EXCEPTION 'ASB021: verification % -> % is not allowed', OLD.verification_state, NEW.verification_state;
+    END IF;
+    IF NEW.verification_state = 'verified' AND clock_timestamp() > NEW.locks_at THEN
+      RAISE EXCEPTION 'ASB021: cycle % is past its cutoff; a commitment cannot be verified now', NEW.cycle_code;
     END IF;
     INSERT INTO community_commitment_events (commitment_id, dimension, from_state, to_state)
       VALUES (NEW.id, 'verification', OLD.verification_state, NEW.verification_state);
@@ -223,7 +240,8 @@ BEGIN
   END IF;
 
   IF NEW.payment_security_state IS DISTINCT FROM OLD.payment_security_state THEN
-    IF OLD.payment_security_state <> 'unsecured_cod' THEN
+    IF NOT ((OLD.payment_security_state = 'unsecured_cod' AND NEW.payment_security_state IN ('deposit_confirmed', 'prepaid_confirmed'))
+         OR (OLD.payment_security_state = 'deposit_confirmed' AND NEW.payment_security_state = 'prepaid_confirmed')) THEN
       RAISE EXCEPTION 'ASB021: payment security % cannot change to %', OLD.payment_security_state, NEW.payment_security_state;
     END IF;
     INSERT INTO community_commitment_events (commitment_id, dimension, from_state, to_state)
@@ -241,23 +259,99 @@ CREATE TRIGGER community_commitments_created AFTER INSERT ON community_commitmen
 CREATE TRIGGER community_commitments_upd BEFORE UPDATE OR DELETE ON community_commitments
   FOR EACH ROW EXECUTE FUNCTION asb021_commitment_update();
 
--- An edited quote: cancel every live line of older versions and mark what
--- replaced them. Call in the SAME transaction as inserting the new version.
-CREATE FUNCTION community_supersede_quote(p_quote_id TEXT, p_new_version INTEGER)
-RETURNS INTEGER LANGUAGE plpgsql AS $$
+-- A customer edit before cutoff: in ONE call, under the quote-chain lock,
+-- cancel every live line of older versions and insert the new version's lines.
+-- p_lines = [{"line_id","household_key","door","tier_id","packs","ceiling_line_paisa"}, ...]
+-- Returns the new commitment ids. Refused after cutoff or once any older line
+-- has entered fulfillment (post-lock changes follow the amendment policy).
+CREATE FUNCTION community_replace_quote(p_quote_id TEXT, p_new_version INTEGER, p_lines JSONB)
+RETURNS SETOF BIGINT LANGUAGE plpgsql AS $$
 DECLARE
-  n INTEGER;
+  chain_cycle TEXT;
+  chain_locks TIMESTAMPTZ;
+  l JSONB;
+  new_id BIGINT;
 BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext('asb021:' || p_quote_id));
-  IF EXISTS (SELECT 1 FROM community_commitments
-              WHERE quote_id = p_quote_id AND quote_version < p_new_version
-                AND verification_state NOT IN ('cancelled', 'rejected') AND fulfillment_state <> 'none') THEN
-    RAISE EXCEPTION 'ASB021: quote % is already locked for fulfillment; post-lock changes follow the amendment policy', p_quote_id;
+  IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' OR jsonb_array_length(p_lines) = 0 THEN
+    RAISE EXCEPTION 'ASB021: a replacement must carry the new version''s lines';
   END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('asb021:' || p_quote_id));
+  SELECT min(cycle_code), min(locks_at) INTO chain_cycle, chain_locks
+    FROM community_commitments WHERE quote_id = p_quote_id;
+  IF chain_cycle IS NULL THEN
+    RAISE EXCEPTION 'ASB021: quote % has no earlier version to replace', p_quote_id;
+  END IF;
+  IF clock_timestamp() >= chain_locks THEN
+    RAISE EXCEPTION 'ASB021: quote % is past its cutoff; it cannot be replaced', p_quote_id;
+  END IF;
+  IF EXISTS (SELECT 1 FROM community_commitments
+              WHERE quote_id = p_quote_id AND quote_version >= p_new_version) THEN
+    RAISE EXCEPTION 'ASB021: quote % already has version % or newer', p_quote_id, p_new_version;
+  END IF;
+  IF EXISTS (SELECT 1 FROM community_commitments
+              WHERE quote_id = p_quote_id AND fulfillment_state <> 'none'
+                AND verification_state NOT IN ('cancelled', 'rejected')) THEN
+    RAISE EXCEPTION 'ASB021: quote % is already locked for fulfillment', p_quote_id;
+  END IF;
+  -- row locks on the old lines: a concurrent verifier waits, then sees 'cancelled'
   UPDATE community_commitments
      SET verification_state = 'cancelled', superseded_by_version = p_new_version
    WHERE quote_id = p_quote_id AND quote_version < p_new_version
      AND verification_state NOT IN ('cancelled', 'rejected');
+  PERFORM set_config('asb021.replacing', p_quote_id, true);
+  FOR l IN SELECT * FROM jsonb_array_elements(p_lines) LOOP
+    INSERT INTO community_commitments (commitment_key, quote_id, quote_version, line_id, cycle_code, locks_at,
+        household_key, door, tier_id, packs, ceiling_line_paisa)
+      VALUES (p_quote_id || ':' || p_new_version || ':' || (l->>'line_id'), p_quote_id, p_new_version, l->>'line_id',
+              chain_cycle, chain_locks, l->>'household_key', l->>'door', (l->>'tier_id')::BIGINT,
+              (l->>'packs')::INTEGER, (l->>'ceiling_line_paisa')::BIGINT)
+      RETURNING id INTO new_id;
+    RETURN NEXT new_id;
+  END LOOP;
+  PERFORM set_config('asb021.replacing', '', true);
+  RETURN;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Frozen meter at cycle lock. The live view can change after lock (a refusal
+-- leaves it); the LOCKED price decision must not. One immutable row per tier.
+-- ---------------------------------------------------------------------------
+CREATE TABLE community_meter_locks (
+  id                    BIGSERIAL PRIMARY KEY,
+  cycle_code            TEXT NOT NULL,
+  tier_id               BIGINT NOT NULL REFERENCES community_hero_tiers(id) ON DELETE RESTRICT,
+  locked_verified_packs INTEGER NOT NULL CHECK (locked_verified_packs >= 0),
+  locked_secured_packs  INTEGER NOT NULL CHECK (locked_secured_packs >= 0),
+  locked_unlocked       BOOLEAN NOT NULL,
+  locked_pack_paisa     BIGINT NOT NULL CHECK (locked_pack_paisa > 0),
+  ceiling_pack_paisa    BIGINT NOT NULL CHECK (ceiling_pack_paisa > 0),
+  locked_at             TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  locked_by             TEXT NOT NULL,
+  UNIQUE (cycle_code, tier_id),
+  CONSTRAINT locked_price_not_above_ceiling CHECK (locked_pack_paisa <= ceiling_pack_paisa)
+);
+
+-- Freeze every tier of a cycle. Refused before the cycle's cutoff, and refused
+-- twice (the unique key). The price is the unlock price when unlocked, else the ceiling.
+CREATE FUNCTION community_lock_meter(p_cycle_code TEXT, p_locked_by TEXT)
+RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE
+  n INTEGER;
+BEGIN
+  IF p_locked_by IS NULL OR length(btrim(p_locked_by)) = 0 THEN
+    RAISE EXCEPTION 'ASB021: a meter lock needs an operator or job name';
+  END IF;
+  IF EXISTS (SELECT 1 FROM community_commitments
+              WHERE cycle_code = p_cycle_code AND locks_at > clock_timestamp()) THEN
+    RAISE EXCEPTION 'ASB021: cycle % has not reached its cutoff', p_cycle_code;
+  END IF;
+  INSERT INTO community_meter_locks (cycle_code, tier_id, locked_verified_packs, locked_secured_packs,
+                                     locked_unlocked, locked_pack_paisa, ceiling_pack_paisa, locked_by)
+  SELECT m.cycle_code, m.tier_id, m.verified_packs, m.payment_secured_packs, m.unlocked,
+         CASE WHEN m.unlocked THEN m.unlock_pack_paisa ELSE m.ceiling_pack_paisa END,
+         m.ceiling_pack_paisa, p_locked_by
+    FROM community_rate_meter m
+   WHERE m.cycle_code = p_cycle_code;
   GET DIAGNOSTICS n = ROW_COUNT;
   RETURN n;
 END $$;
@@ -280,6 +374,10 @@ CREATE TRIGGER community_hero_tiers_no_truncate BEFORE TRUNCATE ON community_her
 CREATE TRIGGER community_commitments_no_truncate BEFORE TRUNCATE ON community_commitments
   FOR EACH STATEMENT EXECUTE FUNCTION asb021_refuse();
 CREATE TRIGGER community_commitment_events_no_truncate BEFORE TRUNCATE ON community_commitment_events
+  FOR EACH STATEMENT EXECUTE FUNCTION asb021_refuse();
+CREATE TRIGGER community_meter_locks_immutable
+  BEFORE UPDATE OR DELETE ON community_meter_locks FOR EACH ROW EXECUTE FUNCTION asb021_refuse();
+CREATE TRIGGER community_meter_locks_no_truncate BEFORE TRUNCATE ON community_meter_locks
   FOR EACH STATEMENT EXECUTE FUNCTION asb021_refuse();
 
 -- ---------------------------------------------------------------------------
