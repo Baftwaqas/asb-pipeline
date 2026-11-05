@@ -134,10 +134,14 @@ function evaluateApnaCycleLimits({
     if (!line || typeof line !== "object") throw new TypeError("invalid previous line");
     if (line.door !== APNA || line.householdKey !== household || line.cycleCode !== cycle ||
         (editingOrderId !== null && line.orderId === editingOrderId)) return;
-    const state = statusOf(line.status); // unknown status is explicit error (fail closed).
+    // Only prior lines of a product in the NEW Apna order consume its cap.
+    // Legacy/unconfigured products (e.g. lemons) must not block unrelated
+    // configured items. Incoming unconfigured products still fail closed.
+    if (!proposed.has(line.canonicalProductId)) return;
+    const state = statusOf(line.status); // unknown relevant status fails closed.
     if (INACTIVE.has(state)) return;
     const {id, qty} = parse(line, "existingCycleLines[" + index + "]");
-    if (proposed.has(id)) previous.set(id, sum(previous.get(id) || 0, qty));
+    previous.set(id, sum(previous.get(id) || 0, qty));
   });
 
   const products = [];
