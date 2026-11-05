@@ -109,6 +109,57 @@ function money(n) {
   return "Rs " + String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+// ---------------------------------------------------------------------------
+// Line amounts in whole PAISA (integers), the same rule as order_items in
+// 022_line_ceiling_billing.sql. Integers, because 1.08 x 95 in floating point
+// is 102.60000000000001 and a bill must not depend on that.
+//
+//   accepted line ceiling = round(qty_ordered x ceiling rate)  (the amount
+//                           in the confirmation message)
+//   billed line           = round(billed qty x billed rate), and when packed
+//                           above the order, never above the accepted ceiling
+//
+// round = half up to the paisa, which is what PostgreSQL ROUND(numeric, 2)
+// does for the positive amounts on a bill.
+// ---------------------------------------------------------------------------
+const toMilli = (n) => Math.round(Number(n) * 1000); // NUMERIC(10,3) qty
+const toPaisa = (n) => Math.round(Number(n) * 100); // NUMERIC(12,2) money
+
+function roundHalfUpDiv(num, den) {
+  return Math.floor((num + den / 2) / den);
+}
+
+function acceptedLineCeilingPaisa(l) {
+  return roundHalfUpDiv(toMilli(l.qty_ordered) * toPaisa(l.ceiling_unit_price), 1000);
+}
+
+function billedLinePaisa(l) {
+  // The database is the authority when it has spoken.
+  if (l.line_total != null) return toPaisa(l.line_total);
+
+  const ordered = toMilli(l.qty_ordered);
+  const billedQty = toMilli(l.qty_packed ?? l.qty_ordered);
+  const ceilingRate = toPaisa(l.ceiling_unit_price);
+  const rate = Math.min(ceilingRate, toPaisa(l.billed_unit_price ?? l.final_unit_price ?? l.ceiling_unit_price));
+  const raw = roundHalfUpDiv(billedQty * rate, 1000);
+  return billedQty > ordered ? Math.min(raw, acceptedLineCeilingPaisa(l)) : raw;
+}
+
+/**
+ * Cash on delivery collects whole rupees. The payable is the bill rounded
+ * DOWN, and the paisa dropped are the customer's (R2 of quote contract v1):
+ * rounding never raises what she pays.
+ */
+function codPayable(totalPaisa) {
+  const p = Math.max(0, Math.trunc(totalPaisa));
+  const payablePaisa = Math.floor(p / 100) * 100;
+  return { payablePaisa, roundingCreditPaisa: p - payablePaisa };
+}
+
+function paisaPhrase(p) {
+  return `Rs 0.${String(p).padStart(2, "0")}`;
+}
+
 
 /**
  * The rate as a customer reads it on a paper bill.
@@ -288,23 +339,41 @@ function finalBill(order) {
     const qty = Number(l.qty_packed ?? l.qty_ordered);
     const ceilingRate = Number(l.ceiling_unit_price);
     const billedRate = Number(l.billed_unit_price ?? l.ceiling_unit_price);
-    const lineTotal = qty * billedRate;
+    const linePaisa = billedLinePaisa(l);
     const cheaper = billedRate < ceilingRate;
     const reweighed =
       l.qty_packed != null && Number(l.qty_packed) !== Number(l.qty_ordered);
+    // Packed above the order and the weight would have cost more than the
+    // promise: the line stops at the promise. Say so, or the multiplication
+    // on the line does not add up.
+    const capped =
+      toMilli(qty) > toMilli(l.qty_ordered) &&
+      linePaisa < roundHalfUpDiv(toMilli(qty) * Math.min(toPaisa(ceilingRate), toPaisa(billedRate)), 1000);
 
     return {
       label: productLabel(l),
       qty: qtyPhrase(qty, l.unit, l.pack_size),
       rate: ratePhrase(billedRate, l.unit, l.pack_size),
       wasRate: ratePhrase(ceilingRate, l.unit, l.pack_size),
-      total: money(lineTotal),
+      total: money(linePaisa / 100),
+      linePaisa,
       cheaper,
+      capped,
       reweighed,
     };
   });
 
-  const billed = Number(order.billed_total ?? order.grand_total ?? 0);
+  // The order header (asb_refresh_order_totals, summing order_items) is the
+  // authority. Without one, the lines are.
+  const billedPaisa =
+    order.billed_total != null
+      ? toPaisa(order.billed_total)
+      : order.grand_total != null && !(order.lines || []).length
+        ? toPaisa(order.grand_total)
+        : lines.reduce((s, l) => s + l.linePaisa, 0);
+  const { payablePaisa, roundingCreditPaisa } = codPayable(billedPaisa);
+  const billed = billedPaisa / 100;
+  const payable = payablePaisa / 100;
   const ceiling = Number(order.ceiling_total ?? 0);
   const market = Number(order.market_total ?? 0);
 
@@ -324,16 +393,19 @@ function finalBill(order) {
   // the lines are joined onto one line for a template it collides with the
   // " • " between items and the eye cannot tell which dot separates what.
   // So the flat form drops the inner dot.
-  const body = lines.map((l) =>
-    l.cheaper
-      ? `${l.label} · ${l.qty} × ${l.rate} = ${l.total} (pehlay tha ${l.wasRate})`
-      : `${l.label} · ${l.qty} × ${l.rate} = ${l.total}`
-  );
-  const bodyFlat = lines.map((l) =>
-    l.cheaper
-      ? `${l.label} ${l.qty} × ${l.rate} = ${l.total} (pehlay tha ${l.wasRate})`
-      : `${l.label} ${l.qty} × ${l.rate} = ${l.total}`
-  );
+  const note = (l) =>
+    [
+      l.cheaper ? `pehlay tha ${l.wasRate}` : null,
+      l.capped ? `wazan zyada nikla, wade se zyada nahi liya` : null,
+    ].filter(Boolean);
+  const body = lines.map((l) => {
+    const n = note(l);
+    return `${l.label} · ${l.qty} × ${l.rate} = ${l.total}` + (n.length ? ` (${n.join(", ")})` : "");
+  });
+  const bodyFlat = lines.map((l) => {
+    const n = note(l);
+    return `${l.label} ${l.qty} × ${l.rate} = ${l.total}` + (n.length ? ` (${n.join(", ")})` : "");
+  });
 
   // The ceiling is NOT repeated here, deliberately.
   //
@@ -345,7 +417,12 @@ function finalBill(order) {
   // and it reads as though the promise moved - the exact impression this
   // message exists to prevent. Two numbers, asal bill and bachat, say
   // everything and cannot be misread.
-  const tail = [`Asal bill: *${money(billed)}*`];
+  // Cash is collected in whole rupees, rounded DOWN. The dropped paisa are
+  // shown, so the printed lines still add up to what she is asked for.
+  const tail = [`Asal bill: *${money(payable)}*`];
+  if (roundingCreditPaisa > 0) {
+    tail.push(`Paisay ki chhoot: ${paisaPhrase(roundingCreditPaisa)}`);
+  }
 
   if (market > billed) tail.push(`Avg bazaar rate par yehi saman: ${money(market)}`);
 
@@ -388,11 +465,15 @@ function finalBill(order) {
     saved,
     communitySaved,
     mandiSaved,
+    billedPaisa,
+    payablePaisa,
+    roundingCreditPaisa,
+    linePaisa: lines.map((l) => l.linePaisa),
     params: {
       customer_name: name,
       order_id: order.order_number,
       bill_items: bodyFlat.join(" • "),
-      asal_bill: money(billed),
+      asal_bill: money(payable),
       bazaar_total: money(market),
       zyada_se_zyada: money(ceiling),
       bachat: money(saved),
@@ -429,4 +510,7 @@ module.exports = {
   deliveryPhrase,
   orderedPhrase,
   money,
+  billedLinePaisa,
+  acceptedLineCeilingPaisa,
+  codPayable,
 };

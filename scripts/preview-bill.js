@@ -88,21 +88,30 @@ async function main() {
       if (!sim) return l;
       const finalPrice = sim.price;
       const packed = sim.qty != null ? sim.qty : l.qty_packed;
-      // mirror the generated columns from 001_init exactly
+      // Mirror the generated columns of 022_line_ceiling_billing exactly, by
+      // calling the same integer-paisa rule bill.js bills with. An over-packed
+      // line never goes above the amount accepted at checkout.
       const billedQty = Number(packed ?? l.qty_ordered);
       const billedRate = Math.min(Number(l.ceiling_unit_price), Number(finalPrice));
-      return {
+      const next = {
         ...l,
         qty_packed: packed,
         final_unit_price: finalPrice,
         billed_unit_price: billedRate,
-        line_total: round2(billedQty * billedRate),
-        ceiling_line_total: round2(billedQty * Number(l.ceiling_unit_price)),
+        line_total: null,
+      };
+      const overPacked = Math.round(billedQty * 1000) > Math.round(Number(l.qty_ordered) * 1000);
+      return {
+        ...next,
+        line_total: bill.billedLinePaisa(next) / 100,
+        ceiling_line_total: overPacked
+          ? bill.acceptedLineCeilingPaisa(next) / 100
+          : round2(billedQty * Number(l.ceiling_unit_price)),
       };
     }),
   };
   after.ceiling_total = after.lines.reduce((s, l) => s + Number(l.ceiling_line_total), 0);
-  after.billed_total = after.lines.reduce((s, l) => s + Number(l.line_total), 0);
+  after.billed_total = after.lines.reduce((s, l) => s + Math.round(Number(l.line_total) * 100), 0) / 100;
   after.market_total = after.lines.reduce(
     (s, l) => s + Number(l.qty_packed ?? l.qty_ordered) * Number(l.market_unit_price ?? l.ceiling_unit_price), 0);
 

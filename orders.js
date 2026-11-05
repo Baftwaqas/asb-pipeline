@@ -118,6 +118,9 @@ async function loadOrderForBill(db, orderId) {
             oi.unit::text AS unit, oi.qty_ordered, oi.qty_packed,
             oi.ceiling_unit_price, oi.final_unit_price, oi.billed_unit_price,
             oi.market_unit_price,
+            -- 022: the billed line amount, already capped at the accepted
+            -- line ceiling. bill.js uses it instead of recomputing.
+            oi.line_total,
             -- How much is in ONE pack. Quantities count packs, not grams, so
             -- without this a 500 g bag of spinach renders as "1 g".
             p.min_qty AS pack_size
