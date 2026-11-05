@@ -1,6 +1,6 @@
 # ASB Shopify Development Store — Owner Handoff and Safety Gate
 **Prepared:** 5 November 2026 · **Lane A:** ChatGPT
-**Status (5 Nov 2026):** Store owner has created **ASB Checkout Lab**; owner screenshot shows **asb-checkout-lab.myshopify.com** as **Primary / Connected** in Shopify Domains. This verifies the store domain in Shopify's admin UI, **not** API authorization, installed-app permissions, or the first test order. Shopify connector authorization for this shop is still unverified. No production mutation is authorized.
+**Status (5 Nov 2026):** Shopify Dev store **ASB Checkout Lab** is live and verified by connected Admin API at `asb-checkout-lab.myshopify.com`, **PKR**, **Asia/Karachi**. Three synthetic DRAFT products and six test variants were created; see `checkout/fixtures/asb-checkout-lab.json`. PostgreSQL migration 023 plus claim/timeout/concurrency tests passed in isolated CI. A direct `orderCreate` capability probe returned **ACCESS DENIED — OFFLINE ACCESS TOKEN REQUIRED**, despite the connector listing the `write_orders` scope. Shopify orders remain **0**. No production mutation is authorized.
 
 ## Completed owner action (Shopify 2026 Dev Dashboard)
 1. Open https://dev.shopify.com/ and sign in to the Shopify account/organization with development-store permission.
@@ -21,8 +21,10 @@ The interactive browser/Shopify authentication must be completed by the owner on
 
 - **Dev shop domain:** `asb-checkout-lab.myshopify.com` (user-supplied Shopify Domains screenshot: Primary, Connected).
 - **Allowlist exact value:** `ASB_ALLOWED_DEV_SHOP_DOMAINS=asb-checkout-lab.myshopify.com` on the **development runtime only**. This is a public shop identifier, never an API credential; the existing adapter still refuses all shops unless explicitly allowlisted at runtime.
-- **Unverified:** app installation, effective Admin `write_orders` scope, OAuth/API token, PKR currency, Karachi timezone, and any actual `orderCreate` test.
-- **Connector state:** the connected Shopify app did not expose a verified dev-shop Admin API session after the switch attempt. Reauthorize the Shopify connection against this dev store before inspecting its configuration. Do not switch back to the production shop during this test path without coordinating.
+- **Verified read-only through Shopify Admin GraphQL:** `shop.myshopifyDomain=asb-checkout-lab.myshopify.com`, currency `PKR`, `ianaTimezone=Asia/Karachi`, 3 draft products and 0 orders. Connected ChatGPT app advertises `write_orders` and `write_products` scopes.
+- **Actual orderCreate mutation probe:** Shopify rejected it before creating anything: `Access denied for orderCreate field. Required access: write_orders access scope. Also: This mutation is only accessible to apps authenticated using offline tokens.` GraphQL `currentAppInstallation.accessScopes` reporting `write_orders` is NOT enough: Shopify also requires **offline token authentication**.
+- **Correct next path:** Install a **separately registered ASB Checkout Lab Bridge** app on the dev store with offline authorization; use its server-side session (e.g. `unauthenticated.admin(shop)` in the Shopify React Router runtime), with `read_products,write_orders`. Test the capability from that app's server, never by extracting/pasting tokens. Do not modify the existing production ASB Data Manager app's scopes or App Store configuration.
+- **Dev-only PostgreSQL state added:** `db/migrations/023_checkout_quote_redemptions.sql`, `checkout/redemption-ledger-pg-v1.js`, `test/adr002-pg-ledger.test.js`; an **approved policy verification callback is mandatory**, and a deployment/customer-auth route is NOT yet implemented. The synthetic verifier in tests does not authorize production checkout.
 
 ## App installation and permission contract
 
@@ -56,4 +58,4 @@ https://shopify.dev/docs/apps/build/stores/development-stores
 https://shopify.dev/docs/api/shopify-cli/store/store-create-dev
 https://shopify.dev/docs/api/admin-graphql/2026-10/mutations/orderCreate
 
-**Next blocker:** actual Dev store `*.myshopify.com` domain and the owner-installed development app. No fabricated store existence or successful end-to-end order assertions.
+**Next blocker (confirmed):** obtain Shopify offline authentication **from a separate dev app** and connect it to the durable DB/quote/household policy route, then execute exactly one controlled `orderCreate` and verify order ID, `PENDING` financial status, PKR amount, delivery metadata, receipt suppression and idempotency. Do not confuse the connector's online token with an offline app token.
