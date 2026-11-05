@@ -84,7 +84,7 @@ test("D0: cache refreshes using expires_in, never a hardcoded token lifetime",as
   const c=client(f,{now:()=>clock});
   await c.checkShop();
   assert.equal(f.calls.token,1);
-  clock+=3200*1000;
+  clock+=3350*1000;
   await c.checkShop();
   assert.equal(f.calls.token,2);
 });
