@@ -1,8 +1,8 @@
 # ASB Shopify Development Store — Owner Handoff and Safety Gate
 **Prepared:** 5 November 2026 · **Lane A:** ChatGPT
-**Status:** Store not created or connected; Shopify's merchant Admin API connector cannot create Dev Dashboard stores. The owner must create it while signed in to the Shopify Dev Dashboard. No production mutation is authorized.
+**Status (5 Nov 2026):** Store owner has created **ASB Checkout Lab**; owner screenshot shows **asb-checkout-lab.myshopify.com** as **Primary / Connected** in Shopify Domains. This verifies the store domain in Shopify's admin UI, **not** API authorization, installed-app permissions, or the first test order. Shopify connector authorization for this shop is still unverified. No production mutation is authorized.
 
-## Exact owner action (Shopify 2026 Dev Dashboard)
+## Completed owner action (Shopify 2026 Dev Dashboard)
 1. Open https://dev.shopify.com/ and sign in to the Shopify account/organization with development-store permission.
 2. Select **Stores → Create store → Dev** (NOT Client transfer, NOT a paid merchant production store).
 3. Name it **ASB Checkout Lab**; choose **Grow** plan to match production capabilities (NOT Plus), **Pakistan / PK** if asked, no feature previews.
@@ -17,7 +17,14 @@ shopify store list
 ```
 The interactive browser/Shopify authentication must be completed by the owner on their own computer. Do not treat mock.shop "new store previews" as Dev stores.
 
-## App installation and permission contract (after owner creates store)
+## Verified development shop identity and next permission gate
+
+- **Dev shop domain:** `asb-checkout-lab.myshopify.com` (user-supplied Shopify Domains screenshot: Primary, Connected).
+- **Allowlist exact value:** `ASB_ALLOWED_DEV_SHOP_DOMAINS=asb-checkout-lab.myshopify.com` on the **development runtime only**. This is a public shop identifier, never an API credential; the existing adapter still refuses all shops unless explicitly allowlisted at runtime.
+- **Unverified:** app installation, effective Admin `write_orders` scope, OAuth/API token, PKR currency, Karachi timezone, and any actual `orderCreate` test.
+- **Connector state:** the connected Shopify app did not expose a verified dev-shop Admin API session after the switch attempt. Reauthorize the Shopify connection against this dev store before inspecting its configuration. Do not switch back to the production shop during this test path without coordinating.
+
+## App installation and permission contract
 
 - The ASB server-order adapter uses Shopify **Admin GraphQL 2026-10**, `orderCreate` with `write_orders` scope; verify the installed app's **effective scopes**, not just what shopify.app.toml requests. Only create a dedicated development-app installation if needed; do not silently add `write_orders` to the production ASB Data Manager app.
 - For a Shopify app proxy, request and verify `write_app_proxy`, Shopify proxy HMAC and **separate authenticated customer identity**. Proxy origin alone is not shopper authentication.
