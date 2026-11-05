@@ -109,6 +109,100 @@ function money(n) {
   return "Rs " + String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+// ---------------------------------------------------------------------------
+// Line amounts in whole PAISA, the same rule as order_items in
+// 022_line_ceiling_billing.sql, computed in BigInt so no product of quantity
+// and rate can lose precision (quote contract R2).
+//
+//   accepted line ceiling = round(qty_ordered x ceiling rate)  (the amount
+//                           in the confirmation message)
+//   billed line           = round(billed qty x billed rate), and when packed
+//                           above the order, never above the accepted ceiling
+//
+// round = half up to the paisa, which is what PostgreSQL ROUND(numeric, 2)
+// does for the non-negative amounts on a bill.
+//
+// Inputs are parsed as exact decimals, never through floating point. Anything
+// that is not a finite, non-negative decimal within the column's scale is
+// REFUSED (MONEY_INPUT_INVALID), never clamped: a bill built from a bad number
+// must not be sent.
+// ---------------------------------------------------------------------------
+function exactUnits(value, scale, label) {
+  const s = typeof value === "bigint" ? value.toString() : String(value ?? "").trim();
+  const m = /^(\d{1,15})(?:\.(\d+))?$/.exec(s);
+  if (!m) throw new RangeError(`MONEY_INPUT_INVALID: ${label} = ${JSON.stringify(value)}`);
+  const frac = m[2] || "";
+  if (frac.length > scale && /[1-9]/.test(frac.slice(scale)))
+    throw new RangeError(`MONEY_INPUT_INVALID: ${label} has more than ${scale} decimals: ${s}`);
+  return BigInt(m[1] + frac.slice(0, scale).padEnd(scale, "0"));
+}
+const milli = (v, label) => exactUnits(v, 3, label); // NUMERIC(10,3) quantity
+const paisa = (v, label) => exactUnits(v, 2, label); // NUMERIC(12,2) money
+
+const halfUp = (num, den) => (num + den / 2n) / den; // non-negative BigInt only
+
+function toSafeNumber(b, label) {
+  if (b > BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError(`MONEY_INPUT_INVALID: ${label} too large`);
+  return Number(b);
+}
+
+function acceptedLineCeilingBig(l) {
+  return halfUp(milli(l.qty_ordered, "qty_ordered") * paisa(l.ceiling_unit_price, "ceiling_unit_price"), 1000n);
+}
+
+/** Uncapped amount for the weight actually billed, at the billed rate. */
+function weightLineBig(l) {
+  const ceilingRate = paisa(l.ceiling_unit_price, "ceiling_unit_price");
+  const offered = paisa(l.billed_unit_price ?? l.final_unit_price ?? l.ceiling_unit_price, "billed_unit_price");
+  const rate = offered < ceilingRate ? offered : ceilingRate;
+  return halfUp(milli(l.qty_packed ?? l.qty_ordered, "qty_packed") * rate, 1000n);
+}
+
+function billedLineBig(l) {
+  const raw = weightLineBig(l);
+  if (milli(l.qty_packed ?? l.qty_ordered, "qty_packed") <= milli(l.qty_ordered, "qty_ordered")) return raw;
+  const cap = acceptedLineCeilingBig(l);
+  return raw < cap ? raw : cap;
+}
+
+function acceptedLineCeilingPaisa(l) {
+  return toSafeNumber(acceptedLineCeilingBig(l), "accepted line ceiling");
+}
+
+/**
+ * The billed amount of one line, in paisa. When the database has stored
+ * line_total it is the authority, but it is still checked against the rule:
+ * a stored amount above the accepted ceiling is refused, not printed.
+ */
+function billedLinePaisa(l) {
+  const rule = billedLineBig(l);
+  if (l.line_total != null) {
+    const stored = paisa(l.line_total, "line_total");
+    if (stored > acceptedLineCeilingBig(l))
+      throw new RangeError(`BILL_LINE_ABOVE_CEILING: stored ${l.line_total} exceeds the accepted line ceiling`);
+    return toSafeNumber(stored, "line_total");
+  }
+  return toSafeNumber(rule, "line amount");
+}
+
+/**
+ * Cash on delivery collects whole rupees. The payable is the FULL order total
+ * rounded DOWN once, and the paisa dropped are the customer's (R2): rounding
+ * never raises what she pays. Refuses a negative, fractional or unsafe input.
+ */
+function codPayable(totalPaisa) {
+  if (!Number.isSafeInteger(totalPaisa) || totalPaisa < 0)
+    throw new RangeError(`MONEY_INPUT_INVALID: payable total ${totalPaisa}`);
+  const payablePaisa = Math.floor(totalPaisa / 100) * 100;
+  return { payablePaisa, roundingCreditPaisa: totalPaisa - payablePaisa };
+}
+
+/** Rs 87.40 · Rs 100 · Rs 1,240.05 — exact, for amounts that must add up. */
+function moneyExact(p) {
+  const whole = Math.floor(p / 100), frac = p % 100;
+  const rs = "Rs " + String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return frac ? `${rs}.${String(frac).padStart(2, "0")}` : rs;
+}
 
 /**
  * The rate as a customer reads it on a paper bill.
@@ -283,28 +377,56 @@ function orderConfirmation(order) {
 // ---------------------------------------------------------------------------
 function finalBill(order) {
   const name = firstName(order.customer_name);
+  const all = order.lines || [];
 
-  const lines = (order.lines || []).map((l) => {
+  // A line marked unavailable at packing is not delivered and not charged.
+  // asb_refresh_order_totals and v_order_totals already leave it out; the
+  // bill must too, or the printed lines would not add up to the total.
+  const unavailable = all.filter((l) => l.is_unavailable === true);
+  const lines = all.filter((l) => l.is_unavailable !== true).map((l) => {
     const qty = Number(l.qty_packed ?? l.qty_ordered);
     const ceilingRate = Number(l.ceiling_unit_price);
     const billedRate = Number(l.billed_unit_price ?? l.ceiling_unit_price);
-    const lineTotal = qty * billedRate;
+    const linePaisa = billedLinePaisa(l);
     const cheaper = billedRate < ceilingRate;
     const reweighed =
       l.qty_packed != null && Number(l.qty_packed) !== Number(l.qty_ordered);
+    // Packed above the order and the weight would have cost more than the
+    // promise: the line stops at the promise. Say so, or the multiplication
+    // on the line does not add up.
+    const capped = BigInt(linePaisa) < weightLineBig(l);
 
     return {
       label: productLabel(l),
       qty: qtyPhrase(qty, l.unit, l.pack_size),
       rate: ratePhrase(billedRate, l.unit, l.pack_size),
       wasRate: ratePhrase(ceilingRate, l.unit, l.pack_size),
-      total: money(lineTotal),
+      // Exact to the paisa: the printed lines must add up to the subtotal,
+      // and only the ORDER total is rounded (once, down) for cash.
+      total: moneyExact(linePaisa),
+      linePaisa,
       cheaper,
+      capped,
       reweighed,
     };
   });
 
-  const billed = Number(order.billed_total ?? order.grand_total ?? 0);
+  // Money. The lines are the source; the stored header must agree with them
+  // or the bill is refused. A header that disagrees is stale (for example an
+  // order billed before 022 and held for founder review) and must never be
+  // re-sent or collected from.
+  const subtotalPaisa = lines.reduce((s, l) => s + l.linePaisa, 0);
+  const feePaisa = Number(paisa(order.delivery_fee ?? 0, "delivery_fee"));
+  const discountPaisa = Number(paisa(order.discount ?? 0, "discount"));
+  const totalPaisa = Math.max(subtotalPaisa + feePaisa - discountPaisa, 0); // = SQL GREATEST(...,0)
+  if (order.billed_total != null && Number(paisa(order.billed_total, "billed_total")) !== subtotalPaisa)
+    throw new Error(`BILL_HEADER_MISMATCH: ${order.order_number} header billed_total ${order.billed_total} != lines ${moneyExact(subtotalPaisa)}`);
+  if (order.grand_total != null && Number(paisa(order.grand_total, "grand_total")) !== totalPaisa)
+    throw new Error(`BILL_HEADER_MISMATCH: ${order.order_number} header grand_total ${order.grand_total} != computed ${moneyExact(totalPaisa)}`);
+  const { payablePaisa, roundingCreditPaisa } = codPayable(totalPaisa);
+
+  const billed = subtotalPaisa / 100;
+  const payable = payablePaisa / 100;
   const ceiling = Number(order.ceiling_total ?? 0);
   const market = Number(order.market_total ?? 0);
 
@@ -316,6 +438,7 @@ function finalBill(order) {
   //   mandi     : ASB rate - what was actually billed. Often zero. A zero here
   //               is an ordinary outcome, NOT a failure, and the message must
   //               not read like one - which is the bug this replaces.
+  // Both are measured on the weight DELIVERED (010, 022).
   const communitySaved = Math.max(0, Math.round(market - ceiling));
   const mandiSaved = Math.max(0, Math.round(ceiling - billed));
   const saved = communitySaved + mandiSaved;
@@ -324,16 +447,26 @@ function finalBill(order) {
   // the lines are joined onto one line for a template it collides with the
   // " • " between items and the eye cannot tell which dot separates what.
   // So the flat form drops the inner dot.
-  const body = lines.map((l) =>
-    l.cheaper
-      ? `${l.label} · ${l.qty} × ${l.rate} = ${l.total} (pehlay tha ${l.wasRate})`
-      : `${l.label} · ${l.qty} × ${l.rate} = ${l.total}`
-  );
-  const bodyFlat = lines.map((l) =>
-    l.cheaper
-      ? `${l.label} ${l.qty} × ${l.rate} = ${l.total} (pehlay tha ${l.wasRate})`
-      : `${l.label} ${l.qty} × ${l.rate} = ${l.total}`
-  );
+  const note = (l) =>
+    [
+      l.cheaper ? `pehlay tha ${l.wasRate}` : null,
+      l.capped ? `wazan zyada nikla, wade se zyada nahi liya` : null,
+    ].filter(Boolean);
+  const gone = unavailable.map((l) => `${productLabel(l)} — is dafa dastiyab nahi, Rs 0`);
+  const body = [
+    ...lines.map((l) => {
+      const n = note(l);
+      return `${l.label} · ${l.qty} × ${l.rate} = ${l.total}` + (n.length ? ` (${n.join(", ")})` : "");
+    }),
+    ...gone,
+  ];
+  const bodyFlat = [
+    ...lines.map((l) => {
+      const n = note(l);
+      return `${l.label} ${l.qty} × ${l.rate} = ${l.total}` + (n.length ? ` (${n.join(", ")})` : "");
+    }),
+    ...gone,
+  ];
 
   // The ceiling is NOT repeated here, deliberately.
   //
@@ -343,9 +476,19 @@ function finalBill(order) {
   // 0.95 kg at Rs 250 = Rs 237.50), so the printed "zyada se zyada" would be
   // LOWER than the number she was quoted at checkout. Arithmetically right,
   // and it reads as though the promise moved - the exact impression this
-  // message exists to prevent. Two numbers, asal bill and bachat, say
-  // everything and cannot be misread.
-  const tail = [`Asal bill: *${money(billed)}*`];
+  // message exists to prevent.
+  //
+  // Cash: the full order total (saman + delivery - discount) is rounded DOWN
+  // once. When anything sits between the lines and the cash figure, each step
+  // is printed, so every number on the bill can be checked by hand.
+  const tail = [];
+  if (feePaisa || discountPaisa || roundingCreditPaisa) {
+    tail.push(`Saman: ${moneyExact(subtotalPaisa)}`);
+    if (feePaisa) tail.push(`Delivery: ${moneyExact(feePaisa)}`);
+    if (discountPaisa) tail.push(`Discount: −${moneyExact(discountPaisa)}`);
+    if (roundingCreditPaisa) tail.push(`Paisay ki chhoot: −${moneyExact(roundingCreditPaisa)}`);
+  }
+  tail.push(`Asal bill: *${money(payable)}*`);
 
   if (market > billed) tail.push(`Avg bazaar rate par yehi saman: ${money(market)}`);
 
@@ -366,6 +509,12 @@ function finalBill(order) {
   }
 
   const reweighedAny = lines.some((l) => l.reweighed);
+  const cappedAny = lines.some((l) => l.capped);
+  const footer = cappedAny
+    ? `Wazan tolne ke baad ka hisaab hai — kam nikla to kam laga, zyada nikla to wade se zyada nahi liya.`
+    : reweighedAny
+      ? `Wazan tolne ke baad ka hisaab hai — jitna nikla, utna hi laga.`
+      : `Jo wada kiya tha, wohi liya.`;
 
   const rich = [
     `Assalam-o-Alaikum ${name} 🌿`,
@@ -375,9 +524,7 @@ function finalBill(order) {
     ``,
     ...tail,
     ``,
-    reweighedAny
-      ? `Wazan tolne ke baad ka hisaab hai — jitna nikla, utna hi laga.`
-      : `Jo wada kiya tha, wohi liya.`,
+    footer,
     ``,
     `Shukriya — Apna Sasta Bazaar`,
   ].join("\n");
@@ -388,11 +535,20 @@ function finalBill(order) {
     saved,
     communitySaved,
     mandiSaved,
+    // Every amount in integer paisa, for reconciliation with Postgres,
+    // the bill snapshot and the Shopify collectible.
+    subtotalPaisa,
+    feePaisa,
+    discountPaisa,
+    totalPaisa,
+    payablePaisa,
+    roundingCreditPaisa,
+    linePaisa: lines.map((l) => l.linePaisa),
     params: {
       customer_name: name,
       order_id: order.order_number,
       bill_items: bodyFlat.join(" • "),
-      asal_bill: money(billed),
+      asal_bill: money(payable),
       bazaar_total: money(market),
       zyada_se_zyada: money(ceiling),
       bachat: money(saved),
@@ -429,4 +585,8 @@ module.exports = {
   deliveryPhrase,
   orderedPhrase,
   money,
+  billedLinePaisa,
+  acceptedLineCeilingPaisa,
+  codPayable,
+  moneyExact,
 };
