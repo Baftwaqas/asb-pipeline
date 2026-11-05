@@ -60,9 +60,6 @@ async function confirmCodOrder({
   const current=now();
   if(!(current instanceof Date)||Number.isNaN(current.valueOf()))
     throw new QuoteError("INVALID_SERVER_CLOCK");
-  if(current.valueOf()<timeMs(quote.issuedAt,"ISSUED_AT")||
-     current.valueOf()>=timeMs(quote.expiresAt,"EXPIRES_AT"))
-    throw new QuoteError("QUOTE_EXPIRED_OR_NOT_YET_VALID");
   if(identity.householdKey!==quote.customerReference)
     throw new QuoteError("HOUSEHOLD_MISMATCH");
 
@@ -70,6 +67,19 @@ async function confirmCodOrder({
   if(!customer || customer.householdKey!==identity.householdKey ||
      customer.phone!==identity.phone) throw new QuoteError("CUSTOMER_IDENTITY_MISMATCH");
   const redemptionKey=redemptionKeyFor(quoteId,version);
+  if(current.valueOf()<timeMs(quote.issuedAt,"ISSUED_AT")||
+     current.valueOf()>=timeMs(quote.expiresAt,"EXPIRES_AT")){
+    // Redemption is a ONE-WAY event: a previously completed COD order must
+    // remain findable even after its short-lived quote expires. Only a
+    // server-side completed claim qualifies. Never create after expiry.
+    if(typeof ledger.lookupCompletedQuote==="function"){
+      const prior=await ledger.lookupCompletedQuote({quote,identity,redemptionKey});
+      if(prior?.state==="completed")
+        return {status:"already_created",
+          shopifyOrderGid:nonempty(prior.shopifyOrderGid,"ORDER_GID"),redemptionKey};
+    }
+    throw new QuoteError("QUOTE_EXPIRED_OR_NOT_YET_VALID");
+  }
   const payload=buildOrderCreateInput({quote,customer,redemptionKey,taxesDisabledApproved});
   // Claim commits a durable reservation BEFORE any external orderCreate call.
   // It must re-check cutoff and authoritative live policy inside its DB lock.
