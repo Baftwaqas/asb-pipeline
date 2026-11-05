@@ -64,26 +64,26 @@ All money is an integer in **paisa** (1 PKR = 100 paisa); `qty` is a **positive 
       "canonicalProductId": "ASB-CANON-ONION",
       "sku": null,
       "unit": "g",
-      "qty": 5000,
-      "sellUnitLabel": "5 kg pack",
-      "heroTier": {"heroWeekId": "H-WEEK-001", "tierId": "ONION-5KG"},
+      "qty": 10000,
+      "sellUnitLabel": "10 kg pack",
+      "heroTier": {"heroWeekId": "H-WEEK-001", "tierId": "ONION-10KG"},
       "provenance": {"kind": "community_pack"},
-      "ceilingLinePaisa": 75000,
-      "quotedLinePaisa": 75000
+      "ceilingLinePaisa": 150000,
+      "quotedLinePaisa": 150000
     }
   ],
   "communityEligibilityByDoor": {
-    "community_order": {"qualifyingCeilingPaisa": 75000, "eligible": false},
+    "community_order": {"qualifyingCeilingPaisa": 150000, "eligible": true},
     "dish_to_cart": {"qualifyingCeilingPaisa": 0, "eligible": false},
     "budget_to_cart": {"qualifyingCeilingPaisa": 0, "eligible": false}
   },
-  "ceilingTotalPaisa": 101000,
-  "quotedTotalPaisa": 101000,
+  "ceilingTotalPaisa": 176000,
+  "quotedTotalPaisa": 176000,
   "serverSignature": "opaque-HMAC-over-canonical-versioned-quote"
 }
 ```
 
-**Example only:** the numeric variant IDs, SKUs, prices and tier records are not live product assertions. In this example the Community subcart is under Rs 1,200, so its final rate must be the applicable non-Community alternative or its Community checkout must be blocked/nudged according to founder policy; a production quote cannot present an unearned discount. The sample demonstrates how to record eligibility **without crossing door boundaries**.
+**Example only:** the numeric variant IDs, SKUs, prices and tier records are not live product assertions. Here the 10 kg Hero pack has an illustrative Rs 1,500 ceiling and satisfies the Rs 1,200 key on its own; the separate Apna and Dish lines do **not** contribute to eligibility. The customer would pay at most Rs 1,760 for the illustrated mixed cart, before any independently approved later reductions. Production quotes must validate true catalogue tiers and rates.
 
 ## 3. Field meanings and validation
 
