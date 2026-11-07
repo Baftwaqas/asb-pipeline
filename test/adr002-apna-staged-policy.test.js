@@ -21,6 +21,20 @@ const variants=[
   {id:"gid://shopify/ProductVariant/69644382830626",title:"250 g",sku:"LAB-GINGER-250"}
 ];
 let pool,now,envelope;
+function nextDistantDelivery(){
+  const d=new Date(Date.now()+5*86400000);
+  d.setUTCHours(0,0,0,0);
+  for(let i=0;i<8;i++){
+    const dow=d.getUTCDay();
+    if(dow===1||dow===4){
+      const date=d.toISOString().slice(0,10);
+      return {date,cycle:(dow===1?"MON-":"THU-")+date};
+    }
+    d.setUTCDate(d.getUTCDate()+1);
+  }
+  throw new Error("NO_DISTANT_DELIVERY");
+}
+const LAB_EFFECTIVE=nextDistantDelivery();
 const product=(options={})=>({
   id:PRODUCT,title:"ASB Lab Ginger",status:"ACTIVE",
   variants:{nodes:variants,pageInfo:{hasNextPage:false}},
@@ -136,14 +150,32 @@ test("G4: invalid signature, spoofed operator and mismatched Shopify source fail
 });
 
 test("G5: scratch DB manual activation permits signed quote's exact approved pack only",async()=>{
-  // TEST-ONLY manual activation in disposable PostgreSQL, never Render/live.
+  // TEST-ONLY staff-reviewed activation in disposable PostgreSQL, never Render/live.
   const policy=verifyApprovedApnaRelease(envelope,{
     expectedShop:SHOP,signingKey:SECRET,now});
-  await pool.query(
-    "UPDATE checkout_apna_policy_releases "+
-    "SET state='active',activated_at=clock_timestamp(),"+
-    "activated_by='42',effective_delivery_date='2026-11-09' "+
-    "WHERE release_id=$1 AND state='staged'",[policy.policyVersion]);
+  const {createApnaActivationService}=require("../checkout/apna-policy-activation-v1");
+  const service=createApnaActivationService({
+    pool,shopDomain:SHOP,devDomainAllowlist:[SHOP],signingKey:SECRET,
+    fetchVerifiedShopifyProducts:async()=>[product()],
+    resolveOnlineStaff:async({authContext,requiredRole})=>{
+      if(authContext==="REVIEW"&&requiredRole==="apna_policy_reviewer")
+        return {source:"shopify_online_staff_session",role:requiredRole,
+          staffId:"43",shopDomain:SHOP};
+      if(authContext==="ACTIVATE"&&requiredRole==="apna_policy_activator")
+        return {source:"shopify_online_staff_session",role:requiredRole,
+          staffId:"44",shopDomain:SHOP};
+      return null;
+    }
+  });
+  const reviewed=await service.review({
+    releaseId:policy.policyVersion,authContext:"REVIEW",
+    effectiveDeliveryDate:LAB_EFFECTIVE.date,
+    reason:"Synthetic independent Shopify catalogue pack verification completed"
+  });
+  await service.activate({
+    releaseId:policy.policyVersion,authContext:"ACTIVATE",
+    reviewedBindingsDigest:reviewed.bindingsDigest
+  });
   const {createPgReleasedApnaCheckoutVerifier,verifyEmptyLegacyOrdersInLab}=
     require("../checkout/apna-policy-pg-verifier-v1");
   const ctx={
@@ -151,8 +183,8 @@ test("G5: scratch DB manual activation permits signed quote's exact approved pac
     identity:{serverAuthenticated:true,phoneVerified:true,
       householdKey:"TEST-CHECKOUT-HH"},
     quote:{
-      quoteId:"TEST-APNA-APPROVED",cycleCode:"MON-2026-11-09",
-      customerReference:"TEST-CHECKOUT-HH",deliveryDate:"2026-11-09",
+      quoteId:"TEST-APNA-APPROVED",cycleCode:LAB_EFFECTIVE.cycle,
+      customerReference:"TEST-CHECKOUT-HH",deliveryDate:LAB_EFFECTIVE.date,
       currency:"PKR",apnaPolicyVersion:policy.policyVersion,
       lines:[{door:"apna_order",canonicalProductId:"ASB-CANON-GINGER",
         shopifyVariantGid:variants[0].id,unit:"g",qty:125,
@@ -198,9 +230,9 @@ test("G5: committed uncertain Apna quote consumes next quote's cycle cap",async(
     "INSERT INTO checkout_quotes "+
     "(quote_id,version,shop_domain,household_key,cycle_code,delivery_date,"+
     "issued_at,expires_at,signed_quote) "+
-    "VALUES ($1,1,$2,$3,'MON-2026-11-09','2026-11-09',"+
-    "clock_timestamp()-interval '1 minute',clock_timestamp()+interval '5 minute',$4::jsonb)",
-    [previous,SHOP,"HH-PRIOR-APPROVED",JSON.stringify({
+    "VALUES ($1,1,$2,$3,$4,$5,"+
+    "clock_timestamp()-interval '1 minute',clock_timestamp()+interval '5 minute',$6::jsonb)",
+    [previous,SHOP,"HH-PRIOR-APPROVED",LAB_EFFECTIVE.cycle,LAB_EFFECTIVE.date,JSON.stringify({
       quoteId:previous,lines:[{door:"apna_order",unit:"g",
         canonicalProductId:"ASB-CANON-GINGER",qty:500}]
     })]
@@ -209,12 +241,13 @@ test("G5: committed uncertain Apna quote consumes next quote's cycle cap",async(
     "INSERT INTO checkout_redemptions "+
     "(quote_id,quote_version,shop_domain,household_key,cycle_code,"+
     "redemption_key,state,policy_version) "+
-    "VALUES ($1,1,$2,$3,'MON-2026-11-09',$4,'needs_reconcile','SYNTHETIC')",
-    [previous,SHOP,"HH-PRIOR-APPROVED","asb-adr002-"+"d".repeat(40)]
+    "VALUES ($1,1,$2,$3,$4,$5,'needs_reconcile','SYNTHETIC')",
+    [previous,SHOP,"HH-PRIOR-APPROVED",LAB_EFFECTIVE.cycle,
+      "asb-adr002-"+"d".repeat(40)]
   );
   const rows=await readExistingCheckoutApnaLines({
     db:pool,shopDomain:SHOP,householdKey:"HH-PRIOR-APPROVED",
-    cycleCode:"MON-2026-11-09"});
+    cycleCode:LAB_EFFECTIVE.cycle});
   assert.equal(rows.length,1);
   assert.equal(rows[0].status,"needs_reconcile");
   const policy=verifyApprovedApnaRelease(envelope,{
@@ -227,8 +260,8 @@ test("G5: committed uncertain Apna quote consumes next quote's cycle cap",async(
   await assert.rejects(()=>guarded({
     db:pool,shopDomain:SHOP,
     identity:{serverAuthenticated:true,phoneVerified:true,householdKey:"HH-PRIOR-APPROVED"},
-    quote:{quoteId:"TEST-NEW-GINGER",cycleCode:"MON-2026-11-09",
-      deliveryDate:"2026-11-09",customerReference:"HH-PRIOR-APPROVED",
+    quote:{quoteId:"TEST-NEW-GINGER",cycleCode:LAB_EFFECTIVE.cycle,
+      deliveryDate:LAB_EFFECTIVE.date,customerReference:"HH-PRIOR-APPROVED",
       currency:"PKR",apnaPolicyVersion:policy.policyVersion,
       lines:[{door:"apna_order",canonicalProductId:"ASB-CANON-GINGER",
         shopifyVariantGid:variants[0].id,unit:"g",qty:125,
