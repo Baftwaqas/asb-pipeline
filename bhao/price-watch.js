@@ -122,7 +122,8 @@ function extractPrice(html) {
   // 3. the marketplace's own embedded product data (Daraz-style)
   const embedded = [
     ...[...page.matchAll(/"salePrice"\s*:\s*\{[^{}]*?"value"\s*:\s*"?([\d.,]+)"?/g)].map((m) => toPaisa(m[1])),
-    ...[...page.matchAll(/"pdt_price"\s*:\s*"(?:Rs\.?\s*)?([\d,]+(?:\.\d{1,2})?)"/g)].map((m) => toPaisa(m[1])),
+    // NOT "pdt_price": on Daraz it is the crossed-out list price (live test,
+    // 7 Nov: pdt_price Rs 3,899 while the customer pays Rs 2,999).
   ].filter(Boolean);
   strategies.push({ via: "embedded", prices: embedded });
 

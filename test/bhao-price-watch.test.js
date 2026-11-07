@@ -48,7 +48,8 @@ test("price is read from structured data only; conflicting readings are refused"
   assert.deepEqual(PW.extractPrice('<meta property="product:price:amount" content="2350">'), { status: "ok", pricePaisa: 235000, via: "meta" });
   assert.deepEqual(PW.extractPrice('<script>app.run({"salePrice":{"text":"Rs. 2,350","value":2350}})</script>'),
     { status: "ok", pricePaisa: 235000, via: "embedded" });
-  assert.deepEqual(PW.extractPrice('<script>var d={"pdt_price":"Rs. 2,350"}</script>'), { status: "ok", pricePaisa: 235000, via: "embedded" });
+  // live Daraz page, 7 Nov: pdt_price is the crossed-out list price, never what she pays
+  assert.equal(PW.extractPrice('<script>var d={"pdt_price":"Rs. 3,899","voucherPrice":{"hit":true}}</script>').status, "parse_failed");
   assert.equal(PW.extractPrice("<p>Price: Rs 2,350</p>").status, "parse_failed"); // free text is never trusted
   assert.equal(PW.extractPrice("<p>Sorry, this item is out of stock</p>").status, "unavailable");
   assert.equal(PW.extractPrice('<script type="application/ld+json">{not json</script>').status, "parse_failed");
