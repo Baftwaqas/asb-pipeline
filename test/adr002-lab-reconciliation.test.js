@@ -16,7 +16,7 @@ function quote(id,household){
 }
 function rows(){
   return IDS.map((id,i)=>({
-    quote_id:id,signed_quote:quote(id,"LAB-TEST-HOUSEHOLD-ONLY-"+(i?"B":"A")),
+    quote_id:id,signed_quote:quote(id,i?"LAB-TEST-HOUSEHOLD-ONLY-B":"LAB-TEST-HOUSEHOLD-ONLY"),
     state:i?"completed":"needs_reconcile",shop_domain:SHOP,
     quote_version:1,redemption_key:redemptionKeyFor(id,1),
     shopify_order_gid:i?ORDER_B:null,expected_cod_paisa:i?"155600":null,
