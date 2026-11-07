@@ -100,6 +100,17 @@ Off unless `BHAO_TAO_WHATSAPP=on` **and** migration 025 is applied. When it's of
 - **Quantity:** "5 lein" is remembered for her next price, so the bulk floor applies.
 - **Accepted:** Seth Ji's line, then *"✅ Sauda pakka … Hamari team aap ko order confirm karne ke liye abhi message karegi."* **No order is created automatically**: the team confirms it, until it's wired to Lane A's server order path.
 
+**After the deal: aftercare** (migration 026, founder's live test, 7 Nov)
+- For 24 hours after a deal, Seth Ji still answers her, so he never goes silent after "Sauda pakka".
+- **"Cancel karo / nahi chahiye / mat bhejo / rehne do"** cancels the deal:
+  - status `cancelled`, with the agreed offer kept as evidence and `cancelled_at` set;
+  - the log says *"CANCELLED … team: do not confirm this order"*;
+  - he accepts it graciously within 10–30 seconds, with no guilt-tripping.
+- A question ("kya cancel ho sakta hai?") is answered, not treated as a cancellation.
+- Anything else is answered at the **agreed** price. That price can no longer move up or down, and the team will confirm the order.
+- **"Dost ne 800 mein li" or "Daraz pe 1200 ki hai":** he never calls her a liar and never matches it. He may repeat her number, and he names another website only when a checked competitor price exists.
+- After a cancellation he points her back to `BHAO <ITEM>`. Nothing reopens by itself.
+
 **Records and setup**
 - Every line in and out is stored, append-only. Each record keeps the engine decision, whether the AI or a template wrote it, any rejections, the pause, and the send result. Meta redelivering a message changes nothing.
 - **Items:** `scripts/bhao-items.js --add …` holds the founder-approved anchor, floor, cost, bulk tiers, facts and stock. The floor can never be below cost.

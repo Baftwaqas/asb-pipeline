@@ -72,8 +72,10 @@ test("a full bargain on WhatsApp: lowball, refusals, counters, a settle; never a
   assert.ok(c.accepted_offer.unitPaisa >= 85000 && c.accepted_offer.unitPaisa < 200000);
   const out = await outbox(p);
   assert.match(out.at(-1).body, /Sauda pakka.*Hamari team aap ko order confirm/);
-  // after acceptance the bargain is over: her next message goes to the normal inbox
-  assert.equal((await say(p, "shukriya", t + 1000)).handled, false);
+  // after acceptance the haggling is over, but Seth Ji still answers her (aftercare, 026)
+  const thanks = await say(p, "shukriya", t + 1000);
+  assert.equal(thanks.kind, "aftercare");
+  assert.equal((await conv(p)).status, "accepted", "a thank-you changes nothing");
 });
 
 test("Meta redelivering the same message changes nothing", async () => {
@@ -252,5 +254,64 @@ test("a bargain opened under an older policy carries on under the new one, at he
   assert.ok(Number(c.state.askPaisa) <= lastAsk, "never back up to the anchor");
   assert.notEqual(r.kind, "open", "her message is answered, not greeted");
   assert.equal((await db.query(`SELECT status FROM bhao_conversations WHERE id = $1`, [old.id])).rows[0].status, "closed");
+});
+
+// --- aftercare (migration 026): Seth Ji does not go silent after "Sauda pakka" ---
+async function strikeDeal(speak) {
+  const p = phone();
+  await BW.onInbound(db, { phone: p, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: at(0), env: {}, speak });
+  const r = await BW.onInbound(db, { phone: p, text: "Rs 2,000", wamid: wamid(), now: at(10), env: {}, speak });
+  assert.equal(r.kind, "accept");
+  await BW.sendDue(db, { sendText: async () => ({ ok: true, wamid: "w" + ++n }), now: at(600) });
+  return p;
+}
+
+test("after a deal she writes 'order cancel karo, dost ne 800 mein li': Seth Ji answers, the deal is cancelled (kept as evidence)", async () => {
+  const seen = [];
+  const speak = async (args) => { seen.push(args); return { text: "Koi baat nahi baji.", source: "template", rejected: [] }; };
+  const p = await strikeDeal(speak);
+  const r = await BW.onInbound(db, { phone: p, text: "Nhi order cancel karu, mughay nhi chayee, meri dost nay yahi degchi aap sae 800 mae li hae.",
+                                     wamid: wamid(), now: at(700), env: {}, speak });
+  assert.equal(r.handled, true);
+  assert.equal(r.kind, "cancel");
+  const wait = (new Date(r.due) - at(700)) / 1000;
+  assert.ok(wait >= 10 && wait <= 30, "no haggling pause now: " + wait);
+  const c = await conv(p);
+  assert.equal(c.status, "cancelled");
+  assert.ok(c.cancelled_at);
+  assert.equal(c.accepted_offer.unitPaisa, 180000, "what was agreed stays on record");
+  assert.equal(seen.at(-1).offerPaisa, 80000, "he may repeat her friend's 800 - never match it");
+  assert.equal(seen.at(-1).decision.kind, "cancel");
+});
+
+test("after a deal, a question is answered at the agreed price; 'kya cancel ho sakta hai?' is a question, not a cancellation", async () => {
+  const seen = [];
+  const speak = async (args) => { seen.push(args); return { text: "Ji baji.", source: "template", rejected: [] }; };
+  const p = await strikeDeal(speak);
+  const r = await BW.onInbound(db, { phone: p, text: "Delivery kab hogi? Aur kya cancel ho sakta hai?", wamid: wamid(), now: at(700), env: {}, speak });
+  assert.equal(r.kind, "aftercare");
+  assert.equal((await conv(p)).status, "accepted");
+  const d = seen.at(-1).decision;
+  assert.equal(d.status, "accepted");
+  assert.equal(require("../bhao/voice").priceOf(d), 180000, "he may repeat the agreed price, nothing else");
+});
+
+test("after cancelling, she is answered kindly and pointed back to BHAO; a day later it is the inbox's again", async () => {
+  const speak = async () => ({ text: "Ji baji.", source: "template", rejected: [] });
+  const p = await strikeDeal(speak);
+  await BW.onInbound(db, { phone: p, text: "cancel kar do", wamid: wamid(), now: at(700), env: {}, speak });
+  const r = await BW.onInbound(db, { phone: p, text: "acha theek hai", wamid: wamid(), now: at(800), env: {}, speak });
+  assert.equal(r.kind, "aftercare");
+  const out = await outbox(p);
+  assert.ok(out.length >= 4);
+  assert.equal((await BW.onInbound(db, { phone: p, text: "hello", wamid: wamid(), now: at(700 + 25 * 3600), env: {}, speak })).handled, false);
+  assert.equal((await conv(p)).status, "cancelled", "nothing reopens by itself");
+});
+
+test("cancelled needs its offer and its time; an accepted deal cannot lose its offer", async () => {
+  const p = await strikeDeal(async () => ({ text: "x", source: "template", rejected: [] }));
+  const c = await conv(p);
+  await assert.rejects(db.query(`UPDATE bhao_conversations SET status = 'cancelled' WHERE id = $1`, [c.id]), /cancelled_has_time/);
+  await assert.rejects(db.query(`UPDATE bhao_conversations SET status = 'cancelled', cancelled_at = now(), accepted_offer = NULL WHERE id = $1`, [c.id]), /accepted_has_offer/);
 });
 

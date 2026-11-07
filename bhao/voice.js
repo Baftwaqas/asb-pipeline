@@ -61,6 +61,11 @@ function briefFor(d) {
     case "final_offer": return { brief: "State the PRICE as your absolute last price. Firm." , mustSayPrice: true };
     case "closed": return { brief: "No deal today. Close warmly and invite her back. No price, no number.", mustSayPrice: false };
     case "talk": return { brief: "She is chatting, not offering. Answer what she said - every question in it - stay on the item, and nudge her to name her price. Only if she asks what it costs, tell her the PRICE.", mustSayPrice: false };
+    case "cancel": return { brief: "She has just CANCELLED the deal she agreed. Accept it at once and graciously: say the order is cancelled, no pressure, no guilt, no sarcasm, and that she is welcome back anytime. If she says she got it cheaper somewhere or from someone, do not argue, do not call her a liar and do not match it - at most say kindly that your price was for this quality. No price of your own.", mustSayPrice: false };
+    case "aftercare":
+      if (d.status === "cancelled")
+        return { brief: `She cancelled this deal earlier. Answer what she says kindly. If she wants the item after all, tell her to write "BHAO ${d.itemCode || ""}" to start again. Never revive the old price.`, mustSayPrice: false };
+      return { brief: "The deal is ALREADY DONE at the PRICE. Answer every question she asks; the price cannot change any more (not up, not down); our team will message her to confirm the order and delivery. Never invent delivery times or promises.", mustSayPrice: false };
     case "accept": {
       const why = d.offer && d.offer.why;
       if (why === "offer_above_ask_extra_refused")
@@ -77,6 +82,8 @@ function briefFor(d) {
 function priceOf(d) {
   if (d.kind === "accept") return d.offer ? d.offer.unitPaisa : d.askPaisa;
   if (["open", "counter", "final_offer"].includes(d.kind)) return d.askPaisa;
+  // after a deal: he may repeat the agreed price (a cancelled deal has none)
+  if (d.kind === "aftercare" && d.status === "accepted" && d.offer) return d.offer.unitPaisa;
   // chatting: he may repeat his CURRENT ask if she asks (never a new one)
   if (d.kind === "talk" && Number.isSafeInteger(d.askPaisa)) return d.askPaisa;
   return null;
@@ -89,6 +96,7 @@ const PERSONA = [
   "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
   "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters (up to 260 when she asked several things). Call her 'baji'. At most one emoji.",
   "Be a real person, not a script: answer EVERY question and point in her messages, in order, in ONE reply - if she asks two things, answer both - and only then do the INSTRUCTION. Never ignore what she said.",
+  "If she says she found it cheaper elsewhere, online, or that a friend paid less, never call her a liar and never match it on your own: answer it warmly (e.g. 'aap ne jo dekhi woh aur maal hoga baji') and stay with the INSTRUCTION. Never name another shop or website unless CHECKED COMPETITOR PRICES lists it.",
   "Use plain everyday words any Karachi household understands at once. No puzzling idioms or wordplay she would have to ask about (e.g. never 'haath garam ho jayega').",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
   "Like every bazaar seller, Seth Ji may call a counter 'aakhri daam' or 'last price' - both sides know it is part of the haggle (founder's call, 7 Nov). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
@@ -210,6 +218,11 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
     case "final_offer": return pick([`Bas baji, ${rs(p)}. Is se neeche nahi hoga.`]);
     case "closed": return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
     case "talk": return pick(["Ji baji, boliye, kitne mein chahiye?"]);
+    case "cancel": return pick(["Koi baat nahi baji, sauda cancel kar diya. Jab dil chahe phir aaiye ga. 🙏"]);
+    case "aftercare":
+      return decision.status === "accepted" && p != null
+        ? `Ji baji, sauda ${rs(p)} pe pakka hai. Hamari team order confirm karne ke liye aap ko message karegi.`
+        : `Ji baji, woh sauda cancel ho chuka hai. Phir lena ho toh "BHAO ${decision.itemCode || ""}" likh dein.`;
     case "accept": {
       const why = decision.offer && decision.offer.why;
       if (why === "offer_above_ask_extra_refused")

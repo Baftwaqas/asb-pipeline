@@ -162,6 +162,19 @@ test("several things asked at once: the prompt lists every message, and the repl
   assert.equal(V.checkReply(long, { decision: { kind: "talk" }, qty: 1 }).ok, false);
 });
 
+test("aftercare: a cancel names no price of his own; after a deal only the agreed price may be said", () => {
+  const cancel = { kind: "cancel", offer: { unitPaisa: 120000 }, itemCode: "DEGCHI" };
+  assert.equal(V.checkReply("Koi baat nahi baji, sauda cancel. 800 wali aur maal hogi. 🙏", { decision: cancel, qty: 1, offerPaisa: 80000 }).ok, true);
+  assert.equal(V.checkReply("Chalein baji, aap ke liye Rs 1,000 kar deta hoon.", { decision: cancel, qty: 1, offerPaisa: 80000 }).ok, false);
+  const done = { kind: "aftercare", status: "accepted", offer: { unitPaisa: 120000 } };
+  assert.equal(V.checkReply("Ji baji, sauda Rs 1,200 pe pakka hai, team message karegi.", { decision: done, qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Ji baji, Rs 1,100 kar deta hoon.", { decision: done, qty: 1 }).ok, false);
+  assert.match(V.template(cancel, {}), /cancel/);
+  assert.match(V.template({ kind: "aftercare", status: "cancelled", itemCode: "DEGCHI" }, {}), /BHAO DEGCHI/);
+  assert.match(V.template(done, {}), /Rs 1,200/);
+  assert.match(V.buildPrompt({ decision: cancel, itemName: "Degchi", qty: 1, customerText: "dost ne 800 mein li", history: [] }).system, /never call her a liar/);
+});
+
 test("no invented scarcity, competitors, links, phone numbers, labels or long essays", () => {
   const d = counter(154000);
   const bad = [

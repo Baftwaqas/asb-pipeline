@@ -20,6 +20,12 @@
 //
 // Off unless BHAO_TAO_WHATSAPP=on (server.js). Nothing here creates an order:
 // an accepted bargain is recorded and handed to the team to confirm.
+//
+// AFTERCARE (migration 026): for a day after a deal, Seth Ji still answers
+// her. "Cancel kar do / nahi chahiye" cancels the accepted deal (kept as
+// evidence, status 'cancelled', logged for the team); anything else is
+// answered without moving the agreed price. Claims of a cheaper price
+// elsewhere ("dost ne 800 mein li") are answered kindly, never matched.
 // ============================================================================
 "use strict";
 
@@ -40,6 +46,11 @@ const POLICY = Object.freeze({
 const RESTART_MEMORY_DAYS = 7;
 const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
 const START = /^\s*bhao\s+([a-z0-9][a-z0-9-]{2,40})\b/i;
+// After a bargain ends with a deal, Seth Ji keeps answering her for this
+// long (migration 026): a question about the deal, or "cancel kar do".
+const AFTERCARE_HOURS = 24;
+// She is backing out: "cancel karo", "nahi chahiye", "nhi laina", "mat bhejo", "rehne do".
+const CANCEL = /\bcanc?[ae]?l+\w*|\bn(?:a|aa)?h?i\s+(?:chah?i?y?e+|chaiye|chay+e+|chahye|chahiye|l[ae]i?na|lena|bhejo|bhejna)\b|\bmat\s+bhej\w*|\brehn[ae]y?\s+d[oe]\b/i;
 
 function itemFor(row) {
   return {
@@ -130,6 +141,20 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         if (carryCode) action = undefined; // not a greeting: answer what she just wrote
       }
     }
+    // No open bargain: if she made a deal (or cancelled one) in the last
+    // day, Seth Ji still answers her - a seller does not go silent after
+    // "Sauda pakka". Needs migration 026; without it, the inbox only.
+    let aftercare = false;
+    if (!conv && !start) {
+      const ready = (await db.query(`SELECT to_regprocedure('asb026_aftercare_ready()') IS NOT NULL AS ok`)).rows[0].ok;
+      if (ready) {
+        conv = (await db.query(
+          `SELECT * FROM bhao_conversations WHERE phone = $1 AND status IN ('accepted', 'cancelled')
+              AND COALESCE(cancelled_at, ended_at) > $2
+            ORDER BY id DESC LIMIT 1 FOR UPDATE`, [phone, new Date(now - AFTERCARE_HOURS * 3600e3)])).rows[0];
+        aftercare = !!conv;
+      }
+    }
     if (!conv) return { handled: false, reason: "no open bargain" };
 
     const saved = await db.query(
@@ -153,7 +178,20 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
     const item = itemFor(itemRow);
     let offerPaisa = null;
-    if (!action) {
+    if (aftercare) {
+      // The deal is done (or was cancelled): no price moves any more.
+      state = conv.state;
+      offerPaisa = readOffer(body); // she may quote someone else's price; he may repeat it, never match it
+      // "kya cancel ho sakta hai?" is a question, not a cancellation: he answers it
+      const asking = /\?|^\s*(?:kya|kia)\b/i.test(body);
+      if (conv.status === "accepted" && CANCEL.test(body) && !asking) {
+        await db.query(`UPDATE bhao_conversations SET status = 'cancelled', cancelled_at = $2 WHERE id = $1`, [conv.id, now]);
+        action = { kind: "cancel", offer: conv.accepted_offer, itemCode: conv.item_id };
+        console.log(`[bhao] ${phone} CANCELLED the deal on ${conv.item_id} (team: do not confirm this order)`);
+      } else {
+        action = { kind: "aftercare", status: conv.status, offer: conv.accepted_offer, itemCode: conv.item_id };
+      }
+    } else if (!action) {
       state = conv.state;
       const amount = readOffer(body);
       const q = readQty(body);
@@ -176,15 +214,19 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     // decision still needs saying (the engine already applied it), so the
     // reply carries it, at its original pause - chatting never resets it.
     let carried = null;
-    if (action.kind === "talk" && waiting && waiting.decision && !["talk", "open"].includes(waiting.decision.kind)) {
+    if (!aftercare && action.kind === "talk" && waiting && waiting.decision && !["talk", "open"].includes(waiting.decision.kind)) {
       action = waiting.decision;
       carried = new Date(waiting.send_after);
     }
-    const status = state.status === "accepted" ? "accepted" : state.status === "closed" ? "closed" : "open";
-    await db.query(
-      `UPDATE bhao_conversations SET state = $2, status = $3, last_inbound_at = $4,
-              accepted_offer = $5, ended_at = CASE WHEN $3 = 'open' THEN NULL ELSE $4::timestamptz END
-        WHERE id = $1`, [conv.id, state, status, now, status === "accepted" ? state.accepted : null]);
+    if (aftercare) {
+      await db.query(`UPDATE bhao_conversations SET last_inbound_at = $2 WHERE id = $1`, [conv.id, now]);
+    } else {
+      const status = state.status === "accepted" ? "accepted" : state.status === "closed" ? "closed" : "open";
+      await db.query(
+        `UPDATE bhao_conversations SET state = $2, status = $3, last_inbound_at = $4,
+                accepted_offer = $5, ended_at = CASE WHEN $3 = 'open' THEN NULL ELSE $4::timestamptz END
+          WHERE id = $1`, [conv.id, state, status, now, status === "accepted" ? state.accepted : null]);
+    }
 
     // Everything she has written since Seth Ji last actually spoke: answered
     // together, in one reply, the way a person behind a counter would.
@@ -225,14 +267,16 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const newer = (await db.query(
       `SELECT 1 FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2`, [step.conversationId, step.inboundId])).rowCount;
     if (newer) return { handled: true, conversationId: step.conversationId, superseded: true };
-    const due = step.carried
+    const due = ["cancel", "aftercare"].includes(step.action.kind)
+      ? new Date(now.getTime() + (10 + Math.floor(Math.random() * 21)) * 1000) // 10-30 s: no haggling pause now
+      : step.carried
       ? new Date(Math.max(step.carried.getTime(), now.getTime() + 5000))
       : new Date(now.getTime() + seconds(step.action) * 1000);
     await db.query(
       `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status)
        VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, 'pending')`,
       [step.conversationId, said.text, step.action, said.source, said.provider, JSON.stringify(said.rejected || []), due]);
-    if (step.action.kind === "accept") {
+    if (step.action.kind === "accept" && step.state.accepted) {
       await db.query(
         `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
          VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
@@ -270,4 +314,4 @@ async function sendDue(db, { sendText, logOutbound = async () => {}, now = new D
   return { sent, failed };
 }
 
-module.exports = { POLICY, onInbound, sendDue, readOffer, readQty, itemFor };
+module.exports = { POLICY, onInbound, sendDue, readOffer, readQty, itemFor, CANCEL };
