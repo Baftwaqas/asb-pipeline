@@ -25,6 +25,7 @@
 //   XAI_API_KEY, XAI_MODEL                           (e.g. a current grok model id)
 //   ANTHROPIC_API_KEY, ANTHROPIC_MODEL               (e.g. a current Claude Haiku id)
 //   BHAO_VOICE_TIMEOUT_MS                            (default 8000)
+//   BHAO_VOICE_REASONING_EFFORT                      (optional: low | medium | high)
 // ============================================================================
 "use strict";
 
@@ -180,11 +181,15 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
       res = await fetchImpl(p.url, {
         method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
-        body: JSON.stringify({ model, temperature: 0.8, max_tokens: 160,
+        // Reasoning models (gpt-oss, qwen3) spend tokens thinking before they
+        // write; 600 leaves room for a two-line reply. BHAO_VOICE_REASONING_EFFORT
+        // (low | medium | high) is passed only when set, for providers that take it.
+        body: JSON.stringify({ model, temperature: 0.8, max_tokens: 600,
+          ...(env.BHAO_VOICE_REASONING_EFFORT ? { reasoning_effort: env.BHAO_VOICE_REASONING_EFFORT } : {}),
           messages: [{ role: "system", content: system }, { role: "user", content }] }),
       });
       body = await res.json().catch(() => ({}));
-      if (!res.ok) throw Object.assign(new Error("provider status " + res.status), { code: "provider_error" });
+      if (!res.ok) throw Object.assign(new Error("provider status " + res.status), { code: "provider_error_" + res.status });
       return String(body?.choices?.[0]?.message?.content ?? "");
     }
     res = await fetchImpl(p.url, {
@@ -194,7 +199,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
         messages: [{ role: "user", content }] }),
     });
     body = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error("provider status " + res.status), { code: "provider_error" });
+    if (!res.ok) throw Object.assign(new Error("provider status " + res.status), { code: "provider_error_" + res.status });
     return (body?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
   } catch (e) {
     if (e.name === "AbortError") throw Object.assign(new Error("timeout"), { code: "timeout" });
