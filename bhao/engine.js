@@ -204,7 +204,10 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
   };
 
   // 1. At or above the ask: done, at the lower of the two.
-  if (offerPaisa >= state.askPaisa) return settle(state.askPaisa, "offer_meets_ask");
+  //    She offered MORE than the ask: take only the ask, and say so. The
+  //    phrasing layer must not thank her as if she won a bargain.
+  if (offerPaisa > state.askPaisa) return settle(state.askPaisa, "offer_above_ask_extra_refused");
+  if (offerPaisa === state.askPaisa) return settle(state.askPaisa, "offer_meets_ask");
 
   // 2. Fair offer after enough rounds: let her win.
   //    (offerPaisa >= floor is checked explicitly: the band is above the floor.)

@@ -105,6 +105,10 @@ test("an offer at or above the ask settles at the ASK, not at her higher number"
   const ask = state.askPaisa;
   const r = say(state, ask + 50000);
   assert.equal(r.state.accepted.unitPaisa, ask);
+  assert.equal(r.state.accepted.why, "offer_above_ask_extra_refused");
+  // the demo case: Rs 2,000 against the Rs 1,800 opening ask, first message
+  const first = say(start({ seed: "over" }).state, 200000);
+  assert.deepEqual([first.state.accepted.unitPaisa, first.state.accepted.why], [180000, "offer_above_ask_extra_refused"]);
 });
 
 test("without last-round settling, a firm Rs 760 for five pots closes with no deal", () => {
