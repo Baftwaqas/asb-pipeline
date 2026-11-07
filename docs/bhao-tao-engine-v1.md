@@ -46,8 +46,26 @@ Prices are decided only by the engine, so the phrasing layer can't concede a pri
    - Offer validity (2 hours).
 3. **Honesty of angles.** "Running costs", "already tight" and "quality vs market" must be **true statements** when the phrasing layer words them. It must not invent competitor offers, fake stock limits or false "last piece" claims. That protects trust and keeps clear of misleading-sales complaints.
 
+## Seth Ji's voice (`bhao/voice.js`)
+
+The voice turns one engine decision into one WhatsApp line in Roman Urdu, using **xAI Grok** or **Anthropic Claude**, set in the server environment.
+
+- **One price only.** The model is told the single price it may say, or that it may say none.
+- **Every reply is checked before a customer sees it:**
+  - every number must be one the engine allowed;
+  - a counter, final offer or acceptance must actually state its price;
+  - no invented scarcity or competitors;
+  - no links, phone numbers or role labels, and it must be short.
+- **If the check fails,** the voice tries once more, telling the model what was wrong. If that also fails, or the provider errors or times out, or no key is set, a pre-written line is sent instead, so the customer always gets a correct line.
+- **Keys exist only in Render's environment** and are never logged or returned:
+  - `BHAO_VOICE_PROVIDER` = `xai` | `anthropic` | `off` (default `off`)
+  - `XAI_API_KEY` + `XAI_MODEL`
+  - `ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL`
+  - `BHAO_VOICE_TIMEOUT_MS` (default 8000)
+- **To try it:** run `node scripts/bhao-voice-try.js 900 "itna mehenga kyun?" 1100 2000`. It plays one conversation and shows, for each line, whether it came from the AI or a pre-written line, and why any AI reply was rejected. It touches no database and sends no WhatsApp message.
+
 ## Not in this PR
 
 - Storing conversation state, with one conversation per household, item and cycle, so a customer can't restart to reset the ask.
-- The phrasing prompt and its tests. It must never be shown a number it may change.
+- The WhatsApp route that calls `speak()` for a live chat and stores the conversation.
 - Bhao Tao products in Shopify: `bhao_tao_enabled` already exists as a Product Master metafield.
