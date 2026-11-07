@@ -264,6 +264,54 @@ test("A5: audit cannot be deleted or rewritten in PostgreSQL",async()=>{
     "DELETE FROM checkout_apna_activation_reviews WHERE release_id=$1",[release]
   ),/APNA_REVIEW_DELETE_FORBIDDEN/);
 });
+test("A5: replacement cannot silently overwrite a current policy or future booked household",async()=>{
+  const second=makeEnvelope(); // a newly issued founder-signed review candidate
+  const stage=createPgApnaPolicyStager({
+    pool,shopDomain:SHOP,devDomainAllowlist:[SHOP],
+    signingKey:KEY,fetchVerifiedShopifyProducts:async()=>GOODS()
+  });
+  const candidate=await stage.stageSignedRelease({
+    envelope:second,operatorStaffId:"105"
+  });
+  assert.notEqual(candidate.releaseId,release);
+  const nextDate=nextDeliveryAfter(7);
+  const proposal=await service().review({
+    releaseId:candidate.releaseId,authContext:"reviewer",
+    effectiveDeliveryDate:nextDate,
+    reason:"Independent fresh Shopify catalogue review for a second signed policy version"
+  });
+  await assert.rejects(()=>service().activate({
+    releaseId:candidate.releaseId,authContext:"activator",
+    reviewedBindingsDigest:proposal.bindingsDigest,
+    replaceActiveReleaseId:null
+  }),/APNA_REPLACEMENT_REQUIRES_EXPLICIT_OLD_RELEASE_ID/);
+  const existingId="ASB-LAB-BOOKED-FUTURE-POLICY-CYCLE";
+  await pool.query(
+    "INSERT INTO checkout_quotes "+
+    "(quote_id,version,shop_domain,household_key,cycle_code,delivery_date,"+
+    "issued_at,expires_at,signed_quote) "+
+    "VALUES($1,1,$2,'LAB-BOOKED-HOUSEHOLD',$3,$4,"+
+    "clock_timestamp()-interval '1 minute',clock_timestamp()+interval '10 minute',$5::jsonb)",
+    [existingId,SHOP,"TEST-"+nextDate,nextDate,JSON.stringify({quoteId:existingId})]
+  );
+  await pool.query(
+    "INSERT INTO checkout_redemptions "+
+    "(quote_id,quote_version,shop_domain,household_key,cycle_code,"+
+    "redemption_key,state,policy_version) "+
+    "VALUES($1,1,$2,'LAB-BOOKED-HOUSEHOLD',$3,$4,'needs_reconcile','SYNTHETIC')",
+    [existingId,SHOP,"TEST-"+nextDate,"asb-adr002-"+"b".repeat(40)]
+  );
+  await assert.rejects(()=>service().activate({
+    releaseId:candidate.releaseId,authContext:"activator",
+    reviewedBindingsDigest:proposal.bindingsDigest,
+    replaceActiveReleaseId:release
+  }),/APNA_FUTURE_COMMITMENTS_REQUIRE_REVIEW/);
+  assert.equal((await readState()).state,"active");
+  const staged=(await pool.query(
+    "SELECT state FROM checkout_apna_policy_releases WHERE release_id=$1",
+    [candidate.releaseId])).rows[0].state;
+  assert.equal(staged,"staged");
+});
 test("A6: emergency suspension requires exact active release and verified independent staff",async()=>{
   await assert.rejects(()=>service().emergencySuspend({
     expectedActiveReleaseId:"apna-signed-"+"b".repeat(24),
