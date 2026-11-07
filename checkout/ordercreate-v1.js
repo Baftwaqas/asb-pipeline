@@ -75,8 +75,8 @@ function normalizeAddress(customer) {
   // ASB stores verified Pakistani numbers without +. Shopify's Admin API
   // expects a country-prefixed E.164 phone for an order/address.
   // Do NOT change the signed household identity or create a new phone number.
-  const phone=/^\\+?92[0-9]{10}$/.test(rawPhone)?
-    "+"+rawPhone.replace(/^\\+/,""):null;
+  const phone=/^\+?92[0-9]{10}$/.test(rawPhone)?
+    "+"+rawPhone.replace(/^\+/,""):null;
   if(!phone)throw new QuoteError("INVALID_CUSTOMER_PHONE");
   const shipping={firstName,lastName,address1:line,city:"Karachi",countryCode:"PK",phone};
   if(address.address2)shipping.address2=String(address.address2);
