@@ -130,6 +130,9 @@ function validateApnaQuoteAgainstRelease({
       "APNA_VARIANT_PACK_NOT_APPROVED");
     bindings.set(b.variantGid,b);
   }
+  if(quote.lines.some(line=>line.door==="apna_order"))
+    check(quote.apnaPolicyVersion===release.policyVersion,
+      "APNA_QUOTE_RELEASE_VERSION_MISMATCH");
   for(const line of quote.lines){
     if(line.door!=="apna_order")continue;
     const b=bindings.get(line.shopifyVariantGid);
@@ -163,10 +166,21 @@ function createReleasedApnaCheckoutVerifier({
   return async function verifyPolicyInTransaction(ctx){
     check(ctx?.db&&typeof ctx.db.query==="function","APNA_DATABASE_TRANSACTION_REQUIRED");
     check(ctx.shopDomain===expectedShop,"POLICY_CROSS_SHOP_REFUSED");
-    const envelope=await loadSignedReleaseInTransaction(ctx);
-    const release=verifyApprovedApnaRelease(envelope,{
-      expectedShop,signingKey,now:now()
+    const record=await loadSignedReleaseInTransaction(ctx);
+    // The signed export is valid for ONLY one hour at STAGING time. After
+    // a separately authorized activation, it remains independently verifiable
+    // using the trusted immutable DB verified_at, not today's checkout clock.
+    check(record?.state==="active"&&record.envelope&&record.verifiedAt &&
+      record.policyVersion && record.activatedAt && record.activatedBy &&
+      typeof record.effectiveDeliveryDate==="string" &&
+      /^\d{4}-\d\d-\d\d$/.test(record.effectiveDeliveryDate) &&
+      ctx.quote.deliveryDate>=record.effectiveDeliveryDate,
+      "APNA_NO_ACTIVE_REVIEWED_RELEASE");
+    const release=verifyApprovedApnaRelease(record.envelope,{
+      expectedShop,signingKey,now:new Date(record.verifiedAt)
     });
+    check(release.policyVersion===record.policyVersion,
+      "APNA_RELEASE_DB_INTEGRITY_MISMATCH");
     const variantBindings=await loadVariantBindingsInTransaction({...ctx,release});
     const historical=await loadExistingCycleLinesInTransaction({...ctx,release});
     check(historical?.authoritative===true&&Array.isArray(historical.lines),
