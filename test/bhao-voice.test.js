@@ -121,6 +121,15 @@ test("'aakhri daam' on a counter is bazaar custom and allowed; invented scarcity
   assert.match(V.buildPrompt({ decision: counter(154000), itemName: "D", qty: 1 }).system, /aakhri daam/);
 });
 
+test("counts in words are numbers too: no invented 2-3 piece discount (Groq live run, 7 Nov)", () => {
+  const d = counter(152000);
+  const live = "Chalein baji, ek piece Rs 1,520, lekin do‑teen le lo to thoda aakhri daam kam kar dunga. 😄";
+  assert.equal(V.checkReply(live, { decision: d, qty: 1, groupSizes: [5] }).ok, false);
+  assert.equal(V.checkReply("Baji, paanch le lo toh aur kam ho jayega. Abhi Rs 1,520.", { decision: d, qty: 1, groupSizes: [5] }).ok, true);
+  assert.equal(V.checkReply("Baji, teen le lo toh kam kar doon. Rs 1,520.", { decision: d, qty: 1, groupSizes: [5] }).ok, false);
+  assert.equal(V.checkReply("Baji, Rs 1,520 de do, sauda pakka.", { decision: d, qty: 1 }).ok, true, "'de do' is a verb, not a count");
+});
+
 test("refuse, lowball, closed and talk may not name any number at all", () => {
   for (const kind of ["refuse", "lowball_check", "closed", "talk"]) {
     const d = { kind, askPaisa: 180000 };

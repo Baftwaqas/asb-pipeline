@@ -141,6 +141,13 @@ function numbersIn(text) {
     const unit = (m[2] || "").toLowerCase();
     out.push(unit === "lakh" || unit === "lac" ? n * 100000 : unit ? n * 1000 : n);
   }
+  // Counts said in words. Groq's first live run promised "do-teen le lo to
+  // aakhri daam kam kar dunga" - a 2-3 piece discount the engine never gave.
+  // "do" alone is also a verb ("de do"), so it counts only beside another
+  // count word ("do-teen", "do ya teen").
+  const W = { teen: 3, chaar: 4, char: 4, paanch: 5, panch: 5, chhe: 6, chay: 6, saat: 7, aath: 8, nau: 9, das: 10, darjan: 12, dozen: 12 };
+  for (const m of t.matchAll(/\b(teen|chaar|char|paanch|panch|chhe|chay|saat|aath|nau|das|darjan|dozen)\b/gi)) out.push(W[m[1].toLowerCase()]);
+  if (/\bdo\s*(?:[-‑–]|ya|se|ya phir)\s*(?:teen|chaar|char)\b/i.test(t)) out.push(2);
   return out;
 }
 
