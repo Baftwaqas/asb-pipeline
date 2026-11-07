@@ -67,6 +67,10 @@ function runOrder(){
     ASB_LAB_CLI_APPROVAL:"ASB_LAB_ONLY_ONE_TEST_ORDER"
   },(err)=>{if(!err)console.log("[checkout-lab] test order stage completed safely");});
 }
+if(process.env.ASB_LAB_CATALOG_AUDIT==="RUN_READ_ONLY_CATALOG"){
+  const audit=pathModule.join(__dirname,"../scripts/lab-apna-catalog-readonly-v1.js");
+  launch([audit],{},()=>{});
+}
 if(process.env.ASB_LAB_AUDIT_READONLY==="RUN_AUDIT"){
   const audit=pathModule.join(__dirname,"../scripts/lab-reconcile-readonly-v1.js");
   launch([audit],{},()=>{});
