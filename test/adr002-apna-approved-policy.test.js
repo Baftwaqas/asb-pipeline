@@ -59,7 +59,7 @@ const IDENTITY={serverAuthenticated:true,phoneVerified:true,
 const CYCLE="MON-2026-11-09";
 const q=(lines)=>({
   customerReference:IDENTITY.householdKey,cycleCode:CYCLE,
-  currency:"PKR",apnaPolicyVersion:verify().policyVersion,lines
+  deliveryDate:"2026-11-09",currency:"PKR",apnaPolicyVersion:verify().policyVersion,lines
 });
 function verify(options={}){
   return verifyApprovedApnaRelease(sign(),{
