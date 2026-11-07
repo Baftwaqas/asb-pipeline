@@ -67,6 +67,10 @@ function runOrder(){
     ASB_LAB_CLI_APPROVAL:"ASB_LAB_ONLY_ONE_TEST_ORDER"
   },(err)=>{if(!err)console.log("[checkout-lab] test order stage completed safely");});
 }
+if(process.env.ASB_LAB_READONLY_PROBE==="RUN_READ_ONLY_CHECK"){
+  const probe=pathModule.join(__dirname,"../scripts/lab-readiness-v1.js");
+  launch([probe],{},()=>{});
+}
 if(process.env.ASB_LAB_MIGRATE_ONCE==="RUN_LAB_MIGRATIONS"){
   try{assertExactLabDatabase();}
   catch(e){console.error("[checkout-lab] migration blocked: unsafe DB target");}
