@@ -239,7 +239,7 @@ test("A6: emergency suspension requires exact active release and verified indepe
   await assert.rejects(()=>service().emergencySuspend({
     expectedActiveReleaseId:release,authContext:"signer",
     reason:"Signer tries to independently suspend policy with fake role"
-  }),/APNA_STAFF_SESSION_AND_ROLE_REQUIRED/);
+  }),/APNA_SUSPENDER_NOT_INDEPENDENT/);
   const stopped=await service().emergencySuspend({
     expectedActiveReleaseId:release,authContext:"suspender",
     reason:"Synthetic emergency drill; fail-closed checkout and require new founder approval"
