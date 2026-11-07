@@ -49,6 +49,17 @@ test("a good Grok reply is used as written, with the key only in the auth header
   assert.doesNotMatch(JSON.stringify(r), /test-key-not-real/);
 });
 
+test("Groq works through its OpenAI-compatible API", async () => {
+  const f = fake(["Chalein baji, Rs 1,540 aap ke liye."]);
+  const r = await V.speak({ ...base, decision: counter(154000),
+    env: { BHAO_VOICE_PROVIDER: "groq", GROQ_API_KEY: "test-key-not-real", GROQ_MODEL: "groq-test" }, fetchImpl: f.fn });
+  assert.equal(r.source, "ai");
+  assert.equal(r.provider, "groq");
+  assert.equal(f.calls[0].url, "https://api.groq.com/openai/v1/chat/completions");
+  assert.equal(f.calls[0].init.headers.Authorization, "Bearer test-key-not-real");
+  assert.equal(f.calls[0].body.model, "groq-test");
+});
+
 test("Anthropic works the same way through its own API", async () => {
   const f = fake(["Chalein baji, Rs 1,540 aap ke liye."], { shape: "anthropic" });
   const r = await V.speak({ ...base, decision: counter(154000), env: ANT, fetchImpl: f.fn });

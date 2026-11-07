@@ -48,7 +48,7 @@ Prices are decided only by the engine, so the phrasing layer can't concede a pri
 
 ## Seth Ji's voice (`bhao/voice.js`)
 
-The voice turns one engine decision into one WhatsApp line in Roman Urdu, using **xAI Grok** or **Anthropic Claude**, set in the server environment.
+The voice turns one engine decision into one WhatsApp line in Roman Urdu, using **Groq**, **xAI Grok** or **Anthropic Claude**, set in the server environment.
 
 - **One price only.** The model is told the single price it may say, or that it may say none.
 - **Every reply is checked before a customer sees it:**
@@ -58,7 +58,8 @@ The voice turns one engine decision into one WhatsApp line in Roman Urdu, using 
   - no links, phone numbers or role labels, and it must be short.
 - **If the check fails,** the voice tries once more, telling the model what was wrong. If that also fails, or the provider errors or times out, or no key is set, a pre-written line is sent instead, so the customer always gets a correct line.
 - **Keys exist only in Render's environment** and are never logged or returned:
-  - `BHAO_VOICE_PROVIDER` = `xai` | `anthropic` | `off` (default `off`)
+  - `BHAO_VOICE_PROVIDER` = `groq` | `xai` | `anthropic` | `off` (default `off`)
+  - `GROQ_API_KEY` + `GROQ_MODEL`
   - `XAI_API_KEY` + `XAI_MODEL`
   - `ANTHROPIC_API_KEY` + `ANTHROPIC_MODEL`
   - `BHAO_VOICE_TIMEOUT_MS` (default 8000)

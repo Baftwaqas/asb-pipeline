@@ -1,7 +1,7 @@
 // ============================================================================
 // ASB PIPELINE — bhao/voice.js
 // Seth Ji's VOICE for Bhao Tao: turns one engine decision (bhao/engine.js)
-// into one WhatsApp line in Roman Urdu. Provider-agnostic: xAI Grok or
+// into one WhatsApp line in Roman Urdu. Provider-agnostic: Groq, xAI Grok or
 // Anthropic Claude, chosen by environment; written templates otherwise.
 //
 // The engine decides; the voice only speaks. The model is told the single
@@ -20,7 +20,8 @@
 // ANTHROPIC_API_KEY. They are never logged, never returned, never sent
 // anywhere but the provider's own API host.
 //
-//   BHAO_VOICE_PROVIDER = xai | anthropic | off     (default off -> templates)
+//   BHAO_VOICE_PROVIDER = groq | xai | anthropic | off  (default off -> templates)
+//   GROQ_API_KEY, GROQ_MODEL                         (a current Groq model id)
 //   XAI_API_KEY, XAI_MODEL                           (e.g. a current grok model id)
 //   ANTHROPIC_API_KEY, ANTHROPIC_MODEL               (e.g. a current Claude Haiku id)
 //   BHAO_VOICE_TIMEOUT_MS                            (default 8000)
@@ -28,8 +29,9 @@
 "use strict";
 
 const PROVIDERS = Object.freeze({
-  xai: { url: "https://api.x.ai/v1/chat/completions", keyVar: "XAI_API_KEY", modelVar: "XAI_MODEL" },
-  anthropic: { url: "https://api.anthropic.com/v1/messages", keyVar: "ANTHROPIC_API_KEY", modelVar: "ANTHROPIC_MODEL" },
+  xai: { url: "https://api.x.ai/v1/chat/completions", keyVar: "XAI_API_KEY", modelVar: "XAI_MODEL", shape: "openai" },
+  groq: { url: "https://api.groq.com/openai/v1/chat/completions", keyVar: "GROQ_API_KEY", modelVar: "GROQ_MODEL", shape: "openai" },
+  anthropic: { url: "https://api.anthropic.com/v1/messages", keyVar: "ANTHROPIC_API_KEY", modelVar: "ANTHROPIC_MODEL", shape: "anthropic" },
 });
 
 const rs = (paisa) => "Rs " + Math.round(paisa / 100).toLocaleString("en-US");
@@ -174,7 +176,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
   const content = retryNote ? user + "\n\nYOUR PREVIOUS REPLY WAS REJECTED: " + retryNote + ". Write it again correctly." : user;
   try {
     let res, body;
-    if (name === "xai") {
+    if (p.shape === "openai") {
       res = await fetchImpl(p.url, {
         method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
