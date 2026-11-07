@@ -9,7 +9,7 @@ const {verifySignedQuote}=require("../checkout/quote-crypto-v1");
 const {buildOrderCreateInput}=require("../checkout/ordercreate-v1");
 const SECRET="LAB_ONLY_LONG_TEST_HMAC_SECRET_NOT_REAL_0123456789";
 const DB={query:async()=>{}};
-const identity={serverAuthenticated:true,phoneVerified:true,householdKey:"LAB-TEST-HOUSEHOLD-ONLY"};
+const identity={serverAuthenticated:true,phoneVerified:true,householdKey:"LAB-TEST-HOUSEHOLD-ONLY-A"};
 const cycleFor=(now)=>nextEligible(now);
 function testQuote(now){
   const cycle=cycleFor(now);
