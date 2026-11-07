@@ -30,6 +30,17 @@ async function main(){
     const x=res.rows[0];
     if(x.db!==DB_NAME||x.v<180000)throw Error("DEV_DB_IDENTITY_OR_VERSION_MISMATCH");
     console.log("[lab-readiness] DB_OK version=18 migrated="+String(x.migrated));
+    const q=await pool.query("SELECT to_regclass('public.checkout_apna_policy_releases') IS NOT NULL AS apna_staging_ready");
+    if(q.rows[0].apna_staging_ready){
+      const stats=await pool.query(
+        "SELECT state,count(*)::int AS count FROM checkout_apna_policy_releases GROUP BY state");
+      const byState=Object.fromEntries(stats.rows.map(r=>[r.state,r.count]));
+      console.log("[lab-readiness] APNA_POLICY_STAGING_READY releases="+
+        String(Object.values(byState).reduce((a,b)=>a+b,0))+
+        " active="+String(byState.active||0));
+    }else{
+      console.log("[lab-readiness] APNA_POLICY_STAGING_NOT_INSTALLED");
+    }
   }finally{await pool.end();}
   const cli=createDevCredentialsShopifyClient({
     shopDomain:SHOP,devDomainAllowlist:[SHOP],
