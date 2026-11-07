@@ -13,7 +13,9 @@ const fixture=require("../checkout/fixtures/asb-checkout-lab.json");
 
 const APPROVAL="ASB_LAB_ONLY_ONE_TEST_ORDER";
 const DB="asb_checkout_lab_pg18";
-const HOUSEHOLD="LAB-TEST-HOUSEHOLD-ONLY";
+const CASE = process.env.ASB_LAB_TEST_CASE || "A";
+if(!["A","B"].includes(CASE))throw Error("UNAPPROVED_LAB_CASE");
+const HOUSEHOLD="LAB-TEST-HOUSEHOLD-ONLY-"+CASE;
 function preflight(){
   if(process.env.ASB_LAB_SHOP_DOMAIN!==SHOP||
      process.env.ASB_LAB_WRITE_MODE!=="disabled"||
@@ -79,7 +81,7 @@ function buildQuote({cycle,now,secret}){
         heroWeekId:"LAB-WEEK-20261109",tierId:"LAB-ONION-10KG"}})
   ];
   return signQuote({
-    quoteId:"ASB-LAB-ONCE-"+cycle.cycleCode,version:1,
+    quoteId:"ASB-LAB-ONCE-"+CASE+"-"+cycle.cycleCode,version:1,
     issuedAt:new Date(now.getTime()-2000).toISOString(),
     expiresAt:new Date(Math.min(now.getTime()+600000,cycle.cutoff.valueOf())).toISOString(),
     cycleCode:cycle.cycleCode,deliveryDate:cycle.deliveryDate,
@@ -165,7 +167,25 @@ async function main(){
         variables.order.test=true;
         variables.order.note="ASB CHECKOUT LAB — SYNTHETIC COD TEST ONLY. NEVER FULFILL OR DELIVER.";
         variables.order.tags.push("ASB-LAB-ONLY","NEVER-FULFILL");
-        return shopify.createOrder({query,variables});
+        const result=await shopify.createOrder({query,variables});
+        // This is an isolated synthetic dev order; show ONLY short Shopify
+        // validation messages/field paths. No request body, credentials or
+        // tokens are logged. A failed create still goes to durable reconciliation.
+        if(result?.errors?.length||result?.data?.orderCreate?.userErrors?.length||
+           !result?.data?.orderCreate?.order?.id){
+          const e=(result?.errors||[]).slice(0,3).map(x=>({
+            code:String(x?.extensions?.code||"GRAPHQL_ERROR").slice(0,70),
+            hint:String(x?.message||"").replace(/(shpat_|shpca_|postgres(?:ql)?:\\/\\/)[^\\s,]+/gi,"[REDACTED]").slice(0,220)
+          }));
+          const u=(result?.data?.orderCreate?.userErrors||[]).slice(0,5).map(x=>({
+            field:Array.isArray(x.field)?x.field.slice(0,8):[],
+            hint:String(x.message||"").slice(0,180)
+          }));
+          console.log("[lab] SHOPIFY_ORDERCREATE_DIAGNOSTIC "+JSON.stringify({
+            graphQLErrors:e,validationErrors:u,orderReturned:!!result?.data?.orderCreate?.order?.id
+          }));
+        }
+        return result;
       }
     };
     const result=await confirmCodOrder({
