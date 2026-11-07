@@ -7,6 +7,16 @@
 const PW = require("../bhao/price-watch");
 const url = process.argv[2];
 if (!url) { console.error("usage: node scripts/price-watch-debug.js PRODUCT_URL"); process.exit(1); }
+if (process.argv.includes("--render")) {
+  // what a customer's browser shows, via Playwright
+  (async () => {
+    const { chromium } = require("playwright");
+    const browser = await chromium.launch();
+    try { console.log("rendered reader says:", JSON.stringify(await PW.checkWatchRendered({ url }, { browser, fetchImpl: fetch }))); }
+    finally { await browser.close(); }
+  })().catch((e) => { console.error("failed:", e.message); process.exit(1); });
+  return;
+}
 fetch(url, { headers: { "User-Agent": PW.USER_AGENT } }).then((r) => r.text()).then((h) => {
   const seen = new Set();
   const re = /"(\w*[Pp]rice\w*)"\s*:\s*(\{[^{}]{0,160}\}|"[^"]{0,60}"|[\d.]+)/g;

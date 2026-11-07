@@ -132,8 +132,8 @@ function extractPrice(html) {
     if (distinct.length === 1) return { status: "ok", pricePaisa: distinct[0], via: s.via };
     if (distinct.length > 1) return { status: "parse_failed", via: s.via + ": " + distinct.length + " different prices" };
   }
-  if (/out of stock|sold out|currently unavailable/i.test(page.replace(/<[^>]+>/g, " ")))
-    return { status: "unavailable", via: "page text" };
+  // No guessing from page text: a live Daraz page contains "out of stock"
+  // in its scripts while the item is on sale (7 Nov). Unreadable is unreadable.
   return { status: "parse_failed", via: "no structured price" };
 }
 
@@ -191,4 +191,67 @@ function competitorFacts({ latest, ourUnitPaisa, now, maxAgeHours = 48 }) {
   return { facts, alerts, stale };
 }
 
-module.exports = { USER_AGENT, parseRobots, robotsAllows, extractPrice, toPaisa, checkWatch, competitorFacts };
+// ---------------------------------------------------------------------------
+// Rendered pages. Some marketplaces (Daraz) put only the crossed-out list
+// price in the HTML and fill in the price a customer pays with JavaScript.
+// For those, the page is opened in a real headless browser - exactly what a
+// customer's browser does - and the CURRENT price is read from the page's
+// own price element. Not a workaround: if the site shows a challenge or
+// captcha instead of the product, that is recorded as blocked and left.
+// ---------------------------------------------------------------------------
+const RENDERED_SELECTORS = Object.freeze({
+  // Daraz product page: current price vs crossed-out list price
+  "daraz.pk": { current: ".pdp-price_type_normal", challenge: "#nocaptcha, .nc_wrapper, #baxia-dialog-content, iframe[src*='captcha']" },
+});
+
+/** Read the current price from text found in the price element(s). */
+function priceFromRenderedTexts(texts) {
+  const vals = [...new Set(texts.map((t) => toPaisa(String(t).trim())).filter(Boolean))];
+  if (vals.length === 1) return { status: "ok", pricePaisa: vals[0], via: "rendered" };
+  if (vals.length > 1) return { status: "parse_failed", via: "rendered: " + vals.length + " different prices" };
+  return { status: "parse_failed", via: "rendered: no price element" };
+}
+
+/**
+ * Check one watch in a headless browser (Playwright). `browser` is a
+ * launched Playwright browser; robots.txt is still read with fetchImpl first.
+ */
+async function checkWatchRendered(watch, { browser, fetchImpl, robotsCache = new Map(), timeoutMs = 30000,
+                                           selectors = RENDERED_SELECTORS, allowHttpForTests = false }) {
+  let url;
+  try { url = new URL(watch.url); } catch { return { status: "fetch_failed", via: "invalid url" }; }
+  if (url.protocol !== "https:" && !(allowHttpForTests && url.protocol === "http:")) return { status: "fetch_failed", via: "not https" };
+  const site = Object.keys(selectors).find((d) => url.hostname === d || url.hostname.endsWith("." + d));
+  if (!site) return { status: "parse_failed", via: "no rendered reader for " + url.hostname };
+  const sel = selectors[site];
+  try {
+    if (!robotsCache.has(url.origin)) {
+      const r = await fetchImpl(url.origin + "/robots.txt", { headers: { "User-Agent": USER_AGENT } });
+      robotsCache.set(url.origin, r.ok ? await r.text() : "");
+    }
+    if (!robotsAllows(robotsCache.get(url.origin), url.pathname + url.search))
+      return { status: "blocked_by_robots", via: "robots.txt" };
+  } catch { return { status: "fetch_failed", via: "robots.txt unreachable" }; }
+
+  const ctx = await browser.newContext({ userAgent: USER_AGENT, locale: "en-PK" });
+  try {
+    const page = await ctx.newPage();
+    const res = await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+    const httpStatus = res ? res.status() : null;
+    if (res && !res.ok()) return { status: "http_error", httpStatus };
+    const found = await Promise.race([
+      page.waitForSelector(sel.current, { timeout: timeoutMs }).then(() => "price"),
+      page.waitForSelector(sel.challenge, { timeout: timeoutMs }).then(() => "challenge"),
+    ]).catch(() => "nothing");
+    if (found === "challenge") return { status: "http_error", httpStatus, via: "site showed a challenge; left alone" };
+    if (found !== "price") return { status: "parse_failed", httpStatus, via: "rendered: price did not appear" };
+    const texts = await page.$$eval(sel.current, (els) => els.filter((e) => e.offsetParent !== null).map((e) => e.textContent));
+    return { ...priceFromRenderedTexts(texts), httpStatus };
+  } catch (e) {
+    return { status: "fetch_failed", via: /timeout/i.test(String(e.message)) ? "timeout" : "browser" };
+  } finally {
+    await ctx.close();
+  }
+}
+
+module.exports = { RENDERED_SELECTORS, priceFromRenderedTexts, checkWatchRendered, USER_AGENT, parseRobots, robotsAllows, extractPrice, toPaisa, checkWatch, competitorFacts };

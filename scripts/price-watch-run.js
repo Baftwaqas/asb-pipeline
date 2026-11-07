@@ -7,8 +7,10 @@
 //   # a PERSON confirms a competitor page is the same item, once:
 //   node scripts/price-watch-run.js --add ASB-NG-POT-5L daraz https://www.daraz.pk/products/... --by "Waqas"
 //
-//   # check every active page (daily, e.g. a Render Cron Job):
-//   node scripts/price-watch-run.js --check
+//   # check every active page (daily, e.g. a Render Cron Job). Daraz fills in
+//   # the price a customer pays with JavaScript, so it needs --render (a
+//   # headless browser, Playwright); without it Daraz pages read as unreadable:
+//   node scripts/price-watch-run.js --check --render
 //
 //   # see the latest price per page:
 //   node scripts/price-watch-run.js --list
@@ -37,7 +39,7 @@ async function add(db, { itemId, marketplace, url, by, note = null }) {
   return r.rows[0].id;
 }
 
-async function check(db, { fetchImpl = fetch, delayMs = 4000, log = console.log } = {}) {
+async function check(db, { fetchImpl = fetch, delayMs = 4000, log = console.log, browser = null } = {}) {
   const watches = (await db.query(
     `SELECT id, item_id, marketplace, url FROM competitor_price_watches WHERE active ORDER BY id`)).rows;
   const robotsCache = new Map();
@@ -45,7 +47,13 @@ async function check(db, { fetchImpl = fetch, delayMs = 4000, log = console.log 
   for (let i = 0; i < watches.length; i++) {
     if (i > 0) await sleep(delayMs);
     const w = watches[i];
-    const r = await PW.checkWatch(w, { fetchImpl, robotsCache });
+    // A site whose price is filled in by JavaScript (Daraz) needs the
+    // rendered page; without a browser it is honestly recorded as unreadable.
+    const host = new URL(w.url).hostname;
+    const needsRender = Object.keys(PW.RENDERED_SELECTORS).some((d) => host === d || host.endsWith("." + d));
+    const r = needsRender && browser
+      ? await PW.checkWatchRendered(w, { browser, fetchImpl, robotsCache })
+      : await PW.checkWatch(w, { fetchImpl, robotsCache });
     await db.query(
       `INSERT INTO competitor_price_checks (watch_id, status, http_status, price_paisa, via) VALUES ($1, $2, $3, $4, $5)`,
       [w.id, r.status, r.httpStatus ?? null, r.status === "ok" ? r.pricePaisa : null, r.via ?? null]);
@@ -73,7 +81,13 @@ async function main() {
       const id = await add(db, { itemId: a[1], marketplace: a[2], url: a[3], by });
       console.log("watch", id, "saved");
     } else if (a[0] === "--check") {
-      const s = await check(db);
+      let browser = null;
+      if (a.includes("--render")) {
+        const { chromium } = require("playwright"); // needs: npm i playwright && npx playwright install chromium
+        browser = await chromium.launch();
+      }
+      let s;
+      try { s = await check(db, { browser }); } finally { if (browser) await browser.close(); }
       console.log(`done: ${s.ok} priced, ${s.notOk} without a usable price`);
     } else if (a[0] === "--list") {
       await list(db);

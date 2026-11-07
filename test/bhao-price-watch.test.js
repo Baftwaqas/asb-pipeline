@@ -51,7 +51,8 @@ test("price is read from structured data only; conflicting readings are refused"
   // live Daraz page, 7 Nov: pdt_price is the crossed-out list price, never what she pays
   assert.equal(PW.extractPrice('<script>var d={"pdt_price":"Rs. 3,899","voucherPrice":{"hit":true}}</script>').status, "parse_failed");
   assert.equal(PW.extractPrice("<p>Price: Rs 2,350</p>").status, "parse_failed"); // free text is never trusted
-  assert.equal(PW.extractPrice("<p>Sorry, this item is out of stock</p>").status, "unavailable");
+  // page text is never trusted, either way: the live Daraz page has "out of stock" in its scripts while on sale
+  assert.equal(PW.extractPrice("<p>Sorry, this item is out of stock</p>").status, "parse_failed");
   assert.equal(PW.extractPrice('<script type="application/ld+json">{not json</script>').status, "parse_failed");
 });
 
@@ -157,4 +158,54 @@ test("024: add a confirmed page, check it, record every outcome; checks are appe
     "INSERT INTO competitor_price_checks (watch_id, status, price_paisa) VALUES ($1, 'parse_failed', 100)", [id]), /price_iff_ok/);
   await assert.rejects(db.query(
     "INSERT INTO competitor_price_watches (item_id, marketplace, url, confirmed_same_item_by) VALUES ('X','daraz','http://x','W')"), /check/i);
+});
+
+// ---------- rendered pages (Daraz fills the paid price in with JavaScript) ----------
+test("rendered: reads the CURRENT price the page shows, never the crossed-out one; a challenge is left alone", async (t) => {
+  let chromium;
+  try { ({ chromium } = require("playwright")); } catch { t.skip("playwright not installed"); return; }
+  const http = require("http");
+  // Shaped like the live Daraz page of 7 Nov: HTML carries only pdt_price (list),
+  // the shown price arrives by script.
+  const pages = {
+    "/robots.txt": DARAZ_ROBOTS,
+    "/products/degchi-i1.html": `<html><body><script>var d={"pdt_price":"Rs. 3,899"}</script>
+      <div id="p"></div><script>setTimeout(()=>{document.getElementById('p').innerHTML=
+      '<span class="pdp-price pdp-price_type_normal">Rs. 2,999</span><span class="pdp-price pdp-price_type_deleted">Rs. 3,899</span>'},300)</script></body></html>`,
+    "/products/challenge-i2.html": `<html><body><div id="nocaptcha">slide to verify</div></body></html>`,
+    "/products/blank-i3.html": `<html><body>nothing here</body></html>`,
+  };
+  const server = http.createServer((req, res) => {
+    const body = pages[req.url.split("?")[0]];
+    res.writeHead(body ? 200 : 404, { "Content-Type": req.url.endsWith(".txt") ? "text/plain" : "text/html" });
+    res.end(body || "");
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const browser = await chromium.launch();
+  const opts = { browser, fetchImpl: fetch, allowHttpForTests: true, timeoutMs: 3000,
+    selectors: { "127.0.0.1": PW.RENDERED_SELECTORS["daraz.pk"] } };
+  try {
+    // the static reader refuses this page (pdt_price is not what she pays)
+    assert.equal(PW.extractPrice(pages["/products/degchi-i1.html"]).status, "parse_failed");
+    const ok = await PW.checkWatchRendered({ url: base + "/products/degchi-i1.html" }, opts);
+    assert.deepEqual([ok.status, ok.pricePaisa, ok.via], ["ok", 299900, "rendered"]);
+    const ch = await PW.checkWatchRendered({ url: base + "/products/challenge-i2.html" }, opts);
+    assert.equal(ch.status, "http_error");
+    assert.match(ch.via, /challenge; left alone/);
+    const blank = await PW.checkWatchRendered({ url: base + "/products/blank-i3.html" }, opts);
+    assert.equal(blank.status, "parse_failed");
+    const blocked = await PW.checkWatchRendered({ url: base + "/catalog/?q=degchi" }, opts);
+    assert.equal(blocked.status, "blocked_by_robots");
+  } finally {
+    await browser.close();
+    server.close();
+  }
+});
+
+test("rendered text: one shown price is read; two different shown prices are refused", () => {
+  assert.deepEqual(PW.priceFromRenderedTexts(["Rs. 2,999"]), { status: "ok", pricePaisa: 299900, via: "rendered" });
+  assert.deepEqual(PW.priceFromRenderedTexts([" Rs. 2,999 ", "Rs. 2,999"]), { status: "ok", pricePaisa: 299900, via: "rendered" });
+  assert.equal(PW.priceFromRenderedTexts(["Rs. 2,999", "Rs. 3,899"]).status, "parse_failed");
+  assert.equal(PW.priceFromRenderedTexts([]).status, "parse_failed");
 });
