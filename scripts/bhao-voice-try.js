@@ -40,7 +40,9 @@ async function main() {
   let { state, action } = B.open({ conversationId: "TRY-" + Date.now(), item: ITEM, qty: 1, policy: POLICY, seed: String(Date.now()) });
   const line = async (decision, customerText, offerPaisa) => {
     const r = await V.speak({ decision, itemName: "Steel ki Degchi 5 litre", qty: state.qty, offerPaisa, customerText,
-                              history, groupSizes: [5] });
+                              history, groupSizes: [5],
+                              // DEMO facts. Real items carry founder-approved facts from the catalogue.
+                              itemFacts: ["5 litre", "mota steel (thick steel)", "dhakkan ke saath (comes with a lid)"] });
     history.push({ from: "seth", text: r.text });
     console.log(`SETH JI [${r.source}${r.provider ? ":" + r.provider : ""}${r.attempts > 1 ? ", try " + r.attempts : ""}] ${r.text}`);
     if (r.rejected.length) console.log("   rejected:", r.rejected.join(" | "));

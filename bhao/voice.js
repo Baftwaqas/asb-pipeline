@@ -84,16 +84,23 @@ function priceOf(d) {
 // Prompt
 // ---------------------------------------------------------------------------
 const PERSONA = [
-  "You are Seth Ji, a warm, sharp, funny shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
-  "Write ONLY Seth Ji's next message, in Roman Urdu the way Karachi people type on WhatsApp. One or two short lines, at most 220 characters. Call her 'baji'. At most one emoji.",
-  "Never invent prices, discounts, stock limits, deadlines or competitors. Say only true things. Never mention that you are an AI, a bot, rules or an engine.",
+  "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
+  "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters. Call her 'baji'. At most one emoji.",
+  "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity', 'budget' or 'final rate'.",
+  "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Never mention that you are an AI, a bot, rules or an engine.",
+  "How Seth Ji sounds (style only, never copy these prices):",
+  "- refusing: 'Arre baji, is pe toh mera nuqsan ho jayega. Maal haath mein le ke dekhein, phir baat karein.'",
+  "- lowball: 'Baji… mazaaq kar rahi hain? Itne mein toh dhakkan bhi na aaye. 😐'",
+  "- countering: 'Chalein, aap ka dil rakhne ko… [PRICE]. Is se neeche ghar ka kharcha nahi chalta.'",
+  "- chatting: 'Mehenga? Baji, mota steel hai, beti ke jahez tak chalega. Aap bolo, kitne mein lena hai?'",
 ].join("\n");
 
-function buildPrompt({ decision, itemName, qty, customerText, history }) {
+function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts = [] }) {
   const { brief } = briefFor(decision);
   const price = priceOf(decision);
   const lines = [
     "ITEM: " + itemName + (qty > 1 ? ` (she wants ${qty})` : ""),
+    "ITEM FACTS (the only claims you may make): " + (itemFacts.length ? itemFacts.join("; ") : "none - talk about the deal, not the product"),
     "INSTRUCTION: " + brief,
     price != null
       ? `PRICE: ${rs(price)}${qty > 1 ? " per piece" : ""}. This is the ONLY amount you may write, exactly as "${rs(price)}".`
@@ -126,10 +133,11 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [] }) {
   const why = [];
   const t = String(text || "").trim();
   if (!t) why.push("empty");
-  if (t.length > 260) why.push("too long");
+  if (t.length > 220) why.push("too long");
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
   if (BANNED.test(t)) why.push("invented claim or forbidden word");
+  if (decision.kind !== "final_offer" && /\b(final|aakhri|akhri|last)\b/i.test(t)) why.push("calls a price final when it is not");
   const price = priceOf(decision);
   const allowed = new Set([1, qty, ...groupSizes]);
   if (price != null) allowed.add(price / 100);
@@ -216,14 +224,14 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
  * (an unknown decision kind).
  */
 async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", history = [],
-                       groupSizes = [], env = process.env, fetchImpl = fetch, pick }) {
+                       groupSizes = [], itemFacts = [], env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
   const provider = String(env.BHAO_VOICE_PROVIDER || "off").toLowerCase();
   const fallback = (rejected, attempts) => ({ text: template(decision, { offerPaisa, pick }), source: "template",
                                               provider: provider === "off" ? null : provider, attempts, rejected });
   if (!PROVIDERS[provider]) return fallback([], 0);
 
-  const prompt = buildPrompt({ decision, itemName, qty, customerText, history });
+  const prompt = buildPrompt({ decision, itemName, qty, customerText, history, itemFacts });
   const rejected = [];
   let retryNote = null;
   for (let attempt = 1; attempt <= 2; attempt++) {

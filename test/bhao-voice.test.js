@@ -112,6 +112,13 @@ test("waqas case 2: 'Rs 200,000' is an amount, and any figure the reply makes up
   assert.equal(V.checkReply("Baji 100 degchiyan de doon? Degchi Rs 1,800 ki hai.", { decision: d, qty: 1, offerPaisa: 20000000 }).ok, false);
 });
 
+test("only a final offer may call itself final (Groq said 'final rate' on a counter in the live test)", () => {
+  assert.equal(V.checkReply("Baji, hamari degchi ka final rate Rs 1,540 hai.", { decision: counter(154000), qty: 1 }).ok, false);
+  assert.equal(V.checkReply("Bas baji, Rs 850, aakhri baat.", { decision: { kind: "final_offer", askPaisa: 85000 }, qty: 1 }).ok, true);
+  const p = V.buildPrompt({ decision: counter(154000), itemName: "Degchi", qty: 1, itemFacts: ["mota steel"] });
+  assert.match(p.user, /ITEM FACTS \(the only claims you may make\): mota steel/);
+});
+
 test("refuse, lowball, closed and talk may not name any number at all", () => {
   for (const kind of ["refuse", "lowball_check", "closed", "talk"]) {
     const d = { kind, askPaisa: 180000 };
