@@ -134,3 +134,104 @@ test("G4: invalid signature, spoofed operator and mismatched Shopify source fail
   }),/APNA_INCOMPLETE_OR_INACTIVE_SHOPIFY_PRODUCT/);
   assert.equal((await pool.query("SELECT count(*)::int c FROM checkout_apna_policy_releases")).rows[0].c,1);
 });
+
+test("G5: scratch DB manual activation permits signed quote's exact approved pack only",async()=>{
+  // TEST-ONLY manual activation in disposable PostgreSQL, never Render/live.
+  const policy=verifyApprovedApnaRelease(envelope,{
+    expectedShop:SHOP,signingKey:SECRET,now});
+  await pool.query(
+    "UPDATE checkout_apna_policy_releases "+
+    "SET state='active',activated_at=clock_timestamp(),"+
+    "activated_by='42',effective_delivery_date='2026-11-09' "+
+    "WHERE release_id=$1 AND state='staged'",[policy.policyVersion]);
+  const {createPgReleasedApnaCheckoutVerifier,verifyEmptyLegacyOrdersInLab}=
+    require("../checkout/apna-policy-pg-verifier-v1");
+  const ctx={
+    db:pool,shopDomain:SHOP,
+    identity:{serverAuthenticated:true,phoneVerified:true,
+      householdKey:"TEST-CHECKOUT-HH"},
+    quote:{
+      quoteId:"TEST-APNA-APPROVED",cycleCode:"MON-2026-11-09",
+      customerReference:"TEST-CHECKOUT-HH",deliveryDate:"2026-11-09",
+      currency:"PKR",apnaPolicyVersion:policy.policyVersion,
+      lines:[{door:"apna_order",canonicalProductId:"ASB-CANON-GINGER",
+        shopifyVariantGid:variants[0].id,unit:"g",qty:125,
+        provenance:{kind:"apna_selection"}}]
+    }
+  };
+  const guarded=createPgReleasedApnaCheckoutVerifier({
+    shopDomain:SHOP,signingKey:SECRET,
+    verifyExternalHistoryInTransaction:verifyEmptyLegacyOrdersInLab,
+    verifyOtherDoorsInTransaction:async()=>({
+      approved:true,policyVersion:"SYNTHETIC-NON-APNA-TEST-ONLY"
+    })
+  });
+  const ok=await guarded(ctx);
+  assert.equal(ok.approved,true);
+  assert.match(ok.policyVersion,/^apna-signed-.*SYNTHETIC-NON-APNA/);
+  await assert.rejects(()=>guarded({...ctx,quote:{...ctx.quote,
+    apnaPolicyVersion:"apna-signed-"+"f".repeat(24)}}),
+  /APNA_QUOTE_RELEASE_VERSION_MISMATCH/);
+  await assert.rejects(()=>guarded({...ctx,quote:{...ctx.quote,
+    lines:[{...ctx.quote.lines[0],qty:40}]}}),
+  /APNA_QUOTE_VARIANT_PACK_MISMATCH/);
+  await assert.rejects(()=>createPgReleasedApnaCheckoutVerifier({
+    shopDomain:SHOP,signingKey:SECRET,
+    verifyExternalHistoryInTransaction:async()=>({authoritative:false,lines:[]}),
+    verifyOtherDoorsInTransaction:async()=>({
+      approved:true,policyVersion:"TEST"
+    })
+  })(ctx),/APNA_LEGACY_ORDERS_NOT_VERIFIED/);
+  await assert.rejects(()=>createPgReleasedApnaCheckoutVerifier({
+    shopDomain:SHOP,signingKey:SECRET,
+    verifyExternalHistoryInTransaction:verifyEmptyLegacyOrdersInLab,
+    verifyOtherDoorsInTransaction:async()=>({approved:false,policyVersion:"REJECT"})
+  })(ctx),/NON_APNA_POLICY_NOT_APPROVED/);
+  // No Shopify order was contacted, no customer's money has moved.
+});
+test("G5: committed uncertain Apna quote consumes next quote's cycle cap",async()=>{
+  const {readExistingCheckoutApnaLines,createPgReleasedApnaCheckoutVerifier,
+    verifyEmptyLegacyOrdersInLab}=
+    require("../checkout/apna-policy-pg-verifier-v1");
+  const previous="TEST-PREV-GINGER-ONE";
+  await pool.query(
+    "INSERT INTO checkout_quotes "+
+    "(quote_id,version,shop_domain,household_key,cycle_code,delivery_date,"+
+    "issued_at,expires_at,signed_quote) "+
+    "VALUES ($1,1,$2,$3,'MON-2026-11-09','2026-11-09',"+
+    "clock_timestamp()-interval '1 minute',clock_timestamp()+interval '5 minute',$4::jsonb)",
+    [previous,SHOP,"HH-PRIOR-APPROVED",JSON.stringify({
+      quoteId:previous,lines:[{door:"apna_order",unit:"g",
+        canonicalProductId:"ASB-CANON-GINGER",qty:500}]
+    })]
+  );
+  await pool.query(
+    "INSERT INTO checkout_redemptions "+
+    "(quote_id,quote_version,shop_domain,household_key,cycle_code,"+
+    "redemption_key,state,policy_version) "+
+    "VALUES ($1,1,$2,$3,'MON-2026-11-09',$4,'needs_reconcile','SYNTHETIC')",
+    [previous,SHOP,"HH-PRIOR-APPROVED","asb-adr002-"+"d".repeat(40)]
+  );
+  const rows=await readExistingCheckoutApnaLines({
+    db:pool,shopDomain:SHOP,householdKey:"HH-PRIOR-APPROVED",
+    cycleCode:"MON-2026-11-09"});
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].status,"needs_reconcile");
+  const policy=verifyApprovedApnaRelease(envelope,{
+    expectedShop:SHOP,signingKey:SECRET,now});
+  const guarded=createPgReleasedApnaCheckoutVerifier({
+    shopDomain:SHOP,signingKey:SECRET,
+    verifyExternalHistoryInTransaction:verifyEmptyLegacyOrdersInLab,
+    verifyOtherDoorsInTransaction:async()=>({approved:true,policyVersion:"TEST"})
+  });
+  await assert.rejects(()=>guarded({
+    db:pool,shopDomain:SHOP,
+    identity:{serverAuthenticated:true,phoneVerified:true,householdKey:"HH-PRIOR-APPROVED"},
+    quote:{quoteId:"TEST-NEW-GINGER",cycleCode:"MON-2026-11-09",
+      deliveryDate:"2026-11-09",customerReference:"HH-PRIOR-APPROVED",
+      currency:"PKR",apnaPolicyVersion:policy.policyVersion,
+      lines:[{door:"apna_order",canonicalProductId:"ASB-CANON-GINGER",
+        shopifyVariantGid:variants[0].id,unit:"g",qty:125,
+        provenance:{kind:"apna_selection"}}]}
+  }),/APNA_APPROVED_LIMIT_VIOLATION/);
+});
