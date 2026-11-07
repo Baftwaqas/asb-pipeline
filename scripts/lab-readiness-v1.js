@@ -38,6 +38,17 @@ async function main(){
       console.log("[lab-readiness] APNA_POLICY_STAGING_READY releases="+
         String(Object.values(byState).reduce((a,b)=>a+b,0))+
         " active="+String(byState.active||0));
+      const reviews=(await pool.query(
+        "SELECT to_regclass('public.checkout_apna_activation_reviews') IS NOT NULL AS installed"
+      )).rows[0].installed;
+      if(reviews){
+        const records=await pool.query(
+          "SELECT count(*)::int AS reviewed FROM checkout_apna_activation_reviews");
+        console.log("[lab-readiness] APNA_DUAL_CONTROL_READY reviewed="+
+          String(records.rows[0].reviewed)+" active="+String(byState.active||0));
+      }else{
+        console.log("[lab-readiness] APNA_DUAL_CONTROL_NOT_INSTALLED");
+      }
     }else{
       console.log("[lab-readiness] APNA_POLICY_STAGING_NOT_INSTALLED");
     }
