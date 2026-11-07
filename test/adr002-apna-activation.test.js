@@ -111,6 +111,15 @@ test("A1: signed candidate is staged, never silently active",async()=>{
   assert.equal(p.activated_at,null);
   assert.equal((await pool.query("SELECT count(*)::int n FROM checkout_apna_activation_reviews")).rows[0].n,0);
 });
+test("A1: direct SQL cannot activate staged founder approval without independent review",async()=>{
+  await assert.rejects(()=>pool.query(
+    "UPDATE checkout_apna_policy_releases SET state='active',"+
+    "activated_at=clock_timestamp(),activated_by='103',"+
+    "effective_delivery_date=$2::date WHERE release_id=$1",
+    [release,effective]
+  ),/APNA_ACTIVATION_REQUIRES_REVIEW/);
+  assert.equal((await readState()).state,"staged");
+});
 test("A1: missing or spoofed staff and self-review all rejected",async()=>{
   const req={releaseId:release,effectiveDeliveryDate:effective,
     reason:"Independent sample catalogue and pack audit complete"};
@@ -225,6 +234,17 @@ test("A4: activation requires review, commits one active and exact effective dat
     "SELECT state,consumed_at FROM checkout_apna_activation_reviews")).rows[0];
   assert.equal(review.state,"consumed");
   assert.ok(review.consumed_at);
+});
+test("A5: database forbids rewriting signed envelope or reverting active to staged",async()=>{
+  await assert.rejects(()=>pool.query(
+    "UPDATE checkout_apna_policy_releases "+
+    "SET signed_envelope='{}'::jsonb WHERE release_id=$1",[release]),
+    /APNA_SIGNED_RELEASE_IMMUTABLE/);
+  await assert.rejects(()=>pool.query(
+    "UPDATE checkout_apna_policy_releases "+
+    "SET state='staged' WHERE release_id=$1",[release]),
+    /APNA_INVALID_RELEASE_STATE_TRANSITION/);
+  assert.equal((await readState()).state,"active");
 });
 test("A5: replay activation cannot create a second activation or audit event",async()=>{
   await assert.rejects(()=>service().activate({
