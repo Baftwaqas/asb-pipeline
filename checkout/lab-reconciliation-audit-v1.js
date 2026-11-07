@@ -7,7 +7,7 @@ const {redemptionKeyFor}=require("./redemption-v1");
 const SHOP="asb-checkout-lab.myshopify.com";
 const ORDER_B="gid://shopify/Order/18999612604450";
 const IDS=[
-  "ASB-LAB-ONCE-A-MON-2026-11-09",
+  "ASB-LAB-ONCE-MON-2026-11-09",
   "ASB-LAB-ONCE-B-MON-2026-11-09"
 ];
 
@@ -23,7 +23,7 @@ function assessLabClaims(rows,{quoteSecret,shopDomain=SHOP}={}){
     requireThat(r&&r.quote_id===IDS[i],"LAB_QUOTE_MISSING");
     requireThat(r.shop_domain===SHOP && r.quote_version===1,"LAB_CLAIM_IDENTITY_MISMATCH");
     requireThat(r.signed_quote?.quoteId===IDS[i] &&
-      r.signed_quote?.customerReference==="LAB-TEST-HOUSEHOLD-ONLY-"+(i?"B":"A"),
+      r.signed_quote?.customerReference===(i?"LAB-TEST-HOUSEHOLD-ONLY-B":"LAB-TEST-HOUSEHOLD-ONLY"),
       "LAB_QUOTE_IDENTITY_MISMATCH");
     requireThat(verifySignedQuote(r.signed_quote,quoteSecret),"LAB_QUOTE_SIGNATURE_INVALID");
     requireThat(r.redemption_key===redemptionKeyFor(IDS[i],1),"LAB_REDEMPTION_KEY_MISMATCH");
