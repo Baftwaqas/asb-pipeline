@@ -84,6 +84,25 @@ The founder's decision of 7 Nov: Seth Ji may use competitor prices for drama, bu
 - "Bas 2 bachi hain" or "last piece" are allowed only when the real stock count passed in is 3 or fewer, and the number must match.
 - Fake deadlines ("sirf aaj", "offer khatam") are always blocked.
 
+## WhatsApp (migration 025, `bhao/whatsapp.js`, `bhao/runtime.js`)
+
+Off unless `BHAO_TAO_WHATSAPP=on` **and** migration 025 is applied. When it's off, the webhook does exactly what it did before. The golden test confirms this.
+
+**Starting and continuing a bargain**
+- **Start:** the customer sends **`BHAO <ITEM-CODE>`**. The storefront's "Seth Ji se bhao karein" button will pre-fill this.
+- Seth Ji opens at the anchor price. Her later texts continue the bargain. Anything else she sends stays with the normal inbox, which shows every message in either case.
+- **Pacing:** Seth Ji's reply waits for the engine's pause (20–90 s, or 3–7 min after a lowball), then a 10-second sweep sends it. If she writes again before then, the pending reply is **superseded**, so she never gets an answer to something she has already moved past.
+
+**Rules that protect the price**
+- **No reset by restarting:** a new bargain on the same item within 7 days continues from her last ask.
+- A bargain that has been silent for 24 hours lapses, matching WhatsApp's free-reply window.
+- **Quantity:** "5 lein" is remembered for her next price, so the bulk floor applies.
+- **Accepted:** Seth Ji's line, then *"✅ Sauda pakka … Hamari team aap ko order confirm karne ke liye abhi message karegi."* **No order is created automatically**: the team confirms it, until it's wired to Lane A's server order path.
+
+**Records and setup**
+- Every line in and out is stored, append-only. Each record keeps the engine decision, whether the AI or a template wrote it, any rejections, the pause, and the send result. Meta redelivering a message changes nothing.
+- **Items:** `scripts/bhao-items.js --add …` holds the founder-approved anchor, floor, cost, bulk tiers, facts and stock. The floor can never be below cost.
+
 ## Not in this PR
 
 - Storing conversation state, with one conversation per household, item and cycle, so a customer can't restart to reset the ask.
