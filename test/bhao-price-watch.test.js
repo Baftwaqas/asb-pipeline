@@ -106,13 +106,16 @@ test("competitorFacts: only fresh, OK, HIGHER prices; cheaper listings are alert
 test("Seth Ji may quote Daraz only with a checked price, and only that number", () => {
   const d = { kind: "counter", askPaisa: 154000, angle: "running_costs" };
   const facts = [{ marketplace: "daraz", pricePaisa: 235000 }];
-  const good = "Baji, Daraz pe yehi degchi Rs 2,350 ki hai, main Rs 1,540 de raha hoon!";
+  const good = "Baji, maine Daraz pe yehi degchi Rs 2,350 ki dekhi, main Rs 1,540 de raha hoon!";
+  // founder's call 7 Nov: the live Groq opening said it as a general fact - not allowed
+  assert.equal(V.checkReply("Baji, mota steel ki degchi sirf Rs 1,540. Daraz pe Rs 2,350 milti hai!",
+    { decision: d, qty: 1, competitorFacts: facts }).ok, false);
   assert.equal(V.checkReply(good, { decision: d, qty: 1, competitorFacts: facts }).ok, true);
   assert.equal(V.checkReply(good, { decision: d, qty: 1 }).ok, false, "no checked price -> no Daraz");
-  assert.equal(V.checkReply("Baji, Daraz pe Rs 2,900 hai, main Rs 1,540 de raha hoon", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
+  assert.equal(V.checkReply("Baji, maine Daraz pe Rs 2,900 dekhi, main Rs 1,540 de raha hoon", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
   assert.equal(V.checkReply("Baji, OLX pe Rs 2,350 hai, main Rs 1,540", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
   // a claim about every seller cannot be proven by a few checked listings
-  assert.equal(V.checkReply("Baji, Daraz pe sab se sasti Rs 2,350 hai, main Rs 1,540", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
+  assert.equal(V.checkReply("Baji, maine dekhi, Daraz pe sab se sasti Rs 2,350 hai, main Rs 1,540", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
   assert.equal(V.checkReply("Baji, maine Daraz pe dekhi, Rs 2,350 ki thi. Main Rs 1,540 de raha hoon", { decision: d, qty: 1, competitorFacts: facts }).ok, true);
   const p = V.buildPrompt({ decision: d, itemName: "Degchi", qty: 1, competitorFacts: facts });
   assert.match(p.user, /CHECKED COMPETITOR PRICES .*Daraz Rs 2,350/);

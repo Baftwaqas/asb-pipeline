@@ -103,7 +103,7 @@ function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts
     "ITEM: " + itemName + (qty > 1 ? ` (she wants ${qty})` : ""),
     "ITEM FACTS (the only claims you may make): " + (itemFacts.length ? itemFacts.join("; ") : "none - talk about the deal, not the product"),
     competitorFacts.length
-      ? "CHECKED COMPETITOR PRICES (one listing each, which you yourself looked at; you MAY use one for drama, quoting it exactly, as 'maine Daraz pe dekhi, Rs X ki thi' - never claim it is the cheapest there or that you are the cheapest anywhere): " +
+      ? "CHECKED COMPETITOR PRICES (one listing each, which you yourself looked at; you MAY use one for drama, quoting it exactly, ALWAYS as 'maine Daraz pe dekhi, Rs X ki thi' (a listing you saw, never 'Daraz pe milti hai') - never claim it is the cheapest there or that you are the cheapest anywhere): " +
         competitorFacts.map((f) => `${f.marketplace[0].toUpperCase() + f.marketplace.slice(1)} ${rs(f.pricePaisa)}`).join("; ")
       : "CHECKED COMPETITOR PRICES: none - do not mention any other shop or website.",
     Number.isSafeInteger(stockLeft) && stockLeft > 0 && stockLeft <= STOCK_CLAIM_MAX
@@ -160,7 +160,11 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
   if (BANNED.test(t)) why.push("invented claim or forbidden word");
   const backed = new Set(competitorFacts.map((f) => String(f.marketplace).toLowerCase()));
-  for (const m of t.matchAll(MARKETPLACES)) if (!backed.has(m[1].toLowerCase())) why.push("unbacked competitor: " + m[1]);
+  let named = false;
+  for (const m of t.matchAll(MARKETPLACES)) { named = true; if (!backed.has(m[1].toLowerCase())) why.push("unbacked competitor: " + m[1]); }
+  // Founder's call, 7 Nov: always "maine dekhi/dekha", a listing he saw -
+  // never a general fact about the marketplace ("Daraz pe milti hai").
+  if (named && !/\bdekh(i|a|ee)\b/i.test(t)) why.push("competitor price must be said as 'maine dekhi'");
   const stockClaimOk = Number.isSafeInteger(stockLeft) && stockLeft > 0 && stockLeft <= STOCK_CLAIM_MAX;
   if (SCARCITY.test(t) && !stockClaimOk) why.push("unbacked scarcity");
   if (stockClaimOk) for (const m of t.matchAll(/(\d+)\s*(?:hi\s*)?(?:bach|reh)/gi))
