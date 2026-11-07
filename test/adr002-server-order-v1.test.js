@@ -119,6 +119,8 @@ test("T1 makes three feature-specific Shopify items but ONE pending COD order",(
   assert.equal(p.variables.order.lineItems[1].weight.value,0.04);
   assert.equal(p.variables.order.financialStatus,"PENDING");
   assert.equal(p.variables.order.currency,"PKR");
+  assert.equal(p.variables.order.phone,"+923001234567");
+  assert.equal(p.variables.order.shippingAddress.phone,"+923001234567");
   assert.equal(p.variables.order.shippingLines[0].priceSet.shopMoney.amount,"0.00");
   assert.equal(p.variables.options.inventoryBehaviour,"BYPASS");
   assert.equal(p.variables.options.sendReceipt,false);
