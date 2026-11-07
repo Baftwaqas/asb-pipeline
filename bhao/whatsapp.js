@@ -13,7 +13,10 @@
 // The engine (bhao/engine.js) decides every price. The voice (bhao/voice.js)
 // only words it, checked against that decision. A new message from her
 // supersedes a reply not yet sent, so she never gets an answer to something
-// she has already moved past.
+// she has already moved past - and the new reply answers EVERYTHING she has
+// written since Seth Ji last spoke (two questions, or a price then a
+// complaint), in one human-sounding line. A price he had not yet answered is
+// never dropped because she kept talking.
 //
 // Off unless BHAO_TAO_WHATSAPP=on (server.js). Nothing here creates an order:
 // an accepted bargain is recorded and handed to the team to confirm.
@@ -26,10 +29,13 @@ const PW = require("./price-watch");
 
 // DRAFT policy (test values from docs/bhao-tao-engine-v1.md). Founder decision
 // pending; the version is stamped on every conversation.
+//   DRAFT-2 (7 Nov, founder after the first live WhatsApp test): a lowball
+//   waits 1-2 minutes, not 3-7 - long enough to read as "Seth Ji is
+//   annoyed", short enough that she does not think he has gone.
 const POLICY = Object.freeze({
-  version: "BHAO-DRAFT-1", lowballRatio: 0.35, refuseRounds: 2, maxRounds: 10, stepPlan: [0.35, 0.25, 0.2, 0.15],
+  version: "BHAO-DRAFT-2", lowballRatio: 0.35, refuseRounds: 2, maxRounds: 10, stepPlan: [0.35, 0.25, 0.2, 0.15],
   stepJitter: 0.2, settleBand: 0.25, settleAfterRounds: 4, roundToPaisa: 1000,
-  delaySeconds: { normal: [20, 90], lowball: [180, 420], settle: [10, 40] }, offerTtlMinutes: 120, settleAtLastRound: true,
+  delaySeconds: { normal: [20, 90], lowball: [60, 120], settle: [10, 40] }, offerTtlMinutes: 120, settleAtLastRound: true,
 });
 const RESTART_MEMORY_DAYS = 7;
 const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
@@ -84,9 +90,20 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       conv = null;
     }
 
+    // A bargain opened under an older policy version cannot continue under
+    // this one (the engine refuses a mid-conversation policy change). Close
+    // it and carry on in a new conversation on the same item: the 7-day
+    // memory below keeps her last ask, and her message is then read as usual.
+    let carryCode = null;
+    if (conv && conv.policy_version !== POLICY.version) {
+      await db.query(`UPDATE bhao_conversations SET status = 'closed', ended_at = $2 WHERE id = $1`, [conv.id, now]);
+      if (!start) carryCode = conv.item_id;
+      conv = null;
+    }
+
     let itemRow, state, action;
-    if (start) {
-      const code = start[1].toUpperCase();
+    if (start || carryCode) {
+      const code = start ? start[1].toUpperCase() : carryCode;
       itemRow = (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1 AND active`, [code])).rows[0];
       if (!itemRow) return { handled: false, reason: "unknown item " + code }; // the inbox sees it
       if (conv && conv.item_id !== code) {
@@ -110,6 +127,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         conv = (await db.query(
           `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at)
            VALUES ($1, $2, 'open', $3, $4, $5, $5) RETURNING *`, [phone, code, state, POLICY.version, now])).rows[0];
+        if (carryCode) action = undefined; // not a greeting: answer what she just wrote
       }
     }
     if (!conv) return { handled: false, reason: "no open bargain" };
@@ -120,7 +138,16 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     if (!saved.rowCount) return { handled: true, duplicate: true, conversationId: conv.id };
     const inboundId = saved.rows[0].id;
 
-    // anything Seth Ji had not said yet is now out of date
+    // Anything Seth Ji had not said yet is now out of date - but what it
+    // ANSWERED is not. A real seller hears "200" and "fazool baat mat karo"
+    // as one turn and answers both, so the decision that reply carried is
+    // kept (see `carried` below) and every message she has sent since he
+    // last spoke is handed to the voice together.
+    const waiting = (await db.query(
+      `SELECT decision, send_after FROM bhao_messages
+        WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'pending'
+          AND decision->>'kind' NOT IN ('accept_followup')
+        ORDER BY id DESC LIMIT 1`, [conv.id])).rows[0] || null;
     await db.query(`UPDATE bhao_messages SET send_status = 'superseded' WHERE conversation_id = $1 AND send_status = 'pending'`, [conv.id]);
 
     itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
@@ -133,8 +160,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       const named = q && q >= 1 && q <= item.maxQty ? q : null;
       if (amount == null) {
         // talking, or naming a quantity: no price moves; the quantity is
-        // remembered for her next offer ("5 lein" ... "1200")
-        action = { kind: "talk" };
+        // remembered for her next offer ("5 lein" ... "1200"). Seth Ji may
+        // repeat his CURRENT ask if she asks for it - never a lower one.
+        action = { kind: "talk", askPaisa: state.askPaisa };
         if (named) state = { ...state, pendingQty: named };
       } else {
         offerPaisa = amount;
@@ -144,17 +172,39 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         action = r.action;
       }
     }
+    // She only chatted after a price he had not answered yet: that price
+    // decision still needs saying (the engine already applied it), so the
+    // reply carries it, at its original pause - chatting never resets it.
+    let carried = null;
+    if (action.kind === "talk" && waiting && waiting.decision && !["talk", "open"].includes(waiting.decision.kind)) {
+      action = waiting.decision;
+      carried = new Date(waiting.send_after);
+    }
     const status = state.status === "accepted" ? "accepted" : state.status === "closed" ? "closed" : "open";
     await db.query(
       `UPDATE bhao_conversations SET state = $2, status = $3, last_inbound_at = $4,
               accepted_offer = $5, ended_at = CASE WHEN $3 = 'open' THEN NULL ELSE $4::timestamptz END
         WHERE id = $1`, [conv.id, state, status, now, status === "accepted" ? state.accepted : null]);
 
+    // Everything she has written since Seth Ji last actually spoke: answered
+    // together, in one reply, the way a person behind a counter would.
+    const lastSaid = (await db.query(
+      `SELECT COALESCE(MAX(id), 0) AS id FROM bhao_messages
+        WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'sent'`, [conv.id])).rows[0].id;
+    const unanswered = (await db.query(
+      `SELECT body FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2 ORDER BY id`,
+      [conv.id, lastSaid])).rows.map((r) => r.body);
+    if (offerPaisa == null && carried) {
+      // the carried decision answered an earlier amount: the voice may repeat it
+      for (const t of unanswered) { const a = readOffer(t); if (a != null) offerPaisa = a; }
+    }
     const latest = (await db.query(`SELECT * FROM competitor_price_latest WHERE item_id = $1`, [item.itemId])).rows;
-    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest,
+    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried,
+             unanswered: unanswered.length ? unanswered : [body],
              history: (await db.query(
-               `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND (direction = 'in' OR send_status = 'sent')
-                 ORDER BY id DESC LIMIT 8`, [conv.id])).rows.reverse() };
+               `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND id <= $2
+                   AND (direction = 'in' OR send_status = 'sent')
+                 ORDER BY id DESC LIMIT 8`, [conv.id, lastSaid])).rows.reverse() };
   });
   if (!step.handled || step.duplicate) return step;
 
@@ -163,7 +213,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
   const competitorFacts = PW.competitorFacts({ latest: step.latest, ourUnitPaisa: voiced, now }).facts;
   const said = await speak({
     decision: step.action, itemName: step.itemRow.name, qty: step.state.qty, offerPaisa: step.offerPaisa,
-    customerText: body, history: step.history.map((h) => ({ from: h.direction === "in" ? "baji" : "seth", text: h.body })),
+    customerText: step.unanswered.join("\n"), customerMessages: step.unanswered, history: step.history.map((h) => ({ from: h.direction === "in" ? "baji" : "seth", text: h.body })),
     groupSizes: step.item.groupTiers.map((t) => t.minQty), itemFacts: step.itemRow.facts || [],
     competitorFacts, stockLeft: step.itemRow.stock_left, env, fetchImpl,
   });
@@ -175,7 +225,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const newer = (await db.query(
       `SELECT 1 FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2`, [step.conversationId, step.inboundId])).rowCount;
     if (newer) return { handled: true, conversationId: step.conversationId, superseded: true };
-    const due = new Date(now.getTime() + seconds(step.action) * 1000);
+    const due = step.carried
+      ? new Date(Math.max(step.carried.getTime(), now.getTime() + 5000))
+      : new Date(now.getTime() + seconds(step.action) * 1000);
     await db.query(
       `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status)
        VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, 'pending')`,

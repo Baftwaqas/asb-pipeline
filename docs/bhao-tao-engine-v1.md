@@ -42,7 +42,7 @@ Prices are decided only by the engine, so the phrasing layer can't concede a pri
    - Step plan (35 / 25 / 20 / 15% of the gap, ±20%).
    - Settle band (25%) and when it starts (after round 4).
    - Settle at the last round (yes).
-   - Delays (20–90 s normal, 3–7 min lowball).
+   - Delays (20–90 s normal, **1–2 min lowball**: the founder's call on 7 Nov after the first live test; it was 3–7 min).
    - Offer validity (2 hours).
 3. **Honesty of angles.** "Running costs", "already tight" and "quality vs market" must be **true statements** when the phrasing layer words them. It must not invent competitor offers, fake stock limits or false "last piece" claims. That protects trust and keeps clear of misleading-sales complaints.
 
@@ -91,7 +91,8 @@ Off unless `BHAO_TAO_WHATSAPP=on` **and** migration 025 is applied. When it's of
 **Starting and continuing a bargain**
 - **Start:** the customer sends **`BHAO <ITEM-CODE>`**. The storefront's "Seth Ji se bhao karein" button will pre-fill this.
 - Seth Ji opens at the anchor price. Her later texts continue the bargain. Anything else she sends stays with the normal inbox, which shows every message in either case.
-- **Pacing:** Seth Ji's reply waits for the engine's pause (20–90 s, or 3–7 min after a lowball), then a 10-second sweep sends it. If she writes again before then, the pending reply is **superseded**, so she never gets an answer to something she has already moved past.
+- **Pacing:** Seth Ji's reply waits for the engine's pause (20–90 s, or 1–2 min after a lowball), then a 10-second sweep sends it. If she writes again before then, the pending reply is **superseded**, so she never gets an answer to something she has already moved past.
+- **One turn, like a person** (founder, 7 Nov): his reply answers **everything she has written since he last spoke**, every question and point, in one message. If she named a price and then only chatted ("200" … "fazool baat mat karo"), the price is still answered, at its original pause; chatting never drops it or restarts the clock. When she asks what it costs mid-chat, he may repeat his **current** ask, never a lower one.
 
 **Rules that protect the price**
 - **No reset by restarting:** a new bargain on the same item within 7 days continues from her last ask.

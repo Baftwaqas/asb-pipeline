@@ -87,7 +87,7 @@ function result(r, t0) {
   return out;
 }
 
-async function postMessage(body) {
+async function postMessage(body, { receipt = false } = {}) {
   const t0 = Date.now();
   if (!PHONE_NUMBER_ID || !WHATSAPP_TOKEN) {
     const msg = "PHONE_NUMBER_ID or WHATSAPP_TOKEN is not set";
@@ -134,6 +134,11 @@ async function postMessage(body) {
 
   if (res.status >= 200 && res.status < 300) {
     const wamid = data?.messages?.[0]?.id || null;
+    // A read receipt (markRead) is answered {"success": true}, never with a
+    // message id - that is its normal success, not an ambiguous send.
+    if (receipt && data?.success === true) {
+      return result({ outcome: "accepted", phase: "response", httpStatus: res.status, data }, t0);
+    }
     if (wamid) {
       console.log(`[wa] send OK ${wamid}`);
       return result({ outcome: "accepted", phase: "response", httpStatus: res.status, wamid, data }, t0);
@@ -292,7 +297,7 @@ async function markRead(wamid) {
     messaging_product: "whatsapp",
     status: "read",
     message_id: wamid,
-  });
+  }, { receipt: true });
   return { ok: r.ok };
 }
 

@@ -195,3 +195,62 @@ test("an over-offer on WhatsApp is charged only the ask", async () => {
   assert.deepEqual([c.accepted_offer.unitPaisa, c.accepted_offer.why], [180000, "offer_above_ask_extra_refused"]);
   assert.match((await outbox(p))[1].body, /Rs 2,000 nahi! Daam Rs 1,800/);
 });
+
+test("a lowball waits 1-2 minutes now (founder, 7 Nov), not 3-7", async () => {
+  assert.deepEqual(BW.POLICY.delaySeconds.lowball, [60, 120]);
+  const p = phone();
+  await say(p, "BHAO ASB-NG-POT-5L", 0);
+  const r = await say(p, "200", 100);
+  assert.equal(r.kind, "lowball_check");
+  const wait = (new Date(r.due) - at(100)) / 1000;
+  assert.ok(wait >= 60 && wait <= 120, String(wait));
+});
+
+test("'200' then 'fazool baat mat karo': one reply answers BOTH, still a lowball reply, at the original pause", async () => {
+  const seen = [];
+  const speak = async (args) => { seen.push(args); return { text: "Baji, mazaaq na karein.", source: "template", rejected: [] }; };
+  const p = phone();
+  await BW.onInbound(db, { phone: p, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: at(0), env: {}, speak });
+  await BW.sendDue(db, { sendText: async () => ({ ok: true, wamid: "w" + ++n }), now: at(600) });
+  const first = await BW.onInbound(db, { phone: p, text: "200", wamid: wamid(), now: at(700), env: {}, speak });
+  const second = await BW.onInbound(db, { phone: p, text: "Fazool baat mat kiya karo", wamid: wamid(), now: at(712), env: {}, speak });
+  assert.equal(first.kind, "lowball_check");
+  assert.equal(second.kind, "lowball_check", "the unanswered price is not dropped because she kept talking");
+  assert.equal(new Date(second.due).getTime(), new Date(first.due).getTime(), "chatting never resets the pause");
+  const last = seen.at(-1);
+  assert.deepEqual(last.customerMessages, ["200", "Fazool baat mat kiya karo"]);
+  assert.equal(last.offerPaisa, 20000);
+  assert.ok(!last.history.some((h) => h.text === "200"), "unanswered lines are not repeated as history");
+  const out = await outbox(p);
+  assert.deepEqual(out.map((o) => o.send_status), ["sent", "superseded", "pending"]);
+});
+
+test("two questions in one message reach the voice whole; when she asks the price he may repeat his ask", async () => {
+  const seen = [];
+  const speak = async (args) => { seen.push(args); return { text: "Ji baji.", source: "template", rejected: [] }; };
+  const p = phone();
+  await BW.onInbound(db, { phone: p, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: at(0), env: {}, speak });
+  await BW.sendDue(db, { sendText: async () => ({ ok: true, wamid: "w" + ++n }), now: at(600) });
+  const r = await BW.onInbound(db, { phone: p, text: "Kitne litre ki hai? Aur dhakkan saath hai?", wamid: wamid(), now: at(700), env: {}, speak });
+  assert.equal(r.kind, "talk");
+  assert.deepEqual(seen.at(-1).customerMessages, ["Kitne litre ki hai? Aur dhakkan saath hai?"]);
+  assert.equal(seen.at(-1).decision.askPaisa, 180000);
+});
+
+test("a bargain opened under an older policy carries on under the new one, at her last ask", async () => {
+  const p = phone();
+  await say(p, "BHAO ASB-NG-POT-5L", 0);
+  for (const [i, m] of ["900", "900", "1000", "1000"].entries()) await say(p, m, 100 + i * 100);
+  const old = await conv(p);
+  const lastAsk = Number(old.state.askPaisa);
+  await db.query(`UPDATE bhao_conversations SET policy_version = 'BHAO-DRAFT-1', state = jsonb_set(state, '{policyVersion}', '"BHAO-DRAFT-1"') WHERE id = $1`, [old.id]);
+  const r = await say(p, "1100", 1000);
+  assert.equal(r.handled, true);
+  const c = await conv(p);
+  assert.notEqual(c.id, old.id);
+  assert.equal(c.policy_version, BW.POLICY.version);
+  assert.ok(Number(c.state.askPaisa) <= lastAsk, "never back up to the anchor");
+  assert.notEqual(r.kind, "open", "her message is answered, not greeted");
+  assert.equal((await db.query(`SELECT status FROM bhao_conversations WHERE id = $1`, [old.id])).rows[0].status, "closed");
+});
+

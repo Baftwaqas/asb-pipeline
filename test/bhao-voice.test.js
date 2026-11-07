@@ -138,6 +138,30 @@ test("refuse, lowball, closed and talk may not name any number at all", () => {
   }
 });
 
+test("chatting: Seth Ji may repeat his CURRENT ask when she asks the price - never a lower one", () => {
+  const d = { kind: "talk", askPaisa: 180000 };
+  assert.equal(V.checkReply("Baji, abhi Rs 1,800 ki hai. Aap bolo, kitne mein lena hai?", { decision: d, qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Baji, aap ke liye Rs 1,700.", { decision: d, qty: 1 }).ok, false);
+  assert.equal(V.checkReply("Ji baji, boliye kitne mein chahiye?", { decision: d, qty: 1 }).ok, true, "saying no price is fine too");
+  assert.equal(V.checkReply("Baji Rs 1,800.", { decision: { kind: "talk" }, qty: 1 }).ok, false, "no ask passed in: no number");
+});
+
+test("several things asked at once: the prompt lists every message, and the reply gets more room", () => {
+  const msgs = ["200", "Fazool baat mat kiya karo", "aur yeh steel kaunsa hai? dhakkan bhi hai?"];
+  const { user, system } = V.buildPrompt({ decision: { kind: "lowball_check" }, itemName: "Degchi", qty: 1,
+    customerMessages: msgs, history: [], itemFacts: ["mota steel", "dhakkan ke saath"] });
+  for (const m of msgs) assert.ok(user.includes(JSON.stringify(m)), m);
+  assert.match(user, /answer all of them together/);
+  assert.match(system, /answer EVERY question/);
+  assert.match(system, /haath garam/, "the confusing idiom from the first live test is named and banned");
+  assert.equal(V.maxLengthFor(["kitne ki hai? aur kitne litre?"]), 320);
+  assert.equal(V.maxLengthFor(["900"]), 220);
+  const long = "Baji, " + "mota steel hai aur dhakkan bhi saath hai, ".repeat(6).trim();
+  assert.ok(long.length > 220 && long.length <= 320);
+  assert.equal(V.checkReply(long, { decision: { kind: "talk" }, qty: 1, maxLength: 320 }).ok, true);
+  assert.equal(V.checkReply(long, { decision: { kind: "talk" }, qty: 1 }).ok, false);
+});
+
 test("no invented scarcity, competitors, links, phone numbers, labels or long essays", () => {
   const d = counter(154000);
   const bad = [

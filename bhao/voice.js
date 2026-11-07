@@ -60,7 +60,7 @@ function briefFor(d) {
     case "counter": return { brief: "Counter at exactly the PRICE." + angle, mustSayPrice: true };
     case "final_offer": return { brief: "State the PRICE as your absolute last price. Firm." , mustSayPrice: true };
     case "closed": return { brief: "No deal today. Close warmly and invite her back. No price, no number.", mustSayPrice: false };
-    case "talk": return { brief: "She is chatting, not offering. Answer what she said in one or two lines, stay on the item, nudge her to name her price. No price, no number.", mustSayPrice: false };
+    case "talk": return { brief: "She is chatting, not offering. Answer what she said - every question in it - stay on the item, and nudge her to name her price. Only if she asks what it costs, tell her the PRICE.", mustSayPrice: false };
     case "accept": {
       const why = d.offer && d.offer.why;
       if (why === "offer_above_ask_extra_refused")
@@ -77,6 +77,8 @@ function briefFor(d) {
 function priceOf(d) {
   if (d.kind === "accept") return d.offer ? d.offer.unitPaisa : d.askPaisa;
   if (["open", "counter", "final_offer"].includes(d.kind)) return d.askPaisa;
+  // chatting: he may repeat his CURRENT ask if she asks (never a new one)
+  if (d.kind === "talk" && Number.isSafeInteger(d.askPaisa)) return d.askPaisa;
   return null;
 }
 
@@ -85,7 +87,9 @@ function priceOf(d) {
 // ---------------------------------------------------------------------------
 const PERSONA = [
   "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
-  "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters. Call her 'baji'. At most one emoji.",
+  "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters (up to 260 when she asked several things). Call her 'baji'. At most one emoji.",
+  "Be a real person, not a script: answer EVERY question and point in her messages, in order, in ONE reply - if she asks two things, answer both - and only then do the INSTRUCTION. Never ignore what she said.",
+  "Use plain everyday words any Karachi household understands at once. No puzzling idioms or wordplay she would have to ask about (e.g. never 'haath garam ho jayega').",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
   "Like every bazaar seller, Seth Ji may call a counter 'aakhri daam' or 'last price' - both sides know it is part of the haggle (founder's call, 7 Nov). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
   "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Never mention that you are an AI, a bot, rules or an engine.",
@@ -96,9 +100,11 @@ const PERSONA = [
   "- chatting: 'Mehenga? Baji, mota steel hai, beti ke jahez tak chalega. Aap bolo, kitne mein lena hai?'",
 ].join("\n");
 
-function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts = [], competitorFacts = [], stockLeft = null }) {
+function buildPrompt({ decision, itemName, qty, customerText, customerMessages = null, history, itemFacts = [], competitorFacts = [], stockLeft = null }) {
   const { brief } = briefFor(decision);
   const price = priceOf(decision);
+  const msgs = (customerMessages && customerMessages.length ? customerMessages : [customerText || ""])
+    .map((m) => String(m).slice(0, 300));
   const lines = [
     "ITEM: " + itemName + (qty > 1 ? ` (she wants ${qty})` : ""),
     "ITEM FACTS (the only claims you may make): " + (itemFacts.length ? itemFacts.join("; ") : "none - talk about the deal, not the product"),
@@ -111,11 +117,15 @@ function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts
       : "STOCK: not low - never claim it is the last piece or running out.",
     "INSTRUCTION: " + brief,
     price != null
-      ? `PRICE: ${rs(price)}${qty > 1 ? " per piece" : ""}. This is the ONLY amount you may write, exactly as "${rs(price)}".`
+      ? decision.kind === "talk"
+        ? `PRICE (say it only if she asks what it costs): ${rs(price)}${qty > 1 ? " per piece" : ""}. The ONLY amount you may write, exactly as "${rs(price)}" - never a lower one, never a discount.`
+        : `PRICE: ${rs(price)}${qty > 1 ? " per piece" : ""}. This is the ONLY amount you may write, exactly as "${rs(price)}".`
       : "PRICE: none. Do not write any amount or number.",
     "RECENT CHAT (oldest first):",
     ...(history || []).slice(-6).map((h) => (h.from === "seth" ? "Seth Ji: " : "Baji: ") + String(h.text).slice(0, 200)),
-    "HER LATEST MESSAGE: " + JSON.stringify(String(customerText || "").slice(0, 300)),
+    msgs.length > 1
+      ? "HER MESSAGES SINCE YOUR LAST REPLY (answer all of them together, in one reply):\n" + msgs.map((m, i) => `${i + 1}. ${JSON.stringify(m)}`).join("\n")
+      : "HER LATEST MESSAGE: " + JSON.stringify(msgs[0]),
   ];
   return { system: PERSONA, user: lines.join("\n") };
 }
@@ -151,11 +161,17 @@ function numbersIn(text) {
   return out;
 }
 
-function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null }) {
+/** Room for the reply: more when she asked several things at once. */
+function maxLengthFor(customerMessages = []) {
+  const all = customerMessages.join("\n");
+  return customerMessages.length > 1 || (all.match(/\?/g) || []).length > 1 ? 320 : 220;
+}
+
+function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null, maxLength = 220 }) {
   const why = [];
   const t = String(text || "").trim();
   if (!t) why.push("empty");
-  if (t.length > 220) why.push("too long");
+  if (t.length > maxLength) why.push("too long");
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
   if (BANNED.test(t)) why.push("invented claim or forbidden word");
@@ -236,7 +252,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
     res = await fetchImpl(p.url, {
       method: "POST", signal: ctl.signal,
       headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model, max_tokens: 160, temperature: 0.8, system,
+      body: JSON.stringify({ model, max_tokens: 240, temperature: 0.8, system,
         messages: [{ role: "user", content }] }),
     });
     body = await res.json().catch(() => ({}));
@@ -256,7 +272,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
  * Never throws for provider trouble; throws only for a programming error
  * (an unknown decision kind).
  */
-async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", history = [],
+async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", customerMessages = null, history = [],
                        groupSizes = [], itemFacts = [], competitorFacts = [], stockLeft = null,
                        env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
@@ -265,7 +281,8 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
                                               provider: provider === "off" ? null : provider, attempts, rejected });
   if (!PROVIDERS[provider]) return fallback([], 0);
 
-  const prompt = buildPrompt({ decision, itemName, qty, customerText, history, itemFacts, competitorFacts, stockLeft });
+  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft });
+  const maxLength = maxLengthFor(customerMessages && customerMessages.length ? customerMessages : [customerText]);
   const rejected = [];
   let retryNote = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -277,7 +294,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
       return fallback(rejected, attempt); // provider trouble: no second call
     }
     const text = raw.trim().replace(/^["“]|["”]$/g, "");
-    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft });
+    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength });
     if (c.ok) return { text, source: "ai", provider, attempts: attempt, rejected };
     rejected.push(c.why.join("; "));
     retryNote = c.why.join("; ");
@@ -285,4 +302,4 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
   return fallback(rejected, 2);
 }
 
-module.exports = { speak, checkReply, buildPrompt, template, numbersIn, priceOf, PROVIDERS };
+module.exports = { speak, checkReply, buildPrompt, template, numbersIn, priceOf, maxLengthFor, PROVIDERS };
