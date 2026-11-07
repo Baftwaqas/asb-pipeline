@@ -49,3 +49,14 @@ All six variants exist in Shopify with synthetic `ASB-LAB-*` SKUs. The unsigned 
 Once migration 025 is applied **only to** the isolated `asb_checkout_lab_pg18` database, inspect with read-only `scripts/lab-readiness-v1.js`. The expected current result is **0 reviewed, 0 active, 0 staged**. Never enable `ASB_LAB_ONE_SHOT_RUN` to test policy activation.
 
 Do not merge PR #10 or PR #27, publish draft products or change production until remaining approval and rollout safeguards are independently reviewed.
+
+## Verified isolated live-lab evidence (7 November 2026)
+
+- At the start of this step the three Checkout Lab synthetic Shopify products were independently confirmed **DRAFT** with six exact variant sizes; the approved policy importer correctly **refuses** DRAFT products.
+- Ran the dedicated development Render service against the independently verified isolated PostgreSQL resource `dpg-dbm8v3qjnfac738pc31g-a` (database `asb_checkout_lab_pg18`) with **order creation disabled**. Migration `025_apna_activation_review.sql` applied successfully; this brought the isolated schema to **18 recorded migrations**.
+- Read-only `lab-readiness` probe output: `APNA_POLICY_STAGING_READY releases=0 active=0`, `APNA_DUAL_CONTROL_READY reviewed=0 active=0`, and `SHOPIFY_APP_TOKEN_OK`. There are **no activated or staged founder policies**.
+- Independent offline Shopify Dev app read-only `lab-catalog` probe read the exact three products and six variant pack sizes, returned `BLOCKED_DRAFT_OR_INACTIVE_PRODUCTS`, `shopifyOrdersCreated=0`, `policyReleasesActivated=0`.
+- Reverted `ASB_LAB_MIGRATE_ONCE`, `ASB_LAB_ONE_SHOT_RUN`, `ASB_LAB_READONLY_PROBE`, `ASB_LAB_AUDIT_READONLY`, and `ASB_LAB_CATALOG_AUDIT` to **disabled**. The locked health server remained live.
+- Independently verified Shopify still has **exactly one** synthetic `test=true` order **#1001**, `PENDING` PKR 1,556, and exactly **three** synthetic products. No additional Shopify order resulted from this step.
+
+The activation service's staff authorization is currently an **injected, mandatory trusted callback**. Tests use synthetic staff sessions: it has **NOT** yet been connected to a real Shopify online staff identity or admin screen. Never interpret this proof as real founder approval, product publication or readiness to merge.
