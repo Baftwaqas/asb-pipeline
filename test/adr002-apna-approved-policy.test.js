@@ -59,7 +59,7 @@ const IDENTITY={serverAuthenticated:true,phoneVerified:true,
 const CYCLE="MON-2026-11-09";
 const q=(lines)=>({
   customerReference:IDENTITY.householdKey,cycleCode:CYCLE,
-  currency:"PKR",lines
+  currency:"PKR",apnaPolicyVersion:verify().policyVersion,lines
 });
 function verify(options={}){
   return verifyApprovedApnaRelease(sign(),{
@@ -158,7 +158,13 @@ test("G3: transaction-gated callback refuses if any other door or history gate i
   const build=(other,history={authoritative:true,lines:[]})=>
     createReleasedApnaCheckoutVerifier({
       expectedShop:SHOP,signingKey:SECRET,now:()=>NOW,
-      loadSignedReleaseInTransaction:async()=>sign(),
+      loadSignedReleaseInTransaction:async()=>({
+        state:"active",envelope:sign(),
+        verifiedAt:"2026-11-07T07:05:00.000Z",
+        activatedAt:"2026-11-07T07:06:00.000Z",
+        activatedBy:"42",effectiveDeliveryDate:"2026-11-09",
+        policyVersion:verify().policyVersion
+      }),
       loadVariantBindingsInTransaction:async()=>bindings,
       loadExistingCycleLinesInTransaction:async()=>history,
       verifyOtherDoorsInTransaction:async()=>other
