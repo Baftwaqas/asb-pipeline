@@ -9,6 +9,9 @@
 //
 //   BHAO_VOICE_PROVIDER=xai XAI_API_KEY=... XAI_MODEL=... node scripts/bhao-voice-try.js
 //   node scripts/bhao-voice-try.js 900 "itna mehenga kyun?" 1100 2000
+//   node scripts/bhao-voice-try.js --daraz https://www.daraz.pk/products/...html 900 1100
+//     (reads that Daraz page live in a headless browser first; Seth Ji may
+//      then quote it, but only while it is higher than his current ask)
 //
 // Each argument is one customer message; a message with an amount is an
 // offer, anything else is chat.
@@ -35,11 +38,29 @@ function amount(text) {
 }
 
 async function main() {
-  const msgs = process.argv.slice(2).length ? process.argv.slice(2) : ["500", "900 mein de do", "itna mehenga kyun?", "1000", "1100", "Rs 2,000"];
+  let args = process.argv.slice(2);
+  let daraz = null;
+  const di = args.indexOf("--daraz");
+  if (di >= 0) {
+    const url = args[di + 1];
+    args = args.filter((_, i) => i !== di && i !== di + 1);
+    const PW = require("../bhao/price-watch");
+    const { chromium } = require("playwright");
+    const browser = await chromium.launch();
+    try { daraz = await PW.checkWatchRendered({ url }, { browser, fetchImpl: fetch }); } finally { await browser.close(); }
+    console.log(`DARAZ CHECK: ${daraz.status}${daraz.pricePaisa ? "  Rs " + daraz.pricePaisa / 100 : ""}${daraz.via ? "  (" + daraz.via + ")" : ""}\n`);
+  }
+  const msgs = args.length ? args : ["500", "900 mein de do", "itna mehenga kyun?", "1000", "1100", "Rs 2,000"];
   const history = [];
   let { state, action } = B.open({ conversationId: "TRY-" + Date.now(), item: ITEM, qty: 1, policy: POLICY, seed: String(Date.now()) });
   const line = async (decision, customerText, offerPaisa) => {
-    const r = await V.speak({ decision, itemName: "Steel ki Degchi 5 litre", qty: state.qty, offerPaisa, customerText,
+    // competitor facts exactly as production computes them: fresh, OK, higher than the current ask
+    const ask = decision.askPaisa || (decision.offer && decision.offer.unitPaisa) || state.askPaisa;
+    const competitorFacts = daraz && daraz.status === "ok"
+      ? require("../bhao/price-watch").competitorFacts({ now: new Date(), ourUnitPaisa: ask,
+          latest: [{ marketplace: "daraz", url: "live", active: true, status: "ok", price_paisa: daraz.pricePaisa, checked_at: new Date().toISOString() }] }).facts
+      : [];
+    const r = await V.speak({ competitorFacts, decision, itemName: "Steel ki Degchi 5 litre", qty: state.qty, offerPaisa, customerText,
                               history, groupSizes: [5],
                               // DEMO facts. Real items carry founder-approved facts from the catalogue.
                               itemFacts: ["5 litre", "mota steel (thick steel)", "dhakkan ke saath (comes with a lid)"] });

@@ -87,7 +87,7 @@ const PERSONA = [
   "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
   "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters. Call her 'baji'. At most one emoji.",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
-  "Like every bazaar seller, Seth Ji may call a counter 'aakhri daam' or 'last price' - both sides know it is part of the haggle (founder's call, 7 Nov). He never invents scarcity ('last piece', 'stock khatam') or competitors.",
+  "Like every bazaar seller, Seth Ji may call a counter 'aakhri daam' or 'last price' - both sides know it is part of the haggle (founder's call, 7 Nov). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
   "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Never mention that you are an AI, a bot, rules or an engine.",
   "How Seth Ji sounds (style only, never copy these prices):",
   "- refusing: 'Arre baji, is pe toh mera nuqsan ho jayega. Maal haath mein le ke dekhein, phir baat karein.'",
@@ -96,12 +96,19 @@ const PERSONA = [
   "- chatting: 'Mehenga? Baji, mota steel hai, beti ke jahez tak chalega. Aap bolo, kitne mein lena hai?'",
 ].join("\n");
 
-function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts = [] }) {
+function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts = [], competitorFacts = [], stockLeft = null }) {
   const { brief } = briefFor(decision);
   const price = priceOf(decision);
   const lines = [
     "ITEM: " + itemName + (qty > 1 ? ` (she wants ${qty})` : ""),
     "ITEM FACTS (the only claims you may make): " + (itemFacts.length ? itemFacts.join("; ") : "none - talk about the deal, not the product"),
+    competitorFacts.length
+      ? "CHECKED COMPETITOR PRICES (one listing each, which you yourself looked at; you MAY use one for drama, quoting it exactly, ALWAYS as 'maine Daraz pe dekhi, Rs X ki thi' (a listing you saw, never 'Daraz pe milti hai') - never claim it is the cheapest there or that you are the cheapest anywhere): " +
+        competitorFacts.map((f) => `${f.marketplace[0].toUpperCase() + f.marketplace.slice(1)} ${rs(f.pricePaisa)}`).join("; ")
+      : "CHECKED COMPETITOR PRICES: none - do not mention any other shop or website.",
+    Number.isSafeInteger(stockLeft) && stockLeft > 0 && stockLeft <= STOCK_CLAIM_MAX
+      ? `STOCK: only ${stockLeft} left - you MAY say so (e.g. 'bas ${stockLeft} bachi hain').`
+      : "STOCK: not low - never claim it is the last piece or running out.",
     "INSTRUCTION: " + brief,
     price != null
       ? `PRICE: ${rs(price)}${qty > 1 ? " per piece" : ""}. This is the ONLY amount you may write, exactly as "${rs(price)}".`
@@ -116,7 +123,14 @@ function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts
 // ---------------------------------------------------------------------------
 // The check every reply must pass.
 // ---------------------------------------------------------------------------
-const BANNED = /\b(daraz|olx|amazon|alibaba|competitor|last piece|aakhri piece|stock khatam|sirf aaj|offer khatam|chatbot|bot|artificial intelligence|language model|algorithm)\b/i;
+// Always banned: fake deadlines, and anything that breaks Seth Ji's character.
+// "sab se sasta" / "cheapest" is a claim about EVERY seller, which no check
+// of a few listings can prove: never, in either direction.
+const BANNED = /\b(sirf aaj|aaj hi|offer khatam|chatbot|bot|artificial intelligence|language model|algorithm|sab se sast[ai]|sabse sast[ai]|cheapest|lowest price)\b/i;
+// Allowed ONLY when backed by data passed in (competitorFacts / stockLeft).
+const MARKETPLACES = /\b(daraz|olx|amazon|alibaba|aliexpress|shophive|telemart|priceoye|temu|competitor)\b/gi;
+const SCARCITY = /\b(last piece|aakhri piece|akhri piece|stock khatam|khatam ho raha|bas \d+ (?:bach|reh)|sirf \d+ (?:bach|reh)|\d+ hi (?:bach|reh))/i;
+const STOCK_CLAIM_MAX = 3;
 
 /** Every amount the reply mentions, as whole rupees: "Rs 1,800", "1800", "1.8k", "2 lakh". */
 function numbersIn(text) {
@@ -127,10 +141,17 @@ function numbersIn(text) {
     const unit = (m[2] || "").toLowerCase();
     out.push(unit === "lakh" || unit === "lac" ? n * 100000 : unit ? n * 1000 : n);
   }
+  // Counts said in words. Groq's first live run promised "do-teen le lo to
+  // aakhri daam kam kar dunga" - a 2-3 piece discount the engine never gave.
+  // "do" alone is also a verb ("de do"), so it counts only beside another
+  // count word ("do-teen", "do ya teen").
+  const W = { teen: 3, chaar: 4, char: 4, paanch: 5, panch: 5, chhe: 6, chay: 6, saat: 7, aath: 8, nau: 9, das: 10, darjan: 12, dozen: 12 };
+  for (const m of t.matchAll(/\b(teen|chaar|char|paanch|panch|chhe|chay|saat|aath|nau|das|darjan|dozen)\b/gi)) out.push(W[m[1].toLowerCase()]);
+  if (/\bdo\s*(?:[-‑–]|ya|se|ya phir)\s*(?:teen|chaar|char)\b/i.test(t)) out.push(2);
   return out;
 }
 
-function checkReply(text, { decision, qty, offerPaisa, groupSizes = [] }) {
+function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null }) {
   const why = [];
   const t = String(text || "").trim();
   if (!t) why.push("empty");
@@ -138,10 +159,22 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [] }) {
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
   if (BANNED.test(t)) why.push("invented claim or forbidden word");
+  const backed = new Set(competitorFacts.map((f) => String(f.marketplace).toLowerCase()));
+  let named = false;
+  for (const m of t.matchAll(MARKETPLACES)) { named = true; if (!backed.has(m[1].toLowerCase())) why.push("unbacked competitor: " + m[1]); }
+  // Founder's call, 7 Nov: always "maine dekhi/dekha", a listing he saw -
+  // never a general fact about the marketplace ("Daraz pe milti hai").
+  if (named && !/\bdekh(i|a|ee)\b/i.test(t)) why.push("competitor price must be said as 'maine dekhi'");
+  const stockClaimOk = Number.isSafeInteger(stockLeft) && stockLeft > 0 && stockLeft <= STOCK_CLAIM_MAX;
+  if (SCARCITY.test(t) && !stockClaimOk) why.push("unbacked scarcity");
+  if (stockClaimOk) for (const m of t.matchAll(/(\d+)\s*(?:hi\s*)?(?:bach|reh)/gi))
+    if (Number(m[1]) !== stockLeft) why.push("wrong stock count: " + m[1]);
   const price = priceOf(decision);
   const allowed = new Set([1, qty, ...groupSizes]);
   if (price != null) allowed.add(price / 100);
   if (offerPaisa != null) allowed.add(offerPaisa / 100);
+  for (const f of competitorFacts) allowed.add(f.pricePaisa / 100);
+  if (stockClaimOk) allowed.add(stockLeft);
   for (const n of numbersIn(t)) if (!allowed.has(n)) why.push("number not allowed: " + n);
   if (briefFor(decision).mustSayPrice && !numbersIn(t).includes(price / 100)) why.push("price not stated");
   return { ok: why.length === 0, why };
@@ -224,14 +257,15 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
  * (an unknown decision kind).
  */
 async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", history = [],
-                       groupSizes = [], itemFacts = [], env = process.env, fetchImpl = fetch, pick }) {
+                       groupSizes = [], itemFacts = [], competitorFacts = [], stockLeft = null,
+                       env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
   const provider = String(env.BHAO_VOICE_PROVIDER || "off").toLowerCase();
   const fallback = (rejected, attempts) => ({ text: template(decision, { offerPaisa, pick }), source: "template",
                                               provider: provider === "off" ? null : provider, attempts, rejected });
   if (!PROVIDERS[provider]) return fallback([], 0);
 
-  const prompt = buildPrompt({ decision, itemName, qty, customerText, history, itemFacts });
+  const prompt = buildPrompt({ decision, itemName, qty, customerText, history, itemFacts, competitorFacts, stockLeft });
   const rejected = [];
   let retryNote = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -243,7 +277,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
       return fallback(rejected, attempt); // provider trouble: no second call
     }
     const text = raw.trim().replace(/^["“]|["”]$/g, "");
-    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes });
+    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft });
     if (c.ok) return { text, source: "ai", provider, attempts: attempt, rejected };
     rejected.push(c.why.join("; "));
     retryNote = c.why.join("; ");

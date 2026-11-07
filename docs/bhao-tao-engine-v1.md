@@ -65,8 +65,29 @@ The voice turns one engine decision into one WhatsApp line in Roman Urdu, using 
   - `BHAO_VOICE_TIMEOUT_MS` (default 8000)
 - **To try it:** run `node scripts/bhao-voice-try.js 900 "itna mehenga kyun?" 1100 2000`. It plays one conversation and shows, for each line, whether it came from the AI or a pre-written line, and why any AI reply was rejected. It touches no database and sends no WhatsApp message.
 
+## Competitor price watch (migration 024, `bhao/price-watch.js`)
+
+The founder's decision of 7 Nov: Seth Ji may use competitor prices for drama, but he must never bluff.
+
+**Setup and the daily check**
+- **One-time setup.** A person adds each competitor product page they have **confirmed is the same item**, and their name is recorded:
+  `node scripts/price-watch-run.js --add ITEM daraz <product url> --by NAME`
+  Search and catalogue pages are refused.
+- **Daily check, automatic.** `node scripts/price-watch-run.js --check` (for example as a Render Cron Job) reads only those product pages, one at a time, a few seconds apart, as `ASB-PriceCheck/1.0`.
+  - It obeys the site's robots.txt. Daraz's allows product pages and blocks catalogue and search pages.
+  - It reads the price only from the page's structured data. Two different prices on one page count as unreadable, never a guess.
+  - Every outcome is stored, append-only: ok, unavailable, blocked, HTTP error or unreadable. A blocked page is recorded and never worked around.
+
+**What Seth Ji may say**
+- Seth Ji may quote a marketplace only from an **OK check less than 48 hours old** that is **higher than his current ask**, and only that exact number.
+- If any listing on that marketplace is at or below our price, he never quotes that marketplace; instead the founder gets an alert.
+- "Bas 2 bachi hain" or "last piece" are allowed only when the real stock count passed in is 3 or fewer, and the number must match.
+- Fake deadlines ("sirf aaj", "offer khatam") are always blocked.
+
 ## Not in this PR
 
 - Storing conversation state, with one conversation per household, item and cycle, so a customer can't restart to reset the ask.
 - The WhatsApp route that calls `speak()` for a live chat and stores the conversation.
 - Bhao Tao products in Shopify: `bhao_tao_enabled` already exists as a Product Master metafield.
+- Passing live stock counts and `competitorFacts` from the WhatsApp route into `speak()`.
+- The founder alert channel for "a competitor is cheaper than us" (it is returned today as `alerts`).
