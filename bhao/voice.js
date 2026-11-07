@@ -103,7 +103,7 @@ function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts
     "ITEM: " + itemName + (qty > 1 ? ` (she wants ${qty})` : ""),
     "ITEM FACTS (the only claims you may make): " + (itemFacts.length ? itemFacts.join("; ") : "none - talk about the deal, not the product"),
     competitorFacts.length
-      ? "CHECKED COMPETITOR PRICES (you MAY use one for drama, quoting it exactly): " +
+      ? "CHECKED COMPETITOR PRICES (one listing each, which you yourself looked at; you MAY use one for drama, quoting it exactly, as 'maine Daraz pe dekhi, Rs X ki thi' - never claim it is the cheapest there or that you are the cheapest anywhere): " +
         competitorFacts.map((f) => `${f.marketplace[0].toUpperCase() + f.marketplace.slice(1)} ${rs(f.pricePaisa)}`).join("; ")
       : "CHECKED COMPETITOR PRICES: none - do not mention any other shop or website.",
     Number.isSafeInteger(stockLeft) && stockLeft > 0 && stockLeft <= STOCK_CLAIM_MAX
@@ -124,7 +124,9 @@ function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts
 // The check every reply must pass.
 // ---------------------------------------------------------------------------
 // Always banned: fake deadlines, and anything that breaks Seth Ji's character.
-const BANNED = /\b(sirf aaj|aaj hi|offer khatam|chatbot|bot|artificial intelligence|language model|algorithm)\b/i;
+// "sab se sasta" / "cheapest" is a claim about EVERY seller, which no check
+// of a few listings can prove: never, in either direction.
+const BANNED = /\b(sirf aaj|aaj hi|offer khatam|chatbot|bot|artificial intelligence|language model|algorithm|sab se sast[ai]|sabse sast[ai]|cheapest|lowest price)\b/i;
 // Allowed ONLY when backed by data passed in (competitorFacts / stockLeft).
 const MARKETPLACES = /\b(daraz|olx|amazon|alibaba|aliexpress|shophive|telemart|priceoye|temu|competitor)\b/gi;
 const SCARCITY = /\b(last piece|aakhri piece|akhri piece|stock khatam|khatam ho raha|bas \d+ (?:bach|reh)|sirf \d+ (?:bach|reh)|\d+ hi (?:bach|reh))/i;

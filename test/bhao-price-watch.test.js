@@ -109,6 +109,9 @@ test("Seth Ji may quote Daraz only with a checked price, and only that number", 
   assert.equal(V.checkReply(good, { decision: d, qty: 1 }).ok, false, "no checked price -> no Daraz");
   assert.equal(V.checkReply("Baji, Daraz pe Rs 2,900 hai, main Rs 1,540 de raha hoon", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
   assert.equal(V.checkReply("Baji, OLX pe Rs 2,350 hai, main Rs 1,540", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
+  // a claim about every seller cannot be proven by a few checked listings
+  assert.equal(V.checkReply("Baji, Daraz pe sab se sasti Rs 2,350 hai, main Rs 1,540", { decision: d, qty: 1, competitorFacts: facts }).ok, false);
+  assert.equal(V.checkReply("Baji, maine Daraz pe dekhi, Rs 2,350 ki thi. Main Rs 1,540 de raha hoon", { decision: d, qty: 1, competitorFacts: facts }).ok, true);
   const p = V.buildPrompt({ decision: d, itemName: "Degchi", qty: 1, competitorFacts: facts });
   assert.match(p.user, /CHECKED COMPETITOR PRICES .*Daraz Rs 2,350/);
   assert.match(V.buildPrompt({ decision: d, itemName: "Degchi", qty: 1 }).user, /do not mention any other shop/);
