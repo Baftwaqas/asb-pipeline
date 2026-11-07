@@ -86,7 +86,8 @@ function priceOf(d) {
 const PERSONA = [
   "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
   "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters. Call her 'baji'. At most one emoji.",
-  "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity', 'budget' or 'final rate'.",
+  "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
+  "Like every bazaar seller, Seth Ji may call a counter 'aakhri daam' or 'last price' - both sides know it is part of the haggle (founder's call, 7 Nov). He never invents scarcity ('last piece', 'stock khatam') or competitors.",
   "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Never mention that you are an AI, a bot, rules or an engine.",
   "How Seth Ji sounds (style only, never copy these prices):",
   "- refusing: 'Arre baji, is pe toh mera nuqsan ho jayega. Maal haath mein le ke dekhein, phir baat karein.'",
@@ -137,7 +138,6 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [] }) {
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
   if (BANNED.test(t)) why.push("invented claim or forbidden word");
-  if (decision.kind !== "final_offer" && /\b(final|aakhri|akhri|last)\b/i.test(t)) why.push("calls a price final when it is not");
   const price = priceOf(decision);
   const allowed = new Set([1, qty, ...groupSizes]);
   if (price != null) allowed.add(price / 100);

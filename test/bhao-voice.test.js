@@ -112,11 +112,13 @@ test("waqas case 2: 'Rs 200,000' is an amount, and any figure the reply makes up
   assert.equal(V.checkReply("Baji 100 degchiyan de doon? Degchi Rs 1,800 ki hai.", { decision: d, qty: 1, offerPaisa: 20000000 }).ok, false);
 });
 
-test("only a final offer may call itself final (Groq said 'final rate' on a counter in the live test)", () => {
-  assert.equal(V.checkReply("Baji, hamari degchi ka final rate Rs 1,540 hai.", { decision: counter(154000), qty: 1 }).ok, false);
-  assert.equal(V.checkReply("Bas baji, Rs 850, aakhri baat.", { decision: { kind: "final_offer", askPaisa: 85000 }, qty: 1 }).ok, true);
+test("'aakhri daam' on a counter is bazaar custom and allowed; invented scarcity is not (founder's call, 7 Nov)", () => {
+  assert.equal(V.checkReply("Baji, aakhri daam Rs 1,540, is se neeche nahi.", { decision: counter(154000), qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Baji last price Rs 1,540!", { decision: counter(154000), qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Baji last piece hai, Rs 1,540 le lo", { decision: counter(154000), qty: 1 }).ok, false);
   const p = V.buildPrompt({ decision: counter(154000), itemName: "Degchi", qty: 1, itemFacts: ["mota steel"] });
   assert.match(p.user, /ITEM FACTS \(the only claims you may make\): mota steel/);
+  assert.match(V.buildPrompt({ decision: counter(154000), itemName: "D", qty: 1 }).system, /aakhri daam/);
 });
 
 test("refuse, lowball, closed and talk may not name any number at all", () => {
