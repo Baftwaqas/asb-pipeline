@@ -43,4 +43,29 @@ CREATE TRIGGER checkout_apna_review_no_delete
 BEFORE DELETE ON checkout_apna_activation_reviews
 FOR EACH ROW EXECUTE FUNCTION checkout_apna_block_review_delete();
 
+-- No reviewer identity, signed catalogue digest, evidence or effective day
+-- can be changed after review. Only approved -> consumed is permitted during
+-- a committed activation transaction; no silent review replacement.
+CREATE FUNCTION checkout_apna_guard_review_update() RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.state <> 'approved' OR NEW.state <> 'consumed'
+     OR NEW.consumed_at IS NULL
+     OR NEW.release_id IS DISTINCT FROM OLD.release_id
+     OR NEW.shop_domain IS DISTINCT FROM OLD.shop_domain
+     OR NEW.reviewer_staff_id IS DISTINCT FROM OLD.reviewer_staff_id
+     OR NEW.source_approver_id IS DISTINCT FROM OLD.source_approver_id
+     OR NEW.effective_delivery_date IS DISTINCT FROM OLD.effective_delivery_date
+     OR NEW.bindings_sha256 IS DISTINCT FROM OLD.bindings_sha256
+     OR NEW.evidence_json IS DISTINCT FROM OLD.evidence_json
+     OR NEW.reviewed_at IS DISTINCT FROM OLD.reviewed_at THEN
+    RAISE EXCEPTION 'APNA_REVIEW_IMMUTABLE';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER checkout_apna_review_guard_update
+BEFORE UPDATE ON checkout_apna_activation_reviews
+FOR EACH ROW EXECUTE FUNCTION checkout_apna_guard_review_update();
+
 COMMIT;
