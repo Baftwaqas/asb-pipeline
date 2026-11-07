@@ -21,6 +21,12 @@
 // Off unless BHAO_TAO_WHATSAPP=on (server.js). Nothing here creates an order:
 // an accepted bargain is recorded and handed to the team to confirm.
 //
+// BHAO CARD (bhao/perks.js): why her price differs from someone else's,
+// shown to her when the bargain opens - her standing with ASB, the time of
+// day (bohni, closing time), and what would give her more room (advance
+// payment, self-pickup, neighbours together). Perks lower the opening price
+// and the floor a little (capped, never below cost); the haggle does the rest.
+//
 // AFTERCARE (migration 026): for a day after a deal, Seth Ji still answers
 // her. "Cancel kar do / nahi chahiye" cancels the accepted deal (kept as
 // evidence, status 'cancelled', logged for the team); anything else is
@@ -32,6 +38,7 @@
 const B = require("./engine");
 const V = require("./voice");
 const PW = require("./price-watch");
+const P = require("./perks");
 
 // DRAFT policy (test values from docs/bhao-tao-engine-v1.md). Founder decision
 // pending; the version is stamped on every conversation.
@@ -46,6 +53,8 @@ const POLICY = Object.freeze({
 const RESTART_MEMORY_DAYS = 7;
 const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
 const START = /^\s*bhao\s+([a-z0-9][a-z0-9-]{2,40})\b/i;
+// "Meri dost ne / padosan ko ... mein mili": she says someone else paid less.
+const CLAIM = /\b(?:dost|saheli|padosan|padosi|neighbou?r|behen|bhabhi|kisi\s+ne|us\s*ne|unhon\s*ne|mili|mila|li\s+(?:hai|thi)|liya)\b/i;
 // After a bargain ends with a deal, Seth Ji keeps answering her for this
 // long (migration 026): a question about the deal, or "cancel kar do".
 const AFTERCARE_HOURS = 24;
@@ -112,7 +121,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       conv = null;
     }
 
-    let itemRow, state, action;
+    let itemRow, state, action, card = null;
     if (start || carryCode) {
       const code = start ? start[1].toUpperCase() : carryCode;
       itemRow = (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1 AND active`, [code])).rows[0];
@@ -122,10 +131,14 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         conv = null;
       }
       if (!conv) {
-        const item = itemFor(itemRow);
+        // Her Bhao Card: standing with ASB and the time of day, as she walks in.
+        const perks = [...await P.perksAtOpen(db, { phone, now })];
+        perks.push(...P.perksFromText(body, perks));
+        const item = P.applyPerks(itemFor(itemRow), perks);
         const opened = B.open({ conversationId: `${phone}:${code}:${now.getTime()}`, item, qty: 1, policy: POLICY,
                                 seed: `${phone}:${code}:${now.toISOString()}` });
-        state = opened.state; action = opened.action;
+        state = { ...opened.state, perks, perksVersion: P.PERKS.version };
+        action = opened.action;
         // Restarting never resets the bargain: within 7 days she continues at
         // her last ask on this item (never lower, never back up to the anchor).
         const prev = (await db.query(
@@ -139,6 +152,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at)
            VALUES ($1, $2, 'open', $3, $4, $5, $5) RETURNING *`, [phone, code, state, POLICY.version, now])).rows[0];
         if (carryCode) action = undefined; // not a greeting: answer what she just wrote
+        else card = P.cardText(perks, { groupSizes: item.groupTiers.map((t) => t.minQty) });
       }
     }
     // No open bargain: if she made a deal (or cancelled one) in the last
@@ -171,12 +185,30 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const waiting = (await db.query(
       `SELECT decision, send_after FROM bhao_messages
         WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'pending'
-          AND decision->>'kind' NOT IN ('accept_followup')
+          AND decision->>'kind' NOT IN ('accept_followup', 'bhao_card')
         ORDER BY id DESC LIMIT 1`, [conv.id])).rows[0] || null;
-    await db.query(`UPDATE bhao_messages SET send_status = 'superseded' WHERE conversation_id = $1 AND send_status = 'pending'`, [conv.id]);
+    await db.query(
+      `UPDATE bhao_messages SET send_status = 'superseded' WHERE conversation_id = $1 AND send_status = 'pending'
+          AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card')`, [conv.id]);
 
     itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
-    const item = itemFor(itemRow);
+    let gained = [];
+    if (!aftercare && !action) {
+      // "advance de dungi", "khud le jaungi": a perk earned mid-bargain
+      gained = P.perksFromText(body, conv.state.perks || []);
+      if (gained.length) {
+        // a real seller drops the ask too: her current ask comes down by the
+        // extra room (capped), rounded to Rs 10, never below the new floor
+        const before = P.totalPct(conv.state.perks || []);
+        const perks = [...(conv.state.perks || []), ...gained];
+        const extra = P.totalPct(perks) - before;
+        const floorNow = P.applyPerks(itemFor(itemRow), perks).floorPaisa;
+        const ask = Number(conv.state.askPaisa);
+        const lowered = Math.max(floorNow, Math.ceil((ask * (1 - extra)) / P.PERKS.roundToPaisa) * P.PERKS.roundToPaisa);
+        conv.state = { ...conv.state, perks, askPaisa: Math.min(ask, lowered) };
+      }
+    }
+    const item = P.applyPerks(itemFor(itemRow), (state || conv.state).perks || []);
     let offerPaisa = null;
     if (aftercare) {
       // The deal is done (or was cancelled): no price moves any more.
@@ -200,7 +232,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         // talking, or naming a quantity: no price moves; the quantity is
         // remembered for her next offer ("5 lein" ... "1200"). Seth Ji may
         // repeat his CURRENT ask if she asks for it - never a lower one.
-        action = { kind: "talk", askPaisa: state.askPaisa };
+        action = { kind: "talk", askPaisa: state.askPaisa, ...(gained.length ? { perksGained: gained.map((g) => g.label) } : {}) };
         if (named) state = { ...state, pendingQty: named };
       } else {
         offerPaisa = amount;
@@ -208,6 +240,13 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         const r = B.offer(state, { item, policy: POLICY, pricePaisa: amount, qty, now });
         state = { ...r.state, pendingQty: undefined };
         action = r.action;
+        if (state.accepted) {
+          // advance / pickup are CONDITIONS of this price: the team checks them
+          const conditions = (state.perks || []).filter((p) => p.conditional).map((p) => p.key);
+          state.accepted = { ...state.accepted, conditions, perks: (state.perks || []).map((p) => p.key) };
+          action = { ...action, offer: state.accepted };
+        }
+        if (gained.length) action = { ...action, perksGained: gained.map((g) => g.label) };
       }
     }
     // She only chatted after a price he had not answered yet: that price
@@ -240,8 +279,18 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       // the carried decision answered an earlier amount: the voice may repeat it
       for (const t of unanswered) { const a = readOffer(t); if (a != null) offerPaisa = a; }
     }
+    // She says someone else paid less: check it against OUR records - never
+    // revealing who, or what anyone actually paid.
+    let claim = null;
+    const claimed = offerPaisa ?? readOffer(body);
+    if (claimed != null && CLAIM.test(body)) {
+      const low = (await db.query(
+        `SELECT min((accepted_offer->>'unitPaisa')::bigint) AS low FROM bhao_conversations
+          WHERE item_id = $1 AND status = 'accepted'`, [item.itemId])).rows[0].low;
+      claim = { claimedPaisa: claimed, neverSoldThatLow: low == null || claimed < Number(low) };
+    }
     const latest = (await db.query(`SELECT * FROM competitor_price_latest WHERE item_id = $1`, [item.itemId])).rows;
-    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried,
+    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried, card, claim,
              unanswered: unanswered.length ? unanswered : [body],
              history: (await db.query(
                `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND id <= $2
@@ -258,6 +307,10 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     customerText: step.unanswered.join("\n"), customerMessages: step.unanswered, history: step.history.map((h) => ({ from: h.direction === "in" ? "baji" : "seth", text: h.body })),
     groupSizes: step.item.groupTiers.map((t) => t.minQty), itemFacts: step.itemRow.facts || [],
     competitorFacts, stockLeft: step.itemRow.stock_left, env, fetchImpl,
+    perks: (step.state.perks || []).map((p) => p.label.replace(/\s*\(.*\)$/, "")),
+    morePerks: ["advance", "pickup"].filter((k) => !(step.state.perks || []).some((p) => p.key === k))
+      .map((k) => P.PERKS[k].label),
+    claim: step.claim,
   });
 
   // Queue the reply - unless she has written again meanwhile (that message
@@ -276,12 +329,22 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status)
        VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, 'pending')`,
       [step.conversationId, said.text, step.action, said.source, said.provider, JSON.stringify(said.rejected || []), due]);
+    if (step.card) {
+      await db.query(
+        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
+         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
+        [step.conversationId, step.card, { kind: "bhao_card", perks: (step.state.perks || []).map((p) => p.key) }, new Date(due.getTime() + 4000)]);
+    }
     if (step.action.kind === "accept" && step.state.accepted) {
       await db.query(
         `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
          VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
         [step.conversationId,
-         `✅ Sauda pakka: ${step.itemRow.name}, ${step.state.accepted.qty} × Rs ${(step.state.accepted.unitPaisa / 100).toLocaleString("en-US")}. Hamari team aap ko order confirm karne ke liye abhi message karegi.`,
+         `✅ Sauda pakka: ${step.itemRow.name}, ${step.state.accepted.qty} × Rs ${(step.state.accepted.unitPaisa / 100).toLocaleString("en-US")}.` +
+           ((step.state.accepted.conditions || []).length
+             ? ` Shart: ${step.state.accepted.conditions.map((k) => P.PERKS[k].label).join(", ")} - is ke baghair yeh daam nahi.`
+             : "") +
+           ` Hamari team aap ko order confirm karne ke liye abhi message karegi.`,
          { kind: "accept_followup", offerId: step.state.accepted.offerId }, new Date(due.getTime() + 5000)]);
     }
     return { handled: true, conversationId: step.conversationId, kind: step.action.kind, source: said.source, due };

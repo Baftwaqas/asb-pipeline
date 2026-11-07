@@ -30,7 +30,7 @@ after(async () => { if (db) await db.end(); });
 const say = (p, text, sec, extra = {}) => BW.onInbound(db, { phone: p, text, wamid: extra.wamid || wamid(), now: at(sec), env: {}, ...extra });
 const outbox = async (p) => (await db.query(
   `SELECT m.* FROM bhao_messages m JOIN bhao_conversations c ON c.id = m.conversation_id
-    WHERE c.phone = $1 AND m.direction = 'out' ORDER BY m.id`, [p])).rows;
+    WHERE c.phone = $1 AND m.direction = 'out' AND COALESCE(m.decision->>'kind', '') <> 'bhao_card' ORDER BY m.id`, [p])).rows;
 const conv = async (p) => (await db.query(`SELECT * FROM bhao_conversations WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [p])).rows[0];
 
 test("'BHAO <code>' opens a bargain at the anchor; Seth Ji's reply waits for its pause, then is sent and logged", async () => {
@@ -44,8 +44,11 @@ test("'BHAO <code>' opens a bargain at the anchor; Seth Ji's reply waits for its
   const sent = [], logged = [];
   const sendText = async (to, body) => { sent.push({ to, body }); return { ok: true, wamid: "wamid.OUT" + sent.length }; };
   assert.deepEqual(await BW.sendDue(db, { sendText, now: T0 }), { sent: 0, failed: 0 });
-  assert.deepEqual(await BW.sendDue(db, { sendText, now: at(600), logOutbound: async (x) => logged.push(x) }), { sent: 1, failed: 0 });
+  assert.deepEqual(await BW.sendDue(db, { sendText, now: at(600), logOutbound: async (x) => logged.push(x) }), { sent: 2, failed: 0 },
+    "the greeting, then her Bhao Card");
   assert.equal(sent[0].to, p);
+  assert.match(sent[0].body, /Rs 1,800/);
+  assert.match(sent[1].body, /Bhao Card/);
   assert.equal(logged[0].agent, "seth-ji");
   assert.equal((await outbox(p))[0].send_status, "sent");
   assert.deepEqual(await BW.sendDue(db, { sendText, now: at(600) }), { sent: 0, failed: 0 }, "never twice");

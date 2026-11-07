@@ -100,6 +100,32 @@ Off unless `BHAO_TAO_WHATSAPP=on` **and** migration 025 is applied. When it's of
 - **Quantity:** "5 lein" is remembered for her next price, so the bulk floor applies.
 - **Accepted:** Seth Ji's line, then *"✅ Sauda pakka … Hamari team aap ko order confirm karne ke liye abhi message karegi."* **No order is created automatically**: the team confirms it, until it's wired to Lane A's server order path.
 
+**The Bhao Card: why her price differs** (`bhao/perks.js`, founder 7 Nov)
+
+As at a real counter, no two customers get the same price, and the reason is shown to her. After Seth Ji's greeting she gets her card: what she already has, and what would give her more room. A perk gives Seth Ji **room**, not a fixed discount: it lowers the opening price and the floor a little, and the haggle still decides the rest.
+
+| Perk | When | Room (DRAFT) |
+|---|---|---|
+| Naye mehmaan 🙏 | no orders with ASB | 0 |
+| Kabhi kabhi aane wali | 1–3 orders in 90 days | 2% |
+| Regular customer 🌟 | badge `regular` or 4–9 orders | 4% |
+| Gold customer ⭐ | badge `gold` or 10+ orders | 6% |
+| Subah ki bohni 🌅 | the shop's first deal of the day, before 12:00 Karachi | 3% |
+| Dukaan band hone ka waqt 🌙 | after 21:00 Karachi | 2% |
+| Advance payment 💵 | she says she'll pay first (JazzCash, Easypaisa, bank) | 3%, **a condition** |
+| Khud pickup 🛵 | she collects it herself | 2%, **a condition** |
+| 👥 Milke lein | more pieces: the group tiers | as approved |
+
+How the perks are applied:
+- **All perks together are capped at 10%.** Prices are rounded to Rs 10 and never go below cost.
+- **Mid-bargain perks:** "Advance de dungi" earns room then and there. Her current price drops by that room, and the perk is written into the deal as a **condition**: *"Shart: Advance payment, is ke baghair yeh daam nahi"*. The team checks it before confirming.
+- **What decides a perk:** only her history with ASB and the time of day. Never her area, name or anything about her means.
+
+**"Meri dost ko kam mein mili"** is checked against **our own records**:
+- If no one has ever bought that item from us at that price or lower, Seth Ji may say so kindly: "yeh hamari dukaan se itne mein kabhi nahi gayi".
+- If someone has, he admits that prices differ and explains why in general terms.
+- He never reveals who bought it or what they paid.
+
 **After the deal: aftercare** (migration 026, founder's live test, 7 Nov)
 - For 24 hours after a deal, Seth Ji still answers her, so he never goes silent after "Sauda pakka".
 - **"Cancel karo / nahi chahiye / mat bhejo / rehne do"** cancels the deal:

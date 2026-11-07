@@ -96,6 +96,7 @@ const PERSONA = [
   "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
   "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters (up to 260 when she asked several things). Call her 'baji'. At most one emoji.",
   "Be a real person, not a script: answer EVERY question and point in her messages, in order, in ONE reply - if she asks two things, answer both - and only then do the INSTRUCTION. Never ignore what she said.",
+  "If she says someone else got it cheaper from US, be honest: every sauda is different - her BHAO CARD (being a regular or gold customer, the morning bohni, advance payment, self-pickup, neighbours buying together, and how hard she bargained) decides her price. Never deny prices differ, never say everyone pays the same, never reveal who bought or what anyone paid. Use CLAIM CHECK when given.",
   "If she says she found it cheaper elsewhere, online, or that a friend paid less, never call her a liar and never match it on your own: answer it warmly (e.g. 'aap ne jo dekhi woh aur maal hoga baji') and stay with the INSTRUCTION. Never name another shop or website unless CHECKED COMPETITOR PRICES lists it.",
   "Use plain everyday words any Karachi household understands at once. No puzzling idioms or wordplay she would have to ask about (e.g. never 'haath garam ho jayega').",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
@@ -108,7 +109,8 @@ const PERSONA = [
   "- chatting: 'Mehenga? Baji, mota steel hai, beti ke jahez tak chalega. Aap bolo, kitne mein lena hai?'",
 ].join("\n");
 
-function buildPrompt({ decision, itemName, qty, customerText, customerMessages = null, history, itemFacts = [], competitorFacts = [], stockLeft = null }) {
+function buildPrompt({ decision, itemName, qty, customerText, customerMessages = null, history, itemFacts = [], competitorFacts = [], stockLeft = null,
+                       perks = [], morePerks = [], claim = null }) {
   const { brief } = briefFor(decision);
   const price = priceOf(decision);
   const msgs = (customerMessages && customerMessages.length ? customerMessages : [customerText || ""])
@@ -123,6 +125,15 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
     Number.isSafeInteger(stockLeft) && stockLeft > 0 && stockLeft <= STOCK_CLAIM_MAX
       ? `STOCK: only ${stockLeft} left - you MAY say so (e.g. 'bas ${stockLeft} bachi hain').`
       : "STOCK: not low - never claim it is the last piece or running out.",
+    perks.length ? "HER BHAO CARD (true; you may mention one naturally, e.g. 'aap toh purani customer hain'): " + perks.join("; ") : "HER BHAO CARD: nothing special yet.",
+    morePerks.length ? "WHAT WOULD GIVE HER MORE ROOM (true; you may suggest one when she pushes): " + morePerks.join("; ") : "",
+    decision.perksGained && decision.perksGained.length
+      ? "SHE JUST EARNED: " + decision.perksGained.join("; ") + " - acknowledge it warmly ('advance pe thori aur gunjaish ban jati hai'), as a condition of the deal, without naming a new price unless the INSTRUCTION gives one." : "",
+    claim
+      ? claim.neverSoldThatLow
+        ? `CLAIM CHECK: our records show this item has NEVER been sold by us at ${rs(claim.claimedPaisa)} or less. You may say so kindly ('yeh hamari dukaan se itne mein kabhi nahi gayi, shayad koi aur maal tha') - never call her a liar.`
+        : "CLAIM CHECK: some customers did get it lower, through their own Bhao Card and bargaining. Admit prices differ and explain why in general terms; never reveal who or what they paid; offer her the ways to more room."
+      : "",
     "INSTRUCTION: " + brief,
     price != null
       ? decision.kind === "talk"
@@ -135,7 +146,7 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
       ? "HER MESSAGES SINCE YOUR LAST REPLY (answer all of them together, in one reply):\n" + msgs.map((m, i) => `${i + 1}. ${JSON.stringify(m)}`).join("\n")
       : "HER LATEST MESSAGE: " + JSON.stringify(msgs[0]),
   ];
-  return { system: PERSONA, user: lines.join("\n") };
+  return { system: PERSONA, user: lines.filter(Boolean).join("\n") };
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +228,10 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
     case "counter": return pick([`Chalein baji, aap ke liye ${rs(p)}.`, `Kharche bohat hain, phir bhi ${rs(p)}.`]);
     case "final_offer": return pick([`Bas baji, ${rs(p)}. Is se neeche nahi hoga.`]);
     case "closed": return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
-    case "talk": return pick(["Ji baji, boliye, kitne mein chahiye?"]);
+    case "talk":
+      if (decision.perksGained && decision.perksGained.length)
+        return pick(["Theek hai baji, is pe thori aur gunjaish ban jati hai. Ab boliye, kitne mein lena hai?"]);
+      return pick(["Ji baji, boliye, kitne mein chahiye?"]);
     case "cancel": return pick(["Koi baat nahi baji, sauda cancel kar diya. Jab dil chahe phir aaiye ga. 🙏"]);
     case "aftercare":
       return decision.status === "accepted" && p != null
@@ -287,6 +301,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
  */
 async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", customerMessages = null, history = [],
                        groupSizes = [], itemFacts = [], competitorFacts = [], stockLeft = null,
+                       perks = [], morePerks = [], claim = null,
                        env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
   const provider = String(env.BHAO_VOICE_PROVIDER || "off").toLowerCase();
@@ -294,7 +309,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
                                               provider: provider === "off" ? null : provider, attempts, rejected });
   if (!PROVIDERS[provider]) return fallback([], 0);
 
-  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft });
+  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft, perks, morePerks, claim });
   const maxLength = maxLengthFor(customerMessages && customerMessages.length ? customerMessages : [customerText]);
   const rejected = [];
   let retryNote = null;
