@@ -169,6 +169,19 @@ test("A2: independent reviewer records immutable decision, with no activation",a
     "SELECT action FROM checkout_apna_release_audit ORDER BY id")).rows.map(x=>x.action);
   assert.deepEqual(audit,["SIGNED_CANDIDATE_STAGED","INDEPENDENT_REVIEW_APPROVED"]);
 });
+test("A2: signer/reviewer ID, effective day and catalog digest cannot be edited after review",async()=>{
+  await assert.rejects(()=>pool.query(
+    "UPDATE checkout_apna_activation_reviews SET reviewer_staff_id='999' WHERE release_id=$1",
+    [release]),/APNA_REVIEW_IMMUTABLE/);
+  await assert.rejects(()=>pool.query(
+    "UPDATE checkout_apna_activation_reviews SET bindings_sha256=$2 WHERE release_id=$1",
+    [release,"b".repeat(64)]),/APNA_REVIEW_IMMUTABLE/);
+  const row=(await pool.query(
+    "SELECT reviewer_staff_id,bindings_sha256 FROM checkout_apna_activation_reviews WHERE release_id=$1",
+    [release])).rows[0];
+  assert.equal(row.reviewer_staff_id,"102");
+  assert.equal(row.bindings_sha256,reviewed.bindingsDigest);
+});
 test("A2: replay review cannot bypass a unique independent approval",async()=>{
   await assert.rejects(()=>service().review({
     releaseId:release,authContext:"reviewer",effectiveDeliveryDate:effective,
