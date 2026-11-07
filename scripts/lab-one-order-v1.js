@@ -175,7 +175,7 @@ async function main(){
            !result?.data?.orderCreate?.order?.id){
           const e=(result?.errors||[]).slice(0,3).map(x=>({
             code:String(x?.extensions?.code||"GRAPHQL_ERROR").slice(0,70),
-            hint:String(x?.message||"").replace(/(shpat_|shpca_|postgres(?:ql)?:\\/\\/)[^\\s,]+/gi,"[REDACTED]").slice(0,220)
+            hint:String(x?.message||"").slice(0,170)
           }));
           const u=(result?.data?.orderCreate?.userErrors||[]).slice(0,5).map(x=>({
             field:Array.isArray(x.field)?x.field.slice(0,8):[],
