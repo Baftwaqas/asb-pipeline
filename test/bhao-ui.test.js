@@ -32,13 +32,14 @@ after(async () => { if (db) await db.end(); });
 
 const isJpeg = (b) => Buffer.isBuffer(b) && b[0] === 0xff && b[1] === 0xd8 && b[b.length - 2] === 0xff && b[b.length - 1] === 0xd9;
 
-test("the Bhao Card and the victory card are drawn as JPG; no saving, no victory card", () => {
+test("the Bhao Card and the victory card are drawn as JPG, in ASB's brand; no saving, no victory card", async () => {
   assert.ok(K.available());
-  const card = K.bhaoCard({ itemName: "Steel ki Degchi 5 litre", askPaisa: 180000, perks: ["Gold customer ⭐", "Subah ki bohni 🌅"], more: ["💵 Advance payment"], title: "Bhao Khiladi 🥈" });
+  const card = await K.bhaoCard({ itemName: "Steel ki Degchi 5 litre", askPaisa: 180000, perks: ["Gold customer ⭐", "Subah ki bohni 🌅"], more: ["💵 Advance payment"], title: "Bhao Khiladi 🥈" });
   assert.ok(isJpeg(card) && card.length > 20000 && card.length < 5e6, "a real JPG under WhatsApp's 5 MB");
-  const win = K.victoryCard({ itemName: "Degchi", openPaisa: 180000, unitPaisa: 120000, title: "Bhao Shagird 🥉", itemCode: "DEGCHI" });
+  const win = await K.victoryCard({ itemName: "Degchi", openPaisa: 180000, unitPaisa: 120000, title: "Bhao Shagird 🥉", itemCode: "DEGCHI" });
   assert.ok(isJpeg(win));
-  assert.equal(K.victoryCard({ itemName: "x", openPaisa: 120000, unitPaisa: 120000, itemCode: "X" }), null);
+  assert.equal(await K.victoryCard({ itemName: "x", openPaisa: 120000, unitPaisa: 120000, itemCode: "X" }), null);
+  assert.deepEqual([K.BRAND.vermilion, K.BRAND.ink, K.BRAND.ice], ["#FF4825", "#151515", "#86F3FF"], "Vermilion & Ice on Ink");
   assert.equal(K.plain("Gold customer ⭐"), "Gold customer");
 });
 

@@ -175,7 +175,7 @@ Lifts only **raise** the floor above the approved floor and never above the open
 - After a deal won below the listed price, the **victory card** arrives as a JPG made to be forwarded. Accepting the listed price gives no victory card, so there is never a fake "bachat".
 - **"BHAO" alone** returns a tap menu of the items (up to 10).
 - `bhao_messages.ui` records exactly what she was shown, and it never changes. If a picture or button cannot be sent, the same words go as plain text.
-- Images are drawn on the server with `@napi-rs/canvas` and Noto Sans (SIL OFL, `bhao/assets/fonts`). No emoji are drawn.
+- Images are in **ASB's brand**: Vermilion `#FF4825` and Ice `#86F3FF` on Ink `#151515` (as on the website header, intro and WhatsApp profile), the real ASB logo (`bhao/assets/brand`, from the ASB-Logo set) and Poppins, the wordmark's typeface (SIL OFL, `bhao/assets/fonts`). Colours are set in one place (`cards.js` BRAND). Drawn with `@napi-rs/canvas`. No emoji are drawn.
 
 **After the deal: aftercare** (migration 026, founder's live test, 7 Nov)
 - For 24 hours after a deal, Seth Ji still answers her, so he never goes silent after "Sauda pakka".

@@ -4,26 +4,51 @@
 //   * the Bhao Card - the header image above his first tap buttons;
 //   * the victory card - "Aap ne Seth Ji ko hara diya!", the one customers
 //     screenshot and forward to their society groups.
+//
+// In ASB's own brand (founder, 9 Nov: "why have you not used our logo, brand
+// colors and font?"): the Vermilion & Ice palette on Ink - the same as the
+// website header, intro and WhatsApp profile - the real ASB logo
+// (assets/brand, from the ASB-Logo set), and Poppins, the wordmark's own
+// typeface (SIL OFL, assets/fonts). Colours live in BRAND below, one place.
+//
 // Plain JPG so any phone shows it (the founder's rule for customer images).
-// Fonts ship with the code (Noto Sans, SIL OFL - assets/fonts). No emoji are
-// drawn (no colour-emoji font on the server); shapes stand in for them.
-// If the drawing library is missing, every function returns null and the
-// caller sends the same words as text - a card is never load-bearing.
+// Both functions are async (the logo decodes asynchronously).
+// No emoji are drawn (no colour-emoji font on the server); the ASB mark and
+// simple shapes stand in. If the drawing library is missing, every function
+// returns null and the caller sends the same words as text - a card is never
+// load-bearing.
 // ============================================================================
 "use strict";
 
+const fs = require("fs");
 const path = require("path");
 
-let lib = null, ready = false;
+const BRAND = Object.freeze({
+  vermilion: "#FF4825",
+  ink: "#151515",
+  inkSoft: "#232323",
+  ice: "#86F3FF",
+  white: "#FFFFFF",
+  blush: "#FFF6F3",
+  grey: "#9A9A9A",
+  strike: "#FF4825",
+});
+
+let lib = null, ready = false, logosReady = Promise.resolve();
+const logos = {};
 function canvasLib() {
   if (ready) return lib;
   ready = true;
   try {
     lib = require("@napi-rs/canvas");
-    const dir = path.join(__dirname, "assets", "fonts");
-    lib.GlobalFonts.registerFromPath(path.join(dir, "noto-sans-latin-400-normal.woff2"), "ASB Sans");
-    lib.GlobalFonts.registerFromPath(path.join(dir, "noto-sans-latin-700-normal.woff2"), "ASB Sans Bold");
-    lib.GlobalFonts.registerFromPath(path.join(dir, "noto-sans-latin-900-normal.woff2"), "ASB Sans Black");
+    const fonts = path.join(__dirname, "assets", "fonts");
+    lib.GlobalFonts.registerFromPath(path.join(fonts, "poppins-latin-400-normal.woff2"), "Poppins Regular");
+    lib.GlobalFonts.registerFromPath(path.join(fonts, "poppins-latin-600-normal.woff2"), "Poppins SemiBold");
+    lib.GlobalFonts.registerFromPath(path.join(fonts, "poppins-latin-800-normal.woff2"), "Poppins ExtraBold");
+    // decoded asynchronously (an Image given a buffer draws nothing until it has loaded)
+    logosReady = Promise.all([["horizontal", "asb-logo-horizontal-ice-on-dark.png"], ["stacked", "asb-logo-stacked-ice-on-dark.png"]]
+      .map(([k, f]) => lib.loadImage(fs.readFileSync(path.join(__dirname, "assets", "brand", f))).then((img) => { logos[k] = img; })))
+      .catch((e) => console.warn("[bhao] cards: logo not loaded:", e.message));
   } catch (e) {
     console.warn("[bhao] cards: drawing library unavailable, sending text instead:", e.message);
     lib = null;
@@ -31,10 +56,6 @@ function canvasLib() {
   return lib;
 }
 
-const C = Object.freeze({
-  green: "#0f5c43", greenDeep: "#0a4232", cream: "#fff7e6", gold: "#f2b632", goldDeep: "#c98a0c",
-  ink: "#16231d", paper: "#fffdf7", muted: "#5b6b62", chip: "#e4f1ea", red: "#c0392b",
-});
 const rs = (paisa) => "Rs " + Math.round(paisa / 100).toLocaleString("en-US");
 // labels arrive with emoji ("Gold customer ⭐"); the server font has none
 const plain = (s) => String(s || "").replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu, "").replace(/\s+/g, " ").trim();
@@ -50,102 +71,110 @@ function roundRect(g, x, y, w, h, r) {
   g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
   g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
 }
-function star(g, cx, cy, r, color) {
-  g.fillStyle = color; g.beginPath();
-  for (let i = 0; i < 10; i++) {
-    const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? r * 0.45 : r;
-    g[i ? "lineTo" : "moveTo"](cx + rr * Math.cos(a), cy + rr * Math.sin(a));
-  }
-  g.closePath(); g.fill();
+/** The ASB mark (three heads joined by one wave body), from the logo set's geometry. */
+function mark(g, x, y, scale, color) {
+  g.save(); g.translate(x, y); g.scale(scale, scale);
+  g.fillStyle = color; g.strokeStyle = color;
+  for (const cx of [70, 150, 230]) { g.beginPath(); g.arc(cx, 54, 31, 0, 2 * Math.PI); g.fill(); }
+  g.lineWidth = 30; g.lineCap = "round"; g.beginPath();
+  g.moveTo(22, 168);
+  g.bezierCurveTo(36, 138, 50, 100, 70, 100); g.bezierCurveTo(90, 100, 96, 140, 110, 140);
+  g.bezierCurveTo(124, 140, 130, 100, 150, 100); g.bezierCurveTo(170, 100, 176, 140, 190, 140);
+  g.bezierCurveTo(204, 140, 210, 100, 230, 100); g.bezierCurveTo(250, 100, 264, 138, 278, 168);
+  g.stroke(); g.restore();
 }
-/** A bazaar awning across the top: the shop, not an app. */
-function awning(g, w, h, a = C.green, b = C.cream) {
-  const n = 12, sw = w / n;
-  for (let i = 0; i < n; i++) {
-    g.fillStyle = i % 2 ? b : a;
-    g.beginPath(); g.moveTo(i * sw, 0); g.lineTo((i + 1) * sw, 0); g.lineTo((i + 1) * sw, h);
-    g.arc(i * sw + sw / 2, h, sw / 2, 0, Math.PI); g.closePath(); g.fill();
-  }
+function logo(g, kind, x, y, w) {
+  const img = logos[kind]; if (!img) return 0;
+  const h = (img.height / img.width) * w;
+  g.drawImage(img, x, y, w, h);
+  return h;
 }
 
 /**
  * The Bhao Card, 1200x628 (WhatsApp's header ratio, 1.91:1).
  * { itemName, askPaisa, perks: [labels], more: [labels], title }
  */
-function bhaoCard({ itemName, askPaisa, perks = [], more = [], title = null }) {
+async function bhaoCard({ itemName, askPaisa, perks = [], more = [], title = null }) {
   const L = canvasLib(); if (!L) return null;
+  await logosReady;
   const W = 1200, H = 628, cv = L.createCanvas(W, H), g = cv.getContext("2d");
-  g.fillStyle = C.paper; g.fillRect(0, 0, W, H);
-  awning(g, W, 70);
+  g.fillStyle = BRAND.ink; g.fillRect(0, 0, W, H);
+  // a big, quiet mark behind the price - the brand, not decoration
+  g.globalAlpha = 0.07; mark(g, 700, 40, 1.9, BRAND.vermilion); g.globalAlpha = 1;
+  logo(g, "horizontal", 56, 44, 330);
   // left: who she is today
-  g.fillStyle = C.ink; g.font = '30px "ASB Sans Bold"'; g.fillText("SETH JI KI DUKAAN", 60, 150);
-  g.fillStyle = C.green; fit(g, "Aap ka Bhao Card", 640, "ASB Sans Black", 66); g.fillText("Aap ka Bhao Card", 56, 222);
-  let y = 290;
-  for (const label of perks.map(plain).filter(Boolean).slice(0, 4)) {
-    g.font = '30px "ASB Sans Bold"';
-    const w = Math.min(640, g.measureText(label).width + 70);
-    g.fillStyle = C.chip; roundRect(g, 56, y - 38, w, 54, 27); g.fill();
-    star(g, 88, y - 11, 13, C.goldDeep);
-    g.fillStyle = C.ink; fit(g, label, w - 70, "ASB Sans Bold", 30); g.fillText(label, 112, y);
-    y += 70;
+  g.fillStyle = BRAND.ice; g.font = '24px "Poppins SemiBold"'; g.fillText("SETH JI KI DUKAAN", 58, 150);
+  g.fillStyle = BRAND.white; fit(g, "Aap ka Bhao Card", 620, "Poppins ExtraBold", 64); g.fillText("Aap ka Bhao Card", 54, 222);
+  let y = 296;
+  for (const label of perks.map(plain).filter(Boolean).slice(0, 3)) {
+    g.font = '28px "Poppins SemiBold"';
+    const w = Math.min(620, g.measureText(label).width + 76);
+    g.strokeStyle = BRAND.ice; g.lineWidth = 2.5; roundRect(g, 56, y - 38, w, 56, 28); g.stroke();
+    g.fillStyle = BRAND.vermilion; g.beginPath(); g.arc(90, y - 10, 9, 0, 2 * Math.PI); g.fill();
+    g.fillStyle = BRAND.white; fit(g, label, w - 76, "Poppins SemiBold", 28); g.fillText(label, 114, y);
+    y += 72;
   }
-  if (title) { g.fillStyle = C.muted; g.font = '26px "ASB Sans"'; g.fillText("Darja: " + plain(title), 60, Math.min(y + 6, 560)); }
-  // right: the price tag
-  const tx = 760, ty = 130, tw = 380, th = 330;
-  g.fillStyle = C.green; roundRect(g, tx, ty, tw, th, 28); g.fill();
-  g.fillStyle = C.cream; g.beginPath(); g.arc(tx + tw / 2, ty + 34, 12, 0, 2 * Math.PI); g.fill();
-  g.fillStyle = C.cream; g.font = '28px "ASB Sans"'; fit(g, plain(itemName), tw - 50, "ASB Sans", 28);
-  g.textAlign = "center"; g.fillText(plain(itemName), tx + tw / 2, ty + 100);
-  g.font = '26px "ASB Sans"'; g.fillText("Seth Ji ka daam", tx + tw / 2, ty + 160);
-  g.fillStyle = C.gold; fit(g, rs(askPaisa), tw - 40, "ASB Sans Black", 84); g.fillText(rs(askPaisa), tx + tw / 2, ty + 250);
-  g.fillStyle = C.cream; g.font = '22px "ASB Sans"'; g.fillText("Ab aap apna daam lagayein", tx + tw / 2, ty + 300);
+  if (title) { g.fillStyle = BRAND.grey; g.font = '24px "Poppins Regular"'; g.fillText("Darja: " + plain(title), 58, Math.min(y + 2, 540)); }
+  // right: the price tag, in vermilion
+  const tx = 740, ty = 120, tw = 404, th = 350;
+  g.fillStyle = BRAND.vermilion; roundRect(g, tx, ty, tw, th, 30); g.fill();
+  g.fillStyle = BRAND.ink; g.beginPath(); g.arc(tx + tw / 2, ty + 34, 12, 0, 2 * Math.PI); g.fill();
+  g.textAlign = "center";
+  g.fillStyle = BRAND.white; fit(g, plain(itemName), tw - 50, "Poppins SemiBold", 28); g.fillText(plain(itemName), tx + tw / 2, ty + 100);
+  g.font = '24px "Poppins Regular"'; g.fillText("Seth Ji ka daam", tx + tw / 2, ty + 158);
+  g.fillStyle = BRAND.white; fit(g, rs(askPaisa), tw - 40, "Poppins ExtraBold", 86); g.fillText(rs(askPaisa), tx + tw / 2, ty + 252);
+  g.fillStyle = BRAND.ink; g.font = '22px "Poppins SemiBold"'; g.fillText("Ab aap apna daam lagayein", tx + tw / 2, ty + 312);
   g.textAlign = "left";
-  // bottom strip: what gives more room
-  g.fillStyle = C.greenDeep; g.fillRect(0, H - 76, W, 76);
-  g.fillStyle = C.cream; const strip = more.length ? "Aur gunjaish:  " + more.map(plain).join("   |   ") : "Har sauda alag hota hai - aap ka card aap ka bhao";
-  fit(g, strip, W - 120, "ASB Sans Bold", 28); g.fillText(strip, 60, H - 28);
-  return cv.toBuffer("image/jpeg", 88);
+  // bottom strip: what gives more room, in ice
+  g.fillStyle = BRAND.ice; g.fillRect(0, H - 74, W, 74);
+  g.fillStyle = BRAND.ink;
+  const strip = more.length ? "Aur gunjaish:  " + more.map(plain).join("   |   ") : "Har sauda alag hota hai - aap ka card aap ka bhao";
+  fit(g, strip, W - 120, "Poppins SemiBold", 27); g.fillText(strip, 58, H - 27);
+  return cv.toBuffer("image/jpeg", 90);
 }
 
 /**
  * The victory card, 1080x1080 - made to be forwarded.
  * { itemName, openPaisa, unitPaisa, qty, title, itemCode }
  */
-function victoryCard({ itemName, openPaisa, unitPaisa, qty = 1, title = null, itemCode }) {
+async function victoryCard({ itemName, openPaisa, unitPaisa, qty = 1, title = null, itemCode }) {
   const L = canvasLib(); if (!L) return null;
+  await logosReady;
   if (!(openPaisa > unitPaisa)) return null;
   const W = 1080, H = 1080, cv = L.createCanvas(W, H), g = cv.getContext("2d");
-  g.fillStyle = C.green; g.fillRect(0, 0, W, H);
-  // sunburst
-  g.save(); g.translate(W / 2, 360); g.fillStyle = "rgba(255,247,230,0.07)";
-  for (let i = 0; i < 24; i++) { g.rotate(Math.PI / 12); g.beginPath(); g.moveTo(0, 0); g.lineTo(-60, -900); g.lineTo(60, -900); g.closePath(); g.fill(); }
+  g.fillStyle = BRAND.ink; g.fillRect(0, 0, W, H);
+  // rays in vermilion, very faint
+  g.save(); g.translate(W / 2, 300); g.fillStyle = "rgba(255,72,37,0.08)";
+  for (let i = 0; i < 24; i++) { g.rotate(Math.PI / 12); g.beginPath(); g.moveTo(0, 0); g.lineTo(-55, -900); g.lineTo(55, -900); g.closePath(); g.fill(); }
   g.restore();
-  awning(g, W, 64, C.gold, C.cream);
-  // trophy
-  g.fillStyle = C.gold; g.beginPath(); g.moveTo(450, 170); g.lineTo(630, 170); g.quadraticCurveTo(630, 330, 540, 345); g.quadraticCurveTo(450, 330, 450, 170); g.fill();
-  g.lineWidth = 16; g.strokeStyle = C.gold; g.beginPath(); g.arc(450, 225, 42, Math.PI / 2, 1.5 * Math.PI); g.stroke(); g.beginPath(); g.arc(630, 225, 42, 1.5 * Math.PI, Math.PI / 2); g.stroke();
-  g.fillRect(522, 340, 36, 50); roundRect(g, 470, 385, 140, 34, 8); g.fill();
-  star(g, 540, 245, 34, C.cream);
+  // trophy in vermilion, the ASB mark on it in ink
+  const v = BRAND.vermilion;
+  g.fillStyle = v; g.beginPath(); g.moveTo(445, 120); g.lineTo(635, 120); g.quadraticCurveTo(635, 290, 540, 305); g.quadraticCurveTo(445, 290, 445, 120); g.fill();
+  g.lineWidth = 16; g.strokeStyle = v; g.beginPath(); g.arc(445, 178, 44, Math.PI / 2, 1.5 * Math.PI); g.stroke(); g.beginPath(); g.arc(635, 178, 44, 1.5 * Math.PI, Math.PI / 2); g.stroke();
+  g.fillRect(522, 300, 36, 50); roundRect(g, 468, 345, 144, 34, 8); g.fill();
+  mark(g, 487, 150, 0.36, BRAND.ink);
   g.textAlign = "center";
-  g.fillStyle = C.cream; fit(g, "Aap ne Seth Ji ko hara diya!", W - 120, "ASB Sans Black", 70); g.fillText("Aap ne Seth Ji ko hara diya!", W / 2, 500);
-  g.font = '32px "ASB Sans"'; fit(g, plain(itemName), W - 160, "ASB Sans", 32); g.fillText(plain(itemName) + (qty > 1 ? `  x ${qty}` : ""), W / 2, 556);
-  // the numbers
-  const bx = 120, by = 600, bw = W - 240, bh = 270;
-  g.fillStyle = C.paper; roundRect(g, bx, by, bw, bh, 30); g.fill();
-  g.fillStyle = C.muted; g.font = '30px "ASB Sans"'; g.fillText("Seth Ji ne kaha", bx + bw * 0.27, by + 62);
-  g.fillText("Aap ka sauda", bx + bw * 0.73, by + 62);
-  g.font = '58px "ASB Sans Bold"'; const o = rs(openPaisa); g.fillText(o, bx + bw * 0.27, by + 140);
-  const ow = g.measureText(o).width; g.strokeStyle = C.red; g.lineWidth = 7; g.beginPath(); g.moveTo(bx + bw * 0.27 - ow / 2 - 6, by + 120); g.lineTo(bx + bw * 0.27 + ow / 2 + 6, by + 120); g.stroke();
-  g.fillStyle = C.green; g.font = '64px "ASB Sans Black"'; g.fillText(rs(unitPaisa), bx + bw * 0.73, by + 142);
+  g.fillStyle = BRAND.white; fit(g, "Aap ne Seth Ji ko hara diya!", W - 120, "Poppins ExtraBold", 66); g.fillText("Aap ne Seth Ji ko hara diya!", W / 2, 462);
+  g.fillStyle = BRAND.ice; fit(g, plain(itemName), W - 160, "Poppins SemiBold", 30);
+  g.fillText(plain(itemName) + (qty > 1 ? `  x ${qty}` : ""), W / 2, 514);
+  // the numbers on white
+  const bx = 110, by = 556, bw = W - 220, bh = 280;
+  g.fillStyle = BRAND.white; roundRect(g, bx, by, bw, bh, 30); g.fill();
+  g.fillStyle = "#6b6b6b"; g.font = '28px "Poppins Regular"';
+  g.fillText("Seth Ji ne kaha", bx + bw * 0.27, by + 62); g.fillText("Aap ka sauda", bx + bw * 0.73, by + 62);
+  g.fillStyle = "#6b6b6b"; g.font = '54px "Poppins SemiBold"'; const o = rs(openPaisa); g.fillText(o, bx + bw * 0.27, by + 140);
+  const ow = g.measureText(o).width; g.strokeStyle = BRAND.strike; g.lineWidth = 7;
+  g.beginPath(); g.moveTo(bx + bw * 0.27 - ow / 2 - 6, by + 122); g.lineTo(bx + bw * 0.27 + ow / 2 + 6, by + 122); g.stroke();
+  g.fillStyle = BRAND.ink; g.font = '62px "Poppins ExtraBold"'; g.fillText(rs(unitPaisa), bx + bw * 0.73, by + 144);
   const saved = (openPaisa - unitPaisa) * qty, pct = Math.round(((openPaisa - unitPaisa) / openPaisa) * 100);
-  g.fillStyle = C.gold; roundRect(g, bx + 60, by + 175, bw - 120, 66, 33); g.fill();
-  g.fillStyle = C.ink; g.font = '36px "ASB Sans Black"'; g.fillText(`Bachat ${rs(saved)}  (${pct}%)`, W / 2, by + 220);
-  g.fillStyle = C.cream; g.font = '30px "ASB Sans Bold"';
-  if (title) g.fillText("Darja: " + plain(title), W / 2, 930);
-  g.font = '26px "ASB Sans"'; g.fillText(`Aap bhi try karein: WhatsApp pe likhein  BHAO ${itemCode}`, W / 2, 990);
-  g.font = '24px "ASB Sans Bold"'; g.fillStyle = C.gold; g.fillText("APNA SASTA BAZAAR", W / 2, 1040);
+  g.fillStyle = BRAND.ice; roundRect(g, bx + 60, by + 180, bw - 120, 68, 34); g.fill();
+  g.fillStyle = BRAND.ink; g.font = '34px "Poppins ExtraBold"'; g.fillText(`Bachat ${rs(saved)}  (${pct}%)`, W / 2, by + 226);
+  g.fillStyle = BRAND.white; g.font = '28px "Poppins SemiBold"';
+  if (title) g.fillText("Darja: " + plain(title), W / 2, 892);
+  g.fillStyle = BRAND.grey; g.font = '24px "Poppins Regular"'; g.fillText(`Aap bhi try karein: WhatsApp pe likhein  BHAO ${itemCode}`, W / 2, 940);
   g.textAlign = "left";
-  return cv.toBuffer("image/jpeg", 88);
+  logo(g, "horizontal", (W - 360) / 2, 984, 360);
+  return cv.toBuffer("image/jpeg", 90);
 }
 
-module.exports = { bhaoCard, victoryCard, plain, available: () => !!canvasLib() };
+module.exports = { BRAND, bhaoCard, victoryCard, plain, available: () => !!canvasLib() };

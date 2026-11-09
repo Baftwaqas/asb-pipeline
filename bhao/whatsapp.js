@@ -504,7 +504,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
 /** Draw a card and put it on Meta's servers; null if either step fails. */
 async function cardMediaId(image, uploadMedia, render) {
   if (!image || !uploadMedia) return null;
-  const jpg = render(image);
+  const jpg = await render(image);
   if (!jpg) return null;
   const up = await uploadMedia(jpg, "image/jpeg", `${image.kind}.jpg`).catch(() => null);
   return up && up.ok ? up.id : null;
