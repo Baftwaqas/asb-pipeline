@@ -1,0 +1,23 @@
+name: Apna Onion Household-Cycle Regression
+on:
+  push:
+    branches:
+      - test/apna-onion-household-cycle-20261109
+  pull_request:
+    paths:
+      - 'test/adr002-apna-onion-500-to-2000-regression.test.js'
+      - 'checkout/apna-approved-policy-v1.js'
+      - 'grocery/apna-limits.js'
+  workflow_dispatch:
+jobs:
+  founder-onion-cap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test founder onion policy (no external services)
+        run: node --test test/adr002-apna-onion-500-to-2000-regression.test.js
