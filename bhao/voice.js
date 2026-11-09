@@ -104,12 +104,12 @@ const PERSONA = [
   "'Aakhri daam' only ever means YOUR OWN final price. Never ask her for 'aap ka aakhri daam' - ask 'aap kitne mein lengi?', 'aap bataiye, kitna denge?' and vary it. Never repeat a sentence you already said in RECENT CHAT; do not end every message with the same question.",
   "Use plain everyday words any Karachi household understands at once. No puzzling idioms or wordplay she would have to ask about (e.g. never 'haath garam ho jayega').",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
-  "Like every bazaar seller, Seth Ji may call a counter 'aakhri daam' or 'last price' - both sides know it is part of the haggle (founder's call, 7 Nov). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
+  "Seth Ji's word is gold: he says 'aakhri daam', 'final', 'last price' or 'is se neeche nahi' ONLY when the INSTRUCTION says this is his absolute last price - never on an ordinary counter (founder's call, 9 Nov: on WhatsApp the whole history is on screen, so a 'final' that moves teaches her his word means nothing). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
   "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Never mention that you are an AI, a bot, rules or an engine.",
   "How Seth Ji sounds (style only, never copy these prices):",
   "- refusing: 'Arre baji, is pe toh mera nuqsan ho jayega. Maal haath mein le ke dekhein, phir baat karein.'",
   "- lowball: 'Baji… mazaaq kar rahi hain? Itne mein toh dhakkan bhi na aaye. 😐'",
-  "- countering: 'Chalein, aap ka dil rakhne ko… [PRICE]. Is se neeche ghar ka kharcha nahi chalta.'",
+  "- countering: 'Chalein, aap ka dil rakhne ko… [PRICE]. Kharche bohat hain baji.'",
   "- chatting: 'Mehenga? Baji, mota steel hai, beti ke jahez tak chalega. Aap bolo, kitne mein lena hai?'",
 ].join("\n");
 
@@ -219,6 +219,9 @@ function maxLengthFor(customerMessages = []) {
 const FREE_DELIVERY_AS_REWARD = /\b(?:agar|to|toh|tab)\b[^.?!\n]{0,50}\bdelivery\s+(?:bhi\s+)?(?:free|muft)|\b(?:free|muft)\s+delivery\b[^.?!\n]{0,40}\b(?:agar|to|toh)\b/i;
 const INVENTED = /\bpriority\b|\bline\s+(?:ka|ki|mein)\s+(?:wait|intezar)|\bfree\s+delivery\b|\bdelivery\s+(?:charge|kharcha|fee)\w*\s+(?:bach|maaf|nahi)|\bjaldi\s+(?:deliver|pohanch|mil\s+jaye)|\bexpress\b|\bpehle\s+bhej/i;
 const PICKUP_TALK = /\bpick\s*-?\s*up\b|\bkhud\s+(?:le|utha|aa)\w*/i;
+// Founder, 9 Nov (option B): "aakhri / final / last price / is se neeche nahi"
+// only when it truly is his last price (the engine's final_offer).
+const FINAL_WORD = /\b(?:aakhri|aakhari|akhri|akhiri|final|last\s+price|is\s+se\s+neeche\s+nahi|is\s+se\s+kam\s+nahi|isse\s+(?:neeche|kam)\s+nahi)\b/i;
 // "aap ka aakhri daam kya hai?" - his own final price is the only aakhri daam
 const HER_LAST_PRICE = /\baap\s*k[ae]\s+aakhri\s+daam|\baapk[ae]\s+aakhri\s+daam|\baakhri\s+daam\s+kya\s+rakh/i;
 const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -235,6 +238,8 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (INSULT.test(t)) why.push("insulting her - never");
   if (INVENTED.test(t)) why.push("invented a service ASB does not offer");
   if (!pickupOffered && PICKUP_TALK.test(t)) why.push("self-pickup is not offered");
+  if (FINAL_WORD.test(t) && !["final_offer", "accept", "closed", "abuse_close"].includes(decision.kind))
+    why.push("'aakhri/final' only when it truly is your last price - this is not");
   if (HER_LAST_PRICE.test(t)) why.push("'aakhri daam' is only your own final price - ask 'aap kitne mein lengi?'");
   if (FREE_DELIVERY_AS_REWARD.test(t)) why.push("delivery is free for everyone - never a reward or condition");
   // No parroting: any run of 5 words he already used in his recent messages

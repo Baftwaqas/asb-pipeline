@@ -119,6 +119,7 @@ As at a real counter, no two customers get the same price, and the reason is sho
 How the perks are applied:
 - **All perks together are capped at 10%.** Prices are rounded to Rs 10 and never go below cost.
 - **Asking is not committing** (live test, 9 Nov): "agar advance karun toh kya milega?" gets the real number (*"COD bilkul chalega; advance dein toh Rs 1,410"*) and changes nothing. Only a commitment ("haan, advance de dungi") earns the perk.
+- **Seth Ji's word is gold** (founder, 9 Nov, option B): he says "aakhri daam", "final", "last price" or "is se neeche nahi" **only** when it truly is his last price (the engine's final offer at the floor). Any counter that uses those words is rejected, because on WhatsApp the whole history is on screen and a "final" that moves teaches customers his word means nothing.
 - **Shop facts:** the voice may mention only what ASB really offers: COD on every order, advance optional, delivery to the door. Self-pickup is **off** until ASB offers it. Invented services ("priority packing", "line ka wait nahi", free delivery) are rejected, as is asking for *her* "aakhri daam" or repeating his own sentences.
 - **Mid-bargain perks:** "Advance de dungi" earns room then and there. Her current price drops by that room, and the perk is written into the deal as a **condition**: *"Shart: Advance payment, is ke baghair yeh daam nahi"*. The team checks it before confirming.
 - **What decides a perk:** only her history with ASB and the time of day. Never her area, name or anything about her means.
