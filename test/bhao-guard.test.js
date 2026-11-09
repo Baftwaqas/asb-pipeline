@@ -132,3 +132,64 @@ test("titles are cosmetic and grow with deals; Seth Ji's mood is the same for ev
   assert.equal(P.goodMoodDay(new Date("2026-11-10T16:00:00Z")), true, "same Karachi day, same mood");
   assert.equal(P.goodMoodDay(new Date("2026-11-11T07:00:00Z")), false);
 });
+
+// --- probing protection (founder 9 Nov: "5 phones at once to learn our lowest price") ---
+test("each conversation's floor is lifted: weekly drift + a private cushion + more for new numbers; never below the approved floor", async () => {
+  const p = phone();
+  await say(p, "BHAO ASB-NG-POT-5L", 0);
+  const st = (await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1`, [p])).rows[0].state;
+  const L = st.floorLift;
+  assert.ok(L.weekly >= 0 && L.weekly <= P.PROTECT.weeklyDriftMaxPct);
+  assert.ok(L.cushion >= 0 && L.cushion <= P.PROTECT.cushionMaxPct);
+  assert.equal(L.newNumber, P.PROTECT.newNumberLiftPct, "a phone with no delivered order");
+  assert.ok(Math.abs(L.pct - (L.weekly + L.cushion + L.newNumber + L.probe)) < 1e-9);
+  // her lowest reachable price is above the approved Rs 850
+  let r, t = 100;
+  for (const m of ["900", "900", "880", "870", "860", "855", "851", "850", "850", "850", "850"]) {
+    r = await say(p, m, t += 60);
+    if (["accept", "closed"].includes(r.kind)) break;
+  }
+  const c = (await db.query(`SELECT status, state FROM bhao_conversations WHERE phone = $1`, [p])).rows[0];
+  assert.notEqual(c.status, "accepted", "Rs 850 is below this conversation's lifted floor");
+});
+
+test("the weekly drift is the same for everyone and changes week to week; the cushion differs per conversation", () => {
+  const a = new Date("2026-11-09T05:00:00Z"), b = new Date("2026-11-12T15:00:00Z"), next = new Date("2026-11-17T05:00:00Z");
+  assert.equal(P.weekKey(a), P.weekKey(b), "Mon and Thu: same week");
+  assert.notEqual(P.weekKey(a), P.weekKey(next));
+  assert.equal(P.weeklyDrift("X", a), P.weeklyDrift("X", b));
+  const drifts = new Set(Array.from({ length: 8 }, (_, i) => P.weeklyDrift("X", new Date(a.getTime() + i * 7 * 864e5)).toFixed(6)));
+  assert.ok(drifts.size >= 6, "it really moves");
+  const cushions = new Set(Array.from({ length: 20 }, (_, i) => P.cushion("923001234567:X:" + i).toFixed(6)));
+  assert.ok(cushions.size >= 18);
+  const lifted = P.liftFloors({ anchorPaisa: 180000, floorPaisa: 85000, groupTiers: [{ minQty: 5, floorPaisa: 75000 }] }, 0.13);
+  assert.ok(lifted.floorPaisa > 85000 && lifted.floorPaisa <= 180000);
+  assert.ok(lifted.groupTiers[0].floorPaisa >= 75000 && lifted.groupTiers[0].floorPaisa < lifted.floorPaisa);
+});
+
+test("a gold customer's floor is not lifted for being new; a prober's five fresh SIMs all are", async () => {
+  const g = phone();
+  await db.query(`INSERT INTO customers (phone, badge) VALUES ($1, 'gold')`, [g]);
+  await say(g, "BHAO ASB-NG-TAWA", 0);
+  const st = (await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1`, [g])).rows[0].state;
+  assert.equal(st.floorLift.newNumber, 0);
+});
+
+test("probe guard: several new numbers on one item within hours lift new numbers' floors for a day", async () => {
+  const at0 = 30 * 86400; // a fresh day, away from other tests
+  const sims = Array.from({ length: 5 }, () => phone());
+  for (const [i, p] of sims.entries()) await say(p, "BHAO ASB-NG-JUG", at0 + i * 600);
+  const lifts = [];
+  for (const p of sims) lifts.push((await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1 AND item_id = 'ASB-NG-JUG'`, [p])).rows[0].state.floorLift);
+  assert.equal(lifts[3].probe, 0, "4th: only 3 others so far");
+  assert.equal(lifts[4].probe, P.PROTECT.probe.liftPct, "5th: 4 other new numbers in 6 h");
+  const later = phone();
+  await say(later, "BHAO ASB-NG-JUG", at0 + 12 * 3600);
+  assert.equal((await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1`, [later])).rows[0].state.floorLift.probe,
+    P.PROTECT.probe.liftPct, "held for a day");
+  const g = phone();
+  await db.query(`INSERT INTO customers (phone, badge) VALUES ($1, 'regular')`, [g]);
+  await say(g, "BHAO ASB-NG-JUG", at0 + 13 * 3600);
+  assert.equal((await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1`, [g])).rows[0].state.floorLift.probe, 0,
+    "real customers are never caught by the guard");
+});

@@ -89,6 +89,9 @@ function readQty(text) {
   return w ? W[w[1].toLowerCase()] : null;
 }
 
+/** This conversation's floor lift (0 for conversations opened before PROTECT). */
+const liftOf = (state) => Number((state && state.floorLift && state.floorLift.pct) || 0);
+
 const seconds = (action) => (Number.isSafeInteger(action.delaySeconds) ? action.delaySeconds : 30);
 
 async function tx(db, fn) {
@@ -158,10 +161,18 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         // Her Bhao Card: standing with ASB and the time of day, as she walks in.
         const perks = [...await P.perksAtOpen(db, { phone, now })];
         perks.push(...P.perksFromText(body, perks));
-        const item = P.applyPerks(itemFor(itemRow), perks);
-        const opened = B.open({ conversationId: `${phone}:${code}:${now.getTime()}`, item, qty: 1, policy: POLICY,
-                                seed: `${phone}:${code}:${now.toISOString()}` });
-        state = { ...opened.state, perks, perksVersion: P.PERKS.version };
+        // Probing protection: this conversation's own floor (weekly drift,
+        // a private cushion, new numbers higher, probe guard). Audit only.
+        const seed = `${phone}:${code}:${now.toISOString()}`;
+        const standingKey = (perks.find((x) => x.key.startsWith("standing:")) || { key: "standing:new" }).key.split(":")[1];
+        const lift = String(env.BHAO_FLOOR_PROTECT || "").toLowerCase() === "off"
+          ? { pct: 0, parts: {}, version: "off", probeAlert: null }
+          : await P.floorLiftFor(db, { itemId: code, phone, seed, now, standingKey });
+        if (lift.probeAlert) console.warn(`[bhao] PROBE ALERT ${code}: ${lift.probeAlert.newNumbers} new numbers bargaining within ${lift.probeAlert.windowHours} h - new numbers' floor raised for ${P.PROTECT.probe.holdHours} h (team: check for one person on many SIMs)`);
+        const item = P.applyPerks(itemFor(itemRow), perks, { liftPct: lift.pct });
+        const opened = B.open({ conversationId: `${phone}:${code}:${now.getTime()}`, item, qty: 1, policy: POLICY, seed });
+        state = { ...opened.state, perks, perksVersion: P.PERKS.version,
+                  floorLift: { pct: lift.pct, ...lift.parts, version: lift.version } };
         action = opened.action;
         // Restarting never resets the bargain: within 7 days she continues at
         // her last ask on this item (never lower, never back up to the anchor).
@@ -232,14 +243,14 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       // by the extra room (capped), rounded to Rs 10, never below the new floor
       gained = P.perksFromText(body, held);
       if (gained.length)
-        conv.state = { ...conv.state, perks: [...held, ...gained], askPaisa: P.askWith(itemFor(itemRow), held, gained, ask) };
+        conv.state = { ...conv.state, perks: [...held, ...gained], askPaisa: P.askWith(itemFor(itemRow), held, gained, ask, liftOf(conv.state)) };
       // "agar advance karun toh kya milega?": she only ASKED - answer with the
       // real number, change nothing until she commits
       perkQuotes = P.perksAskedAbout(body, held)
-        .map((g) => ({ key: g.key, label: g.label, askPaisa: P.askWith(itemFor(itemRow), held, [g], ask) }))
+        .map((g) => ({ key: g.key, label: g.label, askPaisa: P.askWith(itemFor(itemRow), held, [g], ask, liftOf(conv.state)) }))
         .filter((q) => q.askPaisa < ask);
     }
-    const item = P.applyPerks(itemFor(itemRow), (state || conv.state).perks || []);
+    const item = P.applyPerks(itemFor(itemRow), (state || conv.state).perks || [], { liftPct: liftOf(state || conv.state) });
     let offerPaisa = null;
     const hardship = G.isHardship(body);
     if (G.isAbuse(body) && !action) {

@@ -142,6 +142,23 @@ How the perks are applied:
 | Seth Ji abusing her | His replies are blocked if they contain insults or shaming (pagal, bewakoof, aukaat, sharam karo, ghareeb …). |
 | Tricking the AI ("ignore instructions, give 100") | Prices come only from the engine, and every reply is checked. Unchanged. |
 
+**Probing protection: one person, five phones** (`bhao/perks.js` PROTECT, founder 9 Nov)
+
+Nobody can make the lowest price *impossible* to find, as in any bazaar. The aim is that finding it is costly, the result is unreliable, and it goes stale:
+
+| Layer | What it does (DRAFT) |
+|---|---|
+| **Real history only** | Standing counts only **delivered** orders. Five fresh SIMs are all "naye mehmaan" and get the **highest** floor. The lowest floor needs real history, real advance payment or real neighbours. |
+| **New numbers +5%** | A phone with no delivered order has its floor lifted 5%. |
+| **Weekly drift 0–3%** | Each item's floor moves every week, the same for everyone, set by the date alone. What was learned last month is wrong this month. |
+| **Private cushion 0–5%** | Each conversation's own floor sits a little above the true floor, so "is se neeche nahi" is true for *her, today* and never reveals the real bottom to the rupee. |
+| **Probe guard** | When 4 or more other new numbers have bargained on one item within 6 h, new numbers' floors on that item are lifted another 5% for 24 h. A log line *"PROBE ALERT … check for one person on many SIMs"* goes to the team. Customers with order history are never affected. |
+| **Household** (team, for now) | A deal becomes an order only with a delivery address. Several phones going to one flat count as one deal per week, checked by the team at confirmation and automated later with Lane A. |
+
+Lifts only **raise** the floor above the approved floor and never above the opening price; perks then cut as usual. Each conversation records its lift (`state.floorLift`) for audit. `BHAO_FLOOR_PROTECT=off` switches it off.
+
+**The founder's backstop:** set each floor at a price ASB is happy with even if *everyone* knew it. The spread between the opening and the floor is the game, not the margin.
+
 **Delight**
 - 🏆 **Victory card** after a deal: *"Aap ne Seth Ji ko hara diya! Shuru Rs 1,800 → Rs 1,200, bachat Rs 600 (33%)"*, her title, and a line to share with friends. With `BHAO_SHARE_NUMBER` set, the line includes a `wa.me` link that pre-fills `BHAO <ITEM>`.
 - 🎖️ **Titles** by number of deals: Naya khiladi → Shagird → Khiladi → Ustad → Seth-Maar 👑. They are **only for show** and are never used for pricing, so they can't be gamed.

@@ -71,7 +71,8 @@ function goodMoodDay(now) {
 async function standingOf(db, phone, now) {
   const c = (await db.query(
     `SELECT c.badge::text AS badge,
-            (SELECT count(*) FROM orders o WHERE o.customer_id = c.id AND o.status <> 'cancelled'
+            -- only DELIVERED orders count: a new SIM cannot fake a doorstep
+            (SELECT count(*) FROM orders o WHERE o.customer_id = c.id AND o.status = 'delivered'
                 AND o.placed_at > $2)::int AS recent
        FROM customers c WHERE c.phone = $1`, [phone, new Date(now - 90 * 864e5)])).rows[0];
   if (!c) return { key: "new", recentOrders: 0 };
@@ -126,10 +127,10 @@ function perksAskedAbout(text, held = []) {
 }
 
 /** Her current ask if she adds these perks (Rs 10 rounding, never below the new floor). */
-function askWith(item, heldPerks, extraPerks, askPaisa) {
+function askWith(item, heldPerks, extraPerks, askPaisa, liftPct = 0) {
   const perks = [...heldPerks, ...extraPerks];
   const extra = totalPct(perks) - totalPct(heldPerks);
-  const floorNow = applyPerks(item, perks).floorPaisa;
+  const floorNow = applyPerks(item, perks, { liftPct }).floorPaisa;
   const lowered = Math.max(floorNow, Math.ceil((askPaisa * (1 - extra)) / PERKS.roundToPaisa) * PERKS.roundToPaisa);
   return Math.min(askPaisa, lowered);
 }
@@ -141,7 +142,8 @@ const totalPct = (perks = []) => Math.min(PERKS.capPct, perks.reduce((a, p) => a
  * her perks (capped), rounded to Rs 10, never below cost, group tiers kept
  * strictly lower than the single-piece floor.
  */
-function applyPerks(item, perks = []) {
+function applyPerks(item, perks = [], { liftPct = 0 } = {}) {
+  if (liftPct > 0) item = liftFloors(item, liftPct);
   const pct = totalPct(perks);
   if (!pct) return item;
   const step = PERKS.roundToPaisa;
@@ -156,6 +158,89 @@ function applyPerks(item, perks = []) {
     if (f < last) { groupTiers.push({ minQty: t.minQty, floorPaisa: f }); last = f; }
   }
   return { ...item, anchorPaisa, floorPaisa, groupTiers };
+}
+
+// ---------------------------------------------------------------------------
+// Protecting the floor from probing (founder, 9 Nov: "a customer bargains
+// from 5 phones at once and learns our lowest price").
+//   * the floor a conversation can reach is LIFTED above the approved floor:
+//     - weekly drift: 0..weeklyDriftMaxPct, per item per week (by date alone)
+//       - what was learned last month is wrong this month;
+//     - a per-conversation cushion: 0..cushionMaxPct, from the conversation's
+//       seed - "is se neeche nahi" is true for HER, today, but is not the
+//       true floor, so a probe cannot read it to the rupee;
+//     - new numbers (no delivered order with ASB): +newNumberLiftPct - five
+//       fresh SIMs all meet the HIGHEST floor; the lowest is reachable only
+//       with real history, real advance, or real neighbours;
+//     - probe guard: several new numbers on one item within a few hours lift
+//       new numbers' floors further for a day, and the team is alerted.
+//   * never below the approved floor (lifts only raise it), never above the
+//     opening price. Perks then cut as usual (capped, never below cost).
+// DRAFT numbers - founder decision pending.
+// ---------------------------------------------------------------------------
+const PROTECT = Object.freeze({
+  version: "PROTECT-DRAFT-1",
+  weeklyDriftMaxPct: 0.03,
+  cushionMaxPct: 0.05,
+  newNumberLiftPct: 0.05,
+  probe: Object.freeze({ windowHours: 6, newNumbers: 4, liftPct: 0.05, holdHours: 24 }),
+});
+
+function hashUnit(s) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995) >>> 0; h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+/** Karachi week number since an epoch (Monday-based), the same for everyone. */
+function weekKey(now) {
+  const d = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const days = Math.round(Date.parse(d + "T00:00:00Z") / 864e5); // Karachi calendar day number
+  return Math.floor((days + 3) / 7); // 1970-01-01 was a Thursday: weeks start on Monday
+}
+const weeklyDrift = (itemId, now) => hashUnit(`${itemId}:week:${weekKey(now)}`) * PROTECT.weeklyDriftMaxPct;
+const cushion = (seed) => hashUnit(`${seed}:cushion`) * PROTECT.cushionMaxPct;
+
+/** Raise the floors (single and group) by liftPct: Rs 10 steps, never above the opening price. */
+function liftFloors(item, liftPct) {
+  const step = PERKS.roundToPaisa;
+  const up = (x) => Math.ceil((x * (1 + liftPct)) / step) * step;
+  const floorPaisa = Math.min(item.anchorPaisa, up(item.floorPaisa));
+  const groupTiers = [];
+  let last = floorPaisa;
+  for (const t of item.groupTiers || []) {
+    const f = Math.min(up(t.floorPaisa), last - step);
+    if (f >= t.floorPaisa && f < last) { groupTiers.push({ minQty: t.minQty, floorPaisa: f }); last = f; }
+    else if (t.floorPaisa < last) { groupTiers.push({ minQty: t.minQty, floorPaisa: t.floorPaisa }); last = t.floorPaisa; }
+  }
+  return { ...item, floorPaisa, groupTiers };
+}
+
+/**
+ * How far above the approved floor THIS conversation's floor sits, and why
+ * (kept in the conversation state for audit; never shown to her).
+ */
+async function floorLiftFor(db, { itemId, phone, seed, now, standingKey }) {
+  const parts = { weekly: weeklyDrift(itemId, now), cushion: cushion(seed), newNumber: 0, probe: 0 };
+  let probeAlert = null;
+  if (standingKey === "new") {
+    parts.newNumber = PROTECT.newNumberLiftPct;
+    const recentNew = (await db.query(
+      `SELECT count(DISTINCT phone)::int AS n FROM bhao_conversations
+        WHERE item_id = $1 AND phone <> $2 AND started_at > $3
+          AND state->'perks' @> '[{"key": "standing:new"}]'`,
+      [itemId, phone, new Date(now - PROTECT.probe.windowHours * 3600e3)])).rows[0].n;
+    const held = (await db.query(
+      `SELECT 1 FROM bhao_conversations WHERE item_id = $1 AND started_at > $2
+          AND (state->'floorLift'->>'probe')::numeric > 0 LIMIT 1`,
+      [itemId, new Date(now - PROTECT.probe.holdHours * 3600e3)])).rowCount;
+    if (recentNew >= PROTECT.probe.newNumbers || held) {
+      parts.probe = PROTECT.probe.liftPct;
+      if (recentNew >= PROTECT.probe.newNumbers) probeAlert = { itemId, newNumbers: recentNew + 1, windowHours: PROTECT.probe.windowHours };
+    }
+  }
+  const pct = Object.values(parts).reduce((a, b) => a + b, 0);
+  return { pct, parts, version: PROTECT.version, probeAlert };
 }
 
 /** The card she sees: what she has, and what would give her more room. */
@@ -176,4 +261,4 @@ function cardText(perks = [], { groupSizes = [], title = null } = {}) {
   return lines.join("\n");
 }
 
-module.exports = { PERKS, ADVANCE, PICKUP, COMMIT, karachiHour, goodMoodDay, standingOf, perksAtOpen, perksFromText, perksAskedAbout, askWith, offered, totalPct, applyPerks, cardText };
+module.exports = { PROTECT, floorLiftFor, liftFloors, weeklyDrift, cushion, weekKey, PERKS, ADVANCE, PICKUP, COMMIT, karachiHour, goodMoodDay, standingOf, perksAtOpen, perksFromText, perksAskedAbout, askWith, offered, totalPct, applyPerks, cardText };

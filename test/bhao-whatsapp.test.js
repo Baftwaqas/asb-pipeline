@@ -132,7 +132,8 @@ test("a bargain silent for 24 hours lapses; her next plain message goes to the i
 
 test("'5 lein' then a price uses the group floor", async () => {
   const p = phone();
-  await say(p, "BHAO ASB-NG-POT-5L", 0);
+  // floor protection off: this test is about the group tier itself
+  await say(p, "BHAO ASB-NG-POT-5L", 0, { env: { BHAO_FLOOR_PROTECT: "off" } });
   assert.equal((await say(p, "5 lein toh?", 10)).kind, "talk");
   let r;
   for (let i = 0; i < 12; i++) { r = await say(p, "760", 20 + i * 10); if (r.kind === "accept" || r.kind === "closed") break; }
