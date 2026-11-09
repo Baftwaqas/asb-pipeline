@@ -287,6 +287,56 @@ async function sendImage(toPhone, mediaId, caption = "") {
 }
 
 // ---------------------------------------------------------------------------
+// sendButtons — up to 3 tap buttons under a message, optionally with an
+// uploaded image on top (Bhao Tao, 9 Nov). Inside the 24h window only. A tap
+// comes back as an "interactive" message carrying the button's id.
+//   buttons: [{ id, title }]  title at most 20 characters, id at most 256
+// ---------------------------------------------------------------------------
+async function sendButtons(toPhone, { body, buttons, headerImageId = null, footer = null }) {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      ...(headerImageId ? { header: { type: "image", image: { id: String(headerImageId) } } } : {}),
+      body: { text: String(body).slice(0, 1024) },
+      ...(footer ? { footer: { text: String(footer).slice(0, 60) } } : {}),
+      action: {
+        buttons: buttons.slice(0, 3).map((b) => ({
+          type: "reply", reply: { id: String(b.id).slice(0, 256), title: String(b.title).slice(0, 20) },
+        })),
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// sendList — a menu of up to 10 rows behind one button ("Cheezein dekhein").
+//   rows: [{ id, title, description? }]  title at most 24, description 72
+// ---------------------------------------------------------------------------
+async function sendList(toPhone, { body, buttonText, rows, header = null, footer = null, sectionTitle = "Cheezein" }) {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      ...(header ? { header: { type: "text", text: String(header).slice(0, 60) } } : {}),
+      body: { text: String(body).slice(0, 1024) },
+      ...(footer ? { footer: { text: String(footer).slice(0, 60) } } : {}),
+      action: {
+        button: String(buttonText).slice(0, 20),
+        sections: [{ title: String(sectionTitle).slice(0, 24), rows: rows.slice(0, 10).map((r) => ({
+          id: String(r.id).slice(0, 200), title: String(r.title).slice(0, 24),
+          ...(r.description ? { description: String(r.description).slice(0, 72) } : {}),
+        })) }],
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // markRead — gives the customer blue ticks so they know a human saw it.
 // Cheap courtesy, and it is free. Failures are swallowed on purpose: a missing
 // read receipt must never break the inbox.
@@ -377,6 +427,8 @@ module.exports = {
   sendTemplate,
   sendText,
   sendImage,
+  sendButtons,
+  sendList,
   uploadMedia,
   markRead,
   getMediaUrl,

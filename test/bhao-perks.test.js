@@ -14,9 +14,9 @@ const POT = { itemId: "ASB-NG-POT-5L", variantGid: "gid://shopify/ProductVariant
   anchorPaisa: 180000, floorPaisa: 85000, costPaisa: 60000, maxQty: 20, approvedBy: "test",
   groupTiers: [{ minQty: 5, floorPaisa: 75000 }] };
 
-test("perks lower the opening price and the floor a little - capped, rounded, never below cost, tiers kept valid", () => {
+test("perks lower the floor a little - never the opening, which is always the listed price (founder, 9 Nov)", () => {
   const gold = P.applyPerks(POT, [{ key: "standing:gold", pct: 0.06 }]);
-  assert.deepEqual([gold.anchorPaisa, gold.floorPaisa, gold.groupTiers[0].floorPaisa], [170000, 80000, 71000]);
+  assert.deepEqual([gold.anchorPaisa, gold.floorPaisa, gold.groupTiers[0].floorPaisa], [180000, 80000, 71000]);
   const all = P.applyPerks(POT, [{ pct: 0.06 }, { pct: 0.03 }, { pct: 0.03 }, { pct: 0.02 }]);
   assert.equal(P.totalPct([{ pct: 0.06 }, { pct: 0.03 }, { pct: 0.03 }, { pct: 0.02 }]), 0.10, "capped at 10%");
   assert.equal(all.floorPaisa, 77000, "Rs 765 rounds up to Rs 770");
@@ -78,7 +78,7 @@ after(async () => { if (db) await db.end(); });
 const outbox = async (p) => (await db.query(
   `SELECT m.* FROM bhao_messages m JOIN bhao_conversations c ON c.id = m.conversation_id WHERE c.phone = $1 AND m.direction = 'out' ORDER BY m.id`, [p])).rows;
 
-test("a gold customer opens lower than a new one, and both see their Bhao Card after the greeting", async () => {
+test("gold and new customers both open at the LISTED price (founder, 9 Nov); the gold one has more room; both get their Bhao Card", async () => {
   const noon = new Date("2026-11-08T07:00:00Z"); // 12:00 Karachi: no bohni, no closing time
   const g = phone();
   await db.query(`INSERT INTO customers (phone, badge) VALUES ($1, 'gold')`, [g]);
@@ -86,8 +86,10 @@ test("a gold customer opens lower than a new one, and both see their Bhao Card a
   await BW.onInbound(db, { phone: g, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: noon, env: {}, speak: speakSpy(seen) });
   const fresh = phone();
   await BW.onInbound(db, { phone: fresh, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: noon, env: {}, speak: speakSpy(seen) });
-  assert.equal(seen[0].decision.askPaisa, 170000, "gold: 6% more room from the start (Rs 1,692 -> Rs 1,700)");
-  assert.equal(seen[1].decision.askPaisa, 180000, "new: the approved opening price");
+  assert.equal(seen[0].decision.askPaisa, 180000, "gold opens at the listed price too");
+  assert.equal(seen[1].decision.askPaisa, 180000, "new: the listed price");
+  const st = async (p) => (await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1`, [p])).rows[0].state;
+  assert.ok((await st(g)).perks.some((x) => x.key === "standing:gold"));
   assert.deepEqual(seen[0].perks, ["Gold customer ⭐"]);
   const [greet, card] = await outbox(g);
   assert.equal(card.decision.kind, "bhao_card");

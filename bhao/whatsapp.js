@@ -40,6 +40,7 @@ const V = require("./voice");
 const PW = require("./price-watch");
 const P = require("./perks");
 const G = require("./guard");
+const K = require("./cards");
 
 // DRAFT policy (test values from docs/bhao-tao-engine-v1.md). Founder decision
 // pending; the version is stamped on every conversation.
@@ -54,6 +55,51 @@ const POLICY = Object.freeze({
 const RESTART_MEMORY_DAYS = 7;
 const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
 const START = /^\s*bhao\s+([a-z0-9][a-z0-9-]{2,40})\b/i;
+// "BHAO" alone: show her the items she can bargain on (a tap menu)
+const BARE = /^\s*bhao\s*[.!?]*\s*$/i;
+const rsText = (paisa) => "Rs " + Math.round(paisa / 100).toLocaleString("en-US");
+
+// ---------------------------------------------------------------------------
+// Tap buttons (migration 027). Founder, 9 Nov: the opening price is the
+// listed price, and SHE names the first bargaining number - so one of the
+// three buttons is always "🙋 Apna daam" (hers), never a cut from us.
+// Button ids carry the conversation and, for "manzoor", the exact price she
+// saw, so a tap is read the same as typing it.
+// ---------------------------------------------------------------------------
+function priceButtons(convId, askPaisa, state, item) {
+  const buttons = [
+    { id: `bhao:ok:${convId}:${askPaisa}`, title: `✅ ${rsText(askPaisa)} manzoor` },
+    { id: `bhao:mine:${convId}`, title: "🙋 Apna daam" },
+  ];
+  const held = new Set((state.perks || []).map((p) => p.key));
+  const tier = (item.groupTiers || []).find((t) => (state.qty || 1) < t.minQty);
+  if (P.offered("advance") && !held.has("advance")) buttons.push({ id: `bhao:adv:${convId}`, title: "💵 Advance pe kitna?" });
+  else if (tier) buttons.push({ id: `bhao:group:${convId}:${tier.minQty}`, title: `👥 ${tier.minQty} lein toh?` });
+  return buttons;
+}
+const BUTTON_KINDS = new Set(["open", "refuse", "counter", "final_offer", "talk"]);
+
+/** What a tap means, as if she had typed it. Null for taps that are not Seth Ji's. */
+function fromButton(id) {
+  const m = /^bhao:(ok|mine|adv|group|item):([^:]+)(?::(\w+))?$/.exec(String(id || ""));
+  if (!m) return null;
+  const [, kind, a, b] = m;
+  switch (kind) {
+    case "ok": return Number.isSafeInteger(Number(b)) ? { text: rsText(Number(b)), intent: "accept_tap" } : null;
+    case "mine": return { text: "Main apna daam lagana chahti hoon", intent: "mine" };
+    case "adv": return { text: "Advance pe kitna hoga?", intent: "advance_question" };
+    case "group": return { text: `${b} lein toh kitna?`, intent: "group_question" };
+    case "item": return { text: `BHAO ${a}`, intent: "start" };
+    default: return null;
+  }
+}
+
+/** "BHAO" alone: the items she can bargain on, as a tap menu (max 10). */
+async function menu(db) {
+  const rows = (await db.query(
+    `SELECT item_id, name, anchor_paisa FROM bhao_items WHERE active ORDER BY name LIMIT 10`)).rows;
+  return rows.map((r) => ({ id: `bhao:item:${r.item_id}`, title: r.name.slice(0, 24), description: `Seth Ji ka daam ${rsText(Number(r.anchor_paisa))}` }));
+}
 // "Meri dost ne / padosan ko ... mein mili": she says someone else paid less.
 // Live test, 9 Nov: "meri behan nay bataya hae kay aap nay usay yeh 800 rupay
 // mae di hae" was missed ("behan", "di hae"), and Seth Ji then CONFIRMED a
@@ -104,8 +150,12 @@ async function tx(db, fn) {
  * One new inbound text. `db` is a single client (transactions run on it).
  * Returns { handled, conversationId?, duplicate?, reason? }.
  */
-async function onInbound(db, { phone, text, wamid, now = new Date(), env = process.env, fetchImpl = fetch, speak = V.speak }) {
+async function onInbound(db, { phone, text, wamid, now = new Date(), env = process.env, fetchImpl = fetch, speak = V.speak, intent = null }) {
   const body = String(text || "").slice(0, 1000);
+  if (BARE.test(body)) {
+    const rows = await menu(db);
+    return rows.length ? { handled: true, menu: rows } : { handled: false, reason: "no items" };
+  }
   const start = START.exec(body);
 
   const step = await tx(db, async () => {
@@ -290,6 +340,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         // remembered for her next offer ("5 lein" ... "1200"). Seth Ji may
         // repeat his CURRENT ask if she asks for it - never a lower one.
         action = { kind: "talk", askPaisa: state.askPaisa, ...(gained.length ? { perksGained: gained.map((g) => g.label) } : {}),
+                   ...(intent === "mine" ? { herPriceInvited: true } : {}),
                    ...(perkQuotes.length ? { perkQuotes } : {}) };
         if (named) state = { ...state, pendingQty: named };
       } else {
@@ -349,7 +400,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       claim = { claimedPaisa: claimed, neverSoldThatLow: low == null || claimed < Number(low) };
     }
     const latest = (await db.query(`SELECT * FROM competitor_price_latest WHERE item_id = $1`, [item.itemId])).rows;
-    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried, card, claim, hardship,
+    const uiReady = (await db.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = 'bhao_messages' AND column_name = 'ui'`)).rowCount > 0;
+    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried, card, claim, hardship, uiReady,
              unanswered: unanswered.length ? unanswered : [body],
              history: (await db.query(
                `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND id <= $2
@@ -386,15 +439,31 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       : step.carried
       ? new Date(Math.max(step.carried.getTime(), now.getTime() + 5000))
       : new Date(now.getTime() + seconds(step.action) * 1000);
+    // Tap buttons under his reply (not under the greeting - the card carries them)
+    const ask = Number(step.state.askPaisa);
+    const buttons = step.uiReady && step.state.status === "open" && Number.isSafeInteger(ask)
+      ? priceButtons(step.conversationId, ask, step.state, step.item) : null;
+    const replyUi = buttons && BUTTON_KINDS.has(step.action.kind) && step.action.kind !== "open"
+      ? { type: "buttons", text: said.text, buttons } : null;
     await db.query(
-      `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status)
-       VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, 'pending')`,
-      [step.conversationId, said.text, step.action, said.source, said.provider, JSON.stringify(said.rejected || []), due]);
+      `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status${replyUi ? ", ui" : ""})
+       VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, 'pending'${replyUi ? ", $8" : ""})`,
+      [step.conversationId, said.text, step.action, said.source, said.provider, JSON.stringify(said.rejected || []), due, ...(replyUi ? [replyUi] : [])]);
     if (step.card) {
+      const perkLabels = (step.state.perks || []).map((p) => p.label);
+      const more = [...(P.offered("advance") && !(step.state.perks || []).some((p) => p.key === "advance") ? [P.PERKS.advance.label] : []),
+                    ...(step.item.groupTiers || []).slice(0, 1).map((t) => `👥 ${t.minQty} milke lein`)];
+      const title = (await G.titleOf(db, (await db.query(`SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label;
+      const ui = step.uiReady && buttons ? {
+        type: "buttons",
+        text: `Ye raha aap ka Bhao Card, baji 👆\nSeth Ji ka daam ${rsText(ask)}. Ab aap apna daam lagayein - number likh dein (jaise 1200), ya neeche se chunein:`,
+        image: { kind: "bhao_card", itemName: step.itemRow.name, askPaisa: ask, perks: perkLabels, more, title },
+        buttons,
+      } : null;
       await db.query(
-        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
-         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
-        [step.conversationId, step.card, { kind: "bhao_card", perks: (step.state.perks || []).map((p) => p.key) }, new Date(due.getTime() + 4000)]);
+        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status${ui ? ", ui" : ""})
+         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending'${ui ? ", $5" : ""})`,
+        [step.conversationId, step.card, { kind: "bhao_card", perks: (step.state.perks || []).map((p) => p.key) }, new Date(due.getTime() + 4000), ...(ui ? [ui] : [])]);
     }
     if (step.action.kind === "accept" && step.state.accepted) {
       await db.query(
@@ -414,10 +483,14 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           `SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label,
         shareNumber: (env.BHAO_SHARE_NUMBER || "").replace(/\D/g, "") || null,
       });
+      const vui = step.uiReady && victory ? { type: "image", image: {
+        kind: "victory", itemName: step.itemRow.name, openPaisa: open && open.askPaisa, unitPaisa: step.state.accepted.unitPaisa,
+        qty: step.state.accepted.qty, itemCode: step.itemRow.item_id,
+        title: (await G.titleOf(db, (await db.query(`SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label } } : null;
       if (victory) await db.query(
-        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
-         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
-        [step.conversationId, victory, { kind: "victory" }, new Date(due.getTime() + 9000)]);
+        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status${vui ? ", ui" : ""})
+         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending'${vui ? ", $5" : ""})`,
+        [step.conversationId, victory, { kind: "victory" }, new Date(due.getTime() + 9000), ...(vui ? [vui] : [])]);
     }
     return { handled: true, conversationId: step.conversationId, kind: step.action.kind, source: said.source, due };
   });
@@ -428,10 +501,43 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
  * whatsapp.js's sendText (returns {ok, wamid}); `logOutbound` records the
  * line in the inbox so staff see Seth Ji's side too.
  */
-async function sendDue(db, { sendText, logOutbound = async () => {}, now = new Date(), limit = 20 }) {
+/** Draw a card and put it on Meta's servers; null if either step fails. */
+async function cardMediaId(image, uploadMedia, render) {
+  if (!image || !uploadMedia) return null;
+  const jpg = render(image);
+  if (!jpg) return null;
+  const up = await uploadMedia(jpg, "image/jpeg", `${image.kind}.jpg`).catch(() => null);
+  return up && up.ok ? up.id : null;
+}
+const renderCard = (image) => (image.kind === "victory" ? K.victoryCard(image) : image.kind === "bhao_card" ? K.bhaoCard(image) : null);
+
+/**
+ * One line with its UI: buttons (with the card on top, if any) or a picture.
+ * Anything that cannot be sent rich falls back to the plain text, so she
+ * always gets Seth Ji's words.
+ */
+async function sendRich(r, { sendText, sendButtons, sendImage, uploadMedia, render = renderCard }) {
+  const ui = r.ui;
+  try {
+    if (ui && ui.type === "buttons" && sendButtons) {
+      const headerImageId = ui.image ? await cardMediaId(ui.image, uploadMedia, render) : null;
+      const res = await sendButtons(r.phone, { body: ui.text || r.body, buttons: ui.buttons, headerImageId });
+      if (res && res.ok) return res;
+    } else if (ui && ui.type === "image" && sendImage) {
+      const id = await cardMediaId(ui.image, uploadMedia, render);
+      if (id) { const res = await sendImage(r.phone, id, r.body); if (res && res.ok) return res; }
+    }
+  } catch (e) { console.error("[bhao] rich send failed, sending text:", e.message); }
+  return sendText(r.phone, r.body);
+}
+
+async function sendDue(db, { sendText, sendButtons = null, sendImage = null, uploadMedia = null, render = renderCard,
+                             logOutbound = async () => {}, now = new Date(), limit = 20 }) {
   let sent = 0, failed = 0;
+  const uiCol = (await db.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'bhao_messages' AND column_name = 'ui'`)).rowCount > 0;
   const rows = (await db.query(
-    `SELECT m.id, m.body, c.phone FROM bhao_messages m JOIN bhao_conversations c ON c.id = m.conversation_id
+    `SELECT m.id, m.body, ${uiCol ? "m.ui" : "NULL::jsonb AS ui"}, c.phone FROM bhao_messages m JOIN bhao_conversations c ON c.id = m.conversation_id
       WHERE m.send_status = 'pending' AND m.send_after <= $1 ORDER BY m.send_after, m.id LIMIT $2`, [now, limit])).rows;
   for (const r of rows) {
     await tx(db, async () => {
@@ -439,7 +545,7 @@ async function sendDue(db, { sendText, logOutbound = async () => {}, now = new D
         `SELECT 1 FROM bhao_messages WHERE id = $1 AND send_status = 'pending' FOR UPDATE SKIP LOCKED`, [r.id])).rowCount;
       if (!still) return; // superseded meanwhile, or another sender has it
       let res;
-      try { res = await sendText(r.phone, r.body); } catch (e) { res = { ok: false }; }
+      try { res = await sendRich(r, { sendText, sendButtons, sendImage, uploadMedia, render }); } catch (e) { res = { ok: false }; }
       await db.query(`UPDATE bhao_messages SET send_status = $2, sent_wamid = $3, sent_at = $4 WHERE id = $1`,
         [r.id, res && res.ok ? "sent" : "failed", res && res.wamid ? res.wamid : null, now]);
       if (res && res.ok) sent++; else failed++;
@@ -449,4 +555,4 @@ async function sendDue(db, { sendText, logOutbound = async () => {}, now = new D
   return { sent, failed };
 }
 
-module.exports = { POLICY, onInbound, sendDue, readOffer, readQty, itemFor, CANCEL };
+module.exports = { POLICY, onInbound, sendDue, sendRich, readOffer, readQty, itemFor, CANCEL, fromButton, priceButtons, menu };

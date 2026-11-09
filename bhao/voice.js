@@ -82,6 +82,7 @@ function briefFor(d) {
 
 /** The single price this decision lets the voice say (paisa), or null. */
 function priceOf(d) {
+  if (d.herPriceInvited) return null; // her turn to name a number
   if (d.kind === "accept") return d.offer ? d.offer.unitPaisa : d.askPaisa;
   if (["open", "counter", "final_offer"].includes(d.kind)) return d.askPaisa;
   // after a deal: he may repeat the agreed price (a cancelled deal has none)
@@ -136,6 +137,8 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
       ? "SHE JUST COMMITTED TO: " + decision.perksGained.join("; ") + ". Thank her and tell her the price comes down for it" +
         (decision.kind === "talk" && decision.askPaisa ? ` - with it, her price is now ${rs(decision.askPaisa)}` : "") +
         ", as a condition of the deal ('advance ke saath')." : "",
+    decision.herPriceInvited
+      ? "SHE TAPPED 'APNA DAAM': she wants to name her own price. Invite her warmly to type it as a number (e.g. 1200). Do not name any price yourself." : "",
     decision.perkQuotes && decision.perkQuotes.length
       ? "SHE ASKED WHAT IT WOULD GET HER - answer straight, with the real number, and say it is optional (COD is fine too): " +
         decision.perkQuotes.map((q) => `${q.label.replace(/\s*\p{Extended_Pictographic}/gu, "")}: price becomes ${rs(q.askPaisa)} instead of ${rs(decision.askPaisa)}`).join("; ") +
@@ -297,6 +300,7 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
         return decision.askPaisa
           ? `Shukriya baji! Advance ke saath ab ${rs(decision.askPaisa)}. Boliye, kitne mein lengi?`
           : "Shukriya baji, advance ke saath thori aur gunjaish ban jati hai. Boliye, kitne mein lengi?";
+      if (decision.herPriceInvited) return "Zaroor baji! Apna daam number mein likh dein, jaise 1200. 🙂";
       if (decision.perkQuotes && decision.perkQuotes.length)
         return `Baji, COD bilkul chalega. Advance dein toh daam ${rs(decision.perkQuotes[0].askPaisa)} ho jata hai - marzi aap ki.`;
       return pick(["Ji baji, boliye, kitne mein chahiye?"]);

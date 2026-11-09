@@ -15,13 +15,31 @@ async function ready(db) {
   return rows[0].ok;
 }
 
-/** Hand one freshly saved inbound text to Bhao Tao. Never throws. */
-async function onInbound(db, { phone, text, wamid }) {
+/**
+ * Hand one freshly saved inbound text - or a tap on one of Seth Ji's buttons
+ * (`tap` = the button / list row id) - to Bhao Tao. Never throws.
+ */
+async function onInbound(db, { phone, text, wamid, tap = null, wa = null }) {
   if (!enabled()) return { handled: false, reason: "off" };
+  let intent = null;
+  if (tap) {
+    const t = BW.fromButton(tap);
+    if (!t) return { handled: false, reason: "not a bhao tap" };
+    text = t.text; intent = t.intent;
+  }
   const client = await db.pool.connect();
   try {
     if (!(await ready(client))) return { handled: false, reason: "migration 025 not applied" };
-    const r = await BW.onInbound(client, { phone, text, wamid, now: new Date() });
+    const r = await BW.onInbound(client, { phone, text, wamid, now: new Date(), intent });
+    if (r.menu) {
+      const send = (wa || require("../whatsapp"));
+      const res = await send.sendList(phone, {
+        header: "Seth Ji ki Dukaan", body: "Kis cheez pe bhao lagana hai, baji? Neeche se chunein 👇",
+        buttonText: "Cheezein dekhein", rows: r.menu, footer: "Har sauda alag hota hai",
+      }).catch(() => ({ ok: false }));
+      console.log(`[bhao] ${phone} -> menu (${r.menu.length} items, ${res && res.ok ? "sent" : "send failed"})`);
+      return r;
+    }
     if (r.handled && !r.duplicate) console.log(`[bhao] ${phone} -> ${r.kind || r.reason || "handled"}${r.source ? " (" + r.source + ")" : ""}`);
     return r;
   } catch (e) {
@@ -41,7 +59,13 @@ function start(db, wa, logOutbound) {
     if (!client) return;
     try {
       if (!(await ready(client))) return;
-      const r = await BW.sendDue(client, { sendText: (to, body) => wa.sendText(to, body), logOutbound });
+      const r = await BW.sendDue(client, {
+        sendText: (to, body) => wa.sendText(to, body),
+        sendButtons: wa.sendButtons ? (to, m) => wa.sendButtons(to, m) : null,
+        sendImage: wa.sendImage ? (to, id, cap) => wa.sendImage(to, id, cap) : null,
+        uploadMedia: wa.uploadMedia ? (buf, mime, name) => wa.uploadMedia(buf, mime, name) : null,
+        logOutbound,
+      });
       if (r.sent || r.failed) console.log(`[bhao] sent ${r.sent}, failed ${r.failed}`);
     } catch (e) {
       console.error("[bhao] send sweep failed:", e.message);

@@ -8,8 +8,9 @@
 // store either ... make it visible: is she a regular, once in a blue moon or
 // gold; what time of day; will she pay in advance ..."
 //
-// A perk gives Seth Ji ROOM, not a discount: it lowers the opening price and
-// the floor by a few percent, and the haggle still decides the rest. All
+// A perk gives Seth Ji ROOM, not a discount: it lowers the floor by a few
+// percent - never the opening, which is always the listed price (founder,
+// 9 Nov) - and the haggle still decides the rest. All
 // perks together are capped, and nothing ever goes below the item's cost.
 //
 //   standing  from ASB's own records (customers.badge + orders in 90 days):
@@ -150,7 +151,10 @@ function applyPerks(item, perks = [], { liftPct = 0 } = {}) {
   const cost = item.costPaisa ?? 0;
   const cut = (x) => Math.max(cost, Math.ceil((x * (1 - pct)) / step) * step);
   const floorPaisa = Math.min(item.floorPaisa, cut(item.floorPaisa));
-  const anchorPaisa = Math.max(floorPaisa, cut(item.anchorPaisa));
+  // Founder, 9 Nov: the opening is ALWAYS the listed price - if Seth Ji
+  // opened lower for some customers, the listed price would read as fake.
+  // Perks give room below it (a lower floor); she names the first number.
+  const anchorPaisa = item.anchorPaisa;
   const groupTiers = [];
   let last = floorPaisa;
   for (const t of item.groupTiers || []) {

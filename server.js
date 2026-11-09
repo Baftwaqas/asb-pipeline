@@ -425,8 +425,12 @@ app.post("/webhooks/whatsapp", async (req, res) => {
             handled++;
             // Bhao Tao (off unless BHAO_TAO_WHATSAPP=on): a new text may be a
             // bargain with Seth Ji. Not awaited; it never affects the inbox.
-            if (got.fresh && got.type === "text" && bhao.enabled()) {
-              bhao.onInbound(db, { phone: got.from, text: got.preview, wamid: msg.id }).catch(() => {});
+            // A tap on one of Seth Ji's buttons or menu rows comes back as
+            // an "interactive" message whose id starts with "bhao:".
+            const bhaoTap = got.type === "interactive"
+              ? String(msg.interactive?.button_reply?.id || msg.interactive?.list_reply?.id || "") : "";
+            if (got.fresh && bhao.enabled() && (got.type === "text" || bhaoTap.startsWith("bhao:"))) {
+              bhao.onInbound(db, { phone: got.from, text: got.preview, wamid: msg.id, tap: bhaoTap || null }).catch(() => {});
             }
             // Blue ticks: cheap, free, and tells the customer a human
             // is on the other end. Never allowed to fail the webhook.

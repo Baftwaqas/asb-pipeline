@@ -164,6 +164,19 @@ Lifts only **raise** the floor above the approved floor and never above the open
 - 🎖️ **Titles** by number of deals: Naya khiladi → Shagird → Khiladi → Ustad → Seth-Maar 👑. They are **only for show** and are never used for pricing, so they can't be gamed.
 - 😄 **Seth Ji ka mood**: on some days (about 1 in 4, decided by the date alone) everyone gets 1% more room. It is the same for every customer, so it stays fair.
 
+**Picture cards and tap buttons** (`bhao/cards.js`, migration 027, founder 9 Nov)
+- **The opening is always the listed price.** Perks lower only the floor. If Seth Ji opened lower for some customers, the listed price would read as fake. **She names the first bargaining number.**
+- After the greeting, the **Bhao Card** arrives as a JPG picture (Seth Ji ki Dukaan, her perks, the price tag) with three tap buttons:
+  - `✅ Rs 1,800 manzoor`
+  - `🙋 Apna daam`, always there: it invites her number
+  - `💵 Advance pe kitna?`, or `👥 5 lein toh?` once she has committed to advance
+- Every refusal, counter, final offer and chat reply carries the same three buttons, showing his current price.
+- A tap is read exactly as if she had typed it. The "manzoor" button carries the price she saw.
+- After a deal won below the listed price, the **victory card** arrives as a JPG made to be forwarded. Accepting the listed price gives no victory card, so there is never a fake "bachat".
+- **"BHAO" alone** returns a tap menu of the items (up to 10).
+- `bhao_messages.ui` records exactly what she was shown, and it never changes. If a picture or button cannot be sent, the same words go as plain text.
+- Images are drawn on the server with `@napi-rs/canvas` and Noto Sans (SIL OFL, `bhao/assets/fonts`). No emoji are drawn.
+
 **After the deal: aftercare** (migration 026, founder's live test, 7 Nov)
 - For 24 hours after a deal, Seth Ji still answers her, so he never goes silent after "Sauda pakka".
 - **"Cancel karo / nahi chahiye / mat bhejo / rehne do"** cancels the deal:
