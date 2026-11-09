@@ -184,3 +184,30 @@ test("T1: signed fixture + real PG ledger + mocked Shopify create one COD order 
   assert.equal(expired.shopifyOrderGid,"gid://shopify/Order/7000007");
   assert.equal(calls,1);
 });
+
+test("T0: competing DISTINCT quotes for same household/cycle are serialized in PostgreSQL",async()=>{
+  // Synthetic, isolated household: no Shopify network, customer order or policy activation.
+  // Existing ledger enforces one commitment per household/cycle; it is deliberately
+  // stricter than the founder's 2 kg cumulative Apna Onion entitlement.
+  const hh="LAB-HOUSEHOLD-RACE-ONION";
+  const i={...IDENTITY,householdKey:hh};
+  const qA=makeQuote("LAB-RACE-ONION-A",{customerReference:hh});
+  const qB=makeQuote("LAB-RACE-ONION-B",{customerReference:hh});
+  await seed(qA);
+  await seed(qB);
+  const l=ledger();
+  const [a,b]=await Promise.allSettled([
+    l.claimQuote({quote:qA,identity:i,redemptionKey:redemptionKeyFor(qA.quoteId,qA.version)}),
+    l.claimQuote({quote:qB,identity:i,redemptionKey:redemptionKeyFor(qB.quoteId,qB.version)})
+  ]);
+  assert.equal([a,b].filter(x=>x.status==="fulfilled").length,1);
+  assert.equal([a,b].filter(x=>x.status==="rejected").length,1);
+  const rejected=[a,b].find(x=>x.status==="rejected");
+  assert.match(String(rejected.reason?.message),/CHECKOUT_ALREADY_RESERVED/);
+  const rows=(await pool.query(
+    "SELECT quote_id,state FROM checkout_redemptions WHERE shop_domain=$1 AND household_key=$2 AND cycle_code=$3",
+    [SHOP,hh,cycleCode])).rows;
+  assert.equal(rows.length,1);
+  assert.ok(["LAB-RACE-ONION-A","LAB-RACE-ONION-B"].includes(rows[0].quote_id));
+  assert.equal(rows[0].state,"creating");
+});
