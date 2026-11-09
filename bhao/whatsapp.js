@@ -177,7 +177,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       conv = null;
     }
 
-    let itemRow, state, action, card = null;
+    let itemRow, state, action, card = null, continuing = false;
     if (start || carryCode) {
       const code = start ? start[1].toUpperCase() : carryCode;
       itemRow = (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1 AND active`, [code])).rows[0];
@@ -186,6 +186,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         await db.query(`UPDATE bhao_conversations SET status = 'closed', ended_at = $2 WHERE id = $1`, [conv.id, now]);
         conv = null;
       }
+      // "BHAO <same item>" while that bargain is still open: she is coming
+      // back to it. Say so, with where it stood (live test, 9 Nov: picking
+      // the item again silently resumed at Rs 910, and the listed Rs 1,800
+      // suddenly looked fake).
+      if (conv) continuing = true;
       if (!conv) {
         // Fair play first: daily limit, one deal per item per week, pauses.
         if (!carryCode) {
@@ -329,6 +334,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       } else {
         action = { kind: "aftercare", status: conv.status, offer: conv.accepted_offer, itemCode: conv.item_id };
       }
+    } else if (!action && continuing) {
+      state = conv.state;
+      action = { kind: "talk", askPaisa: Number(state.askPaisa), continuing: true };
     } else if (!action) {
       state = conv.state;
       const amount = readOffer(body);

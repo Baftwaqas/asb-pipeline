@@ -132,3 +132,24 @@ test("migration 027: the UI she was shown is evidence too - it never changes", a
   const card = (await outbox(p)).find((o) => o.ui);
   await assert.rejects(db.query(`UPDATE bhao_messages SET ui = '{"type":"x"}' WHERE id = $1`, [card.id]), /immutable/);
 });
+
+test("coming back to an open bargain ('BHAO <same item>', or picking it from the menu) says where it stood - never a silent new price", async () => {
+  const p = phone();
+  const seen = [];
+  const spy = async (a) => { seen.push(a); return { text: "Ji baji.", source: "template", rejected: [] }; };
+  await say(p, "BHAO ASB-NG-POT-5L", 0, { speak: spy });
+  for (const [i, m] of ["900", "900", "1000", "1000"].entries()) await say(p, m, 100 + i * 100, { speak: spy });
+  const ask = (await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1`, [p])).rows[0].state.askPaisa;
+  assert.ok(ask < 180000);
+  await BW.sendDue(db, { sendText: async () => ({ ok: true, wamid: "w" + ++n }), now: at(3000) }); // his last reply went out
+  const tap = BW.fromButton("bhao:item:ASB-NG-POT-5L");
+  const r = await say(p, tap.text, 3600, { speak: spy, intent: tap.intent });
+  assert.equal(r.kind, "talk");
+  const d = seen.at(-1).decision;
+  assert.equal(d.continuing, true);
+  assert.equal(d.askPaisa, ask);
+  const V = require("../bhao/voice");
+  assert.match(V.template(d, {}), new RegExp("pichli baat Rs " + (ask / 100).toLocaleString("en-US") + " pe ruki thi"));
+  assert.match(V.buildPrompt({ decision: d, itemName: "x", qty: 1, customerText: "", history: [] }).user, /COMING BACK TO HER OPEN BARGAIN/);
+  assert.match(V.template({ kind: "open", askPaisa: 95000, resumed: true }, {}), /Pichli dafa baat Rs 950 tak aayi thi/);
+});

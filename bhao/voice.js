@@ -54,7 +54,9 @@ const ANGLE_TEXT = Object.freeze({
 function briefFor(d) {
   const angle = d.angle && ANGLE_TEXT[d.angle] ? " Angle: " + ANGLE_TEXT[d.angle] + "." : "";
   switch (d.kind) {
-    case "open": return { brief: "Greet her and present the item at the PRICE, no discount. Do not mention advance payment, conditions or her Bhao Card - a separate card message explains those." + angle, mustSayPrice: true };
+    case "open":
+      if (d.resumed) return { brief: "Welcome her BACK: she bargained on this item recently, and the bargain continues from where it stopped - the PRICE, not the listed price. Say plainly that this is where you two left it, then ask what she will pay. Do not mention advance payment or her Bhao Card.", mustSayPrice: true };
+      return { brief: "Greet her and present the item at the PRICE, no discount. Do not mention advance payment, conditions or her Bhao Card - a separate card message explains those." + angle, mustSayPrice: true };
     case "refuse": return { brief: "Refuse her offer without naming ANY price or number. Push her to offer more." + angle, mustSayPrice: false };
     case "lowball_check": return { brief: "Her offer is insultingly low. One short, curt, slightly offended line. No price, no number.", mustSayPrice: false };
     case "counter": return { brief: "Counter at exactly the PRICE." + angle, mustSayPrice: true };
@@ -137,6 +139,8 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
       ? "SHE JUST COMMITTED TO: " + decision.perksGained.join("; ") + ". Thank her and tell her the price comes down for it" +
         (decision.kind === "talk" && decision.askPaisa ? ` - with it, her price is now ${rs(decision.askPaisa)}` : "") +
         ", as a condition of the deal ('advance ke saath')." : "",
+    decision.continuing
+      ? "SHE IS COMING BACK TO HER OPEN BARGAIN on this item. Welcome her back and remind her plainly where it stood: your last price to her was the PRICE (say it). Then ask what she will pay. Never present it as a new offer." : "",
     decision.herPriceInvited
       ? "SHE TAPPED 'APNA DAAM': she wants to name her own price. Invite her warmly to type it as a number (e.g. 1200). Do not name any price yourself." : "",
     decision.perkQuotes && decision.perkQuotes.length
@@ -288,7 +292,9 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
 function template(decision, { offerPaisa, pick = (a) => a[0] }) {
   const p = priceOf(decision);
   switch (decision.kind) {
-    case "open": return pick([`Assalam-o-Alaikum baji! Mota steel, nasal chalegi. ${rs(p)} ki hai.`]);
+    case "open":
+      if (decision.resumed) return `Aaiye baji, phir se! Pichli dafa baat ${rs(p)} tak aayi thi - wahin se aage chalte hain.`;
+      return pick([`Assalam-o-Alaikum baji! Mota steel, nasal chalegi. ${rs(p)} ki hai.`]);
     case "refuse": return pick(["Arre baji, is pe nahi hoga. Maal dekhein pehle, phir bhao lagayen.",
       "Na na baji, itne mein yeh wala nahi aata. Thora aur barhayen."]);
     case "lowball_check": return pick(["Kya baji, mazaaq kar rahi hain? 😐", "Itne mein toh dhakkan bhi nahi aata baji."]);
@@ -300,6 +306,7 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
         return decision.askPaisa
           ? `Shukriya baji! Advance ke saath ab ${rs(decision.askPaisa)}. Boliye, kitne mein lengi?`
           : "Shukriya baji, advance ke saath thori aur gunjaish ban jati hai. Boliye, kitne mein lengi?";
+      if (decision.continuing && p != null) return `Aaiye baji, phir se! Hamari pichli baat ${rs(p)} pe ruki thi. Aap bataiye, kitne mein lengi?`;
       if (decision.herPriceInvited) return "Zaroor baji! Apna daam number mein likh dein, jaise 1200. 🙂";
       if (decision.perkQuotes && decision.perkQuotes.length)
         return `Baji, COD bilkul chalega. Advance dein toh daam ${rs(decision.perkQuotes[0].askPaisa)} ho jata hai - marzi aap ki.`;
