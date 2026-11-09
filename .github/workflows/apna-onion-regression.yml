@@ -6,18 +6,41 @@ on:
   pull_request:
     paths:
       - 'test/adr002-apna-onion-500-to-2000-regression.test.js'
+      - 'test/adr002-pg-ledger.test.js'
       - 'checkout/apna-approved-policy-v1.js'
+      - 'checkout/redemption-ledger-pg-v1.js'
       - 'grocery/apna-limits.js'
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   founder-onion-cap:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54330:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54330
+      PGSSLMODE: disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
-      - name: Test founder onion policy (no external services)
-        run: node --test test/adr002-apna-onion-500-to-2000-regression.test.js
+          node-version-file: '.node-version'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test founder onion signed-policy quantities and PostgreSQL race
+        run: node --test --test-concurrency=1 test/adr002-apna-onion-500-to-2000-regression.test.js test/adr002-pg-ledger.test.js
