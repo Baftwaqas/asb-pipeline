@@ -99,7 +99,7 @@ test("the morning's first customer gets the bohni; once a deal is done today, th
 });
 
 test("'advance de dungi' mid-bargain earns room, and becomes a CONDITION written into the deal", async () => {
-  const noon = new Date("2026-11-10T07:00:00Z");
+  const noon = new Date("2026-11-12T07:00:00Z"); // not a good-mood day
   const seen = [];
   const p = phone();
   await BW.onInbound(db, { phone: p, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: noon, env: {}, speak: speakSpy(seen) });
@@ -113,7 +113,7 @@ test("'advance de dungi' mid-bargain earns room, and becomes a CONDITION written
   const c = (await db.query(`SELECT accepted_offer FROM bhao_conversations WHERE phone = $1`, [p])).rows[0];
   assert.deepEqual(c.accepted_offer.conditions, ["advance"]);
   assert.equal(c.accepted_offer.unitPaisa, 175000, "the ask, lowered 3% by advance payment (Rs 1,746 -> Rs 1,750)");
-  assert.match((await outbox(p)).at(-1).body, /Shart: Advance payment 💵 - is ke baghair yeh daam nahi/);
+  assert.match((await outbox(p)).find((o) => o.decision.kind === "accept_followup").body, /Shart: Advance payment 💵 - is ke baghair yeh daam nahi/);
 });
 
 test("'meri dost ko 800 mein mili': checked against our records, never revealing anyone's price", async () => {

@@ -61,6 +61,8 @@ function briefFor(d) {
     case "final_offer": return { brief: "State the PRICE as your absolute last price. Firm." , mustSayPrice: true };
     case "closed": return { brief: "No deal today. Close warmly and invite her back. No price, no number.", mustSayPrice: false };
     case "talk": return { brief: "She is chatting, not offering. Answer what she said - every question in it - stay on the item, and nudge her to name her price. Only if she asks what it costs, tell her the PRICE.", mustSayPrice: false };
+    case "abuse_warning": return { brief: "She used insulting language. Do NOT insult back, do not lecture, do not mock. One calm, dignified line: Seth Ji does business with izzat, and if she speaks respectfully the bargain continues. No price, no number.", mustSayPrice: false };
+    case "abuse_close": return { brief: "End the bargain politely because of repeated insults.", mustSayPrice: false };
     case "cancel": return { brief: "She has just CANCELLED the deal she agreed. Accept it at once and graciously: say the order is cancelled, no pressure, no guilt, no sarcasm, and that she is welcome back anytime. If she says she got it cheaper somewhere or from someone, do not argue, do not call her a liar and do not match it - at most say kindly that your price was for this quality. No price of your own.", mustSayPrice: false };
     case "aftercare":
       if (d.status === "cancelled")
@@ -110,7 +112,7 @@ const PERSONA = [
 ].join("\n");
 
 function buildPrompt({ decision, itemName, qty, customerText, customerMessages = null, history, itemFacts = [], competitorFacts = [], stockLeft = null,
-                       perks = [], morePerks = [], claim = null }) {
+                       perks = [], morePerks = [], claim = null, hardship = false }) {
   const { brief } = briefFor(decision);
   const price = priceOf(decision);
   const msgs = (customerMessages && customerMessages.length ? customerMessages : [customerText || ""])
@@ -134,6 +136,8 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
         ? `CLAIM CHECK: our records show this item has NEVER been sold by us at ${rs(claim.claimedPaisa)} or less. You may say so kindly ('yeh hamari dukaan se itne mein kabhi nahi gayi, shayad koi aur maal tha') - never call her a liar.`
         : "CLAIM CHECK: some customers did get it lower, through their own Bhao Card and bargaining. Admit prices differ and explain why in general terms; never reveal who or what they paid; offer her the ways to more room."
       : "",
+    hardship
+      ? "SHE MENTIONED A HARDSHIP (illness, money trouble, a family need). Be genuinely kind and respectful - never doubt or mock it, never use it for drama. The price does NOT change because of it (only the INSTRUCTION decides prices). You may say our team can talk to her personally ('hamari team aap se zaroor baat karegi')." : "",
     "INSTRUCTION: " + brief,
     price != null
       ? decision.kind === "talk"
@@ -155,6 +159,8 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
 // Always banned: fake deadlines, and anything that breaks Seth Ji's character.
 // "sab se sasta" / "cheapest" is a claim about EVERY seller, which no check
 // of a few listings can prove: never, in either direction.
+// Seth Ji never insults, shames or belittles her (her dignity is not part of the haggle).
+const INSULT = /\b(bewaqoof|bewakoof|be\s*waqoof|pagal|paagal|jahil|jaahil|ghatiya|aukat|aukaat|sharam\s+kar\w*|besharam|kanjoos\s+aurat|ghareeb|faqeer|bhikari|bhikaari|kambakht|stupid|idiot)\b/i;
 const BANNED = /\b(sirf aaj|aaj hi|offer khatam|chatbot|bot|artificial intelligence|language model|algorithm|sab se sast[ai]|sabse sast[ai]|cheapest|lowest price)\b/i;
 // Allowed ONLY when backed by data passed in (competitorFacts / stockLeft).
 const MARKETPLACES = /\b(daraz|olx|amazon|alibaba|aliexpress|shophive|telemart|priceoye|temu|competitor)\b/gi;
@@ -194,6 +200,7 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
   if (BANNED.test(t)) why.push("invented claim or forbidden word");
+  if (INSULT.test(t)) why.push("insulting her - never");
   const backed = new Set(competitorFacts.map((f) => String(f.marketplace).toLowerCase()));
   let named = false;
   for (const m of t.matchAll(MARKETPLACES)) { named = true; if (!backed.has(m[1].toLowerCase())) why.push("unbacked competitor: " + m[1]); }
@@ -232,6 +239,8 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
       if (decision.perksGained && decision.perksGained.length)
         return pick(["Theek hai baji, is pe thori aur gunjaish ban jati hai. Ab boliye, kitne mein lena hai?"]);
       return pick(["Ji baji, boliye, kitne mein chahiye?"]);
+    case "abuse_warning": return pick(["Baji, Seth Ji izzat se karobar karte hain. Aap tameez se baat karein toh bhao zaroor hoga. 🙏"]);
+    case "abuse_close": return "Baji, is tarah baat nahi ho sakti. Aaj ka bhao yahin khatam - kuch din baad izzat se phir aaiye ga. Allah hafiz. 🙏";
     case "cancel": return pick(["Koi baat nahi baji, sauda cancel kar diya. Jab dil chahe phir aaiye ga. 🙏"]);
     case "aftercare":
       return decision.status === "accepted" && p != null
@@ -301,7 +310,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
  */
 async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", customerMessages = null, history = [],
                        groupSizes = [], itemFacts = [], competitorFacts = [], stockLeft = null,
-                       perks = [], morePerks = [], claim = null,
+                       perks = [], morePerks = [], claim = null, hardship = false,
                        env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
   const provider = String(env.BHAO_VOICE_PROVIDER || "off").toLowerCase();
@@ -309,7 +318,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
                                               provider: provider === "off" ? null : provider, attempts, rejected });
   if (!PROVIDERS[provider]) return fallback([], 0);
 
-  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft, perks, morePerks, claim });
+  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft, perks, morePerks, claim, hardship });
   const maxLength = maxLengthFor(customerMessages && customerMessages.length ? customerMessages : [customerText]);
   const rejected = [];
   let retryNote = null;

@@ -39,6 +39,9 @@ const PERKS = Object.freeze({
   shaam:   { pct: 0.02, label: "Dukaan band hone ka waqt 🌙", fromHour: 21 },
   advance: { pct: 0.03, label: "Advance payment 💵", conditional: true },
   pickup:  { pct: 0.02, label: "Khud pickup 🛵", conditional: true },
+  // Some days Seth Ji is simply in a good mood - the SAME for everyone that
+  // day (decided by the date alone), so it is fun and still fair.
+  mood:    { pct: 0.01, label: "Aaj Seth Ji ka mood bohat acha hai 😄", everyNthDay: 4 },
   roundToPaisa: 1000, // Rs 10
 });
 
@@ -52,6 +55,14 @@ function karachiHour(now) {
 function karachiDayStart(now) {
   const d = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
   return new Date(d + "T00:00:00+05:00");
+}
+
+/** Is today one of Seth Ji's good-mood days? Same answer for every customer. */
+function goodMoodDay(now) {
+  const d = karachiDayStart(now).toISOString().slice(0, 10);
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < d.length; i++) { h ^= d.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h % PERKS.mood.everyNthDay === 0;
 }
 
 /** Her standing with ASB, from ASB's own records. Unknown phone = new. */
@@ -82,6 +93,7 @@ async function perksAtOpen(db, { phone, now }) {
     if (!sold) out.push({ key: "bohni", pct: PERKS.bohni.pct, label: PERKS.bohni.label });
   }
   if (h >= PERKS.shaam.fromHour) out.push({ key: "shaam", pct: PERKS.shaam.pct, label: PERKS.shaam.label });
+  if (goodMoodDay(now)) out.push({ key: "mood", pct: PERKS.mood.pct, label: PERKS.mood.label });
   return out;
 }
 
@@ -119,9 +131,10 @@ function applyPerks(item, perks = []) {
 }
 
 /** The card she sees: what she has, and what would give her more room. */
-function cardText(perks = [], { groupSizes = [] } = {}) {
+function cardText(perks = [], { groupSizes = [], title = null } = {}) {
   const have = new Set(perks.map((p) => p.key));
   const lines = ["🧾 *Aap ka Bhao Card*"];
+  if (title) lines.push("Darja: " + title);
   for (const p of perks) {
     if (p.key.startsWith("standing:") && p.recentOrders) lines.push(`${p.label} (pichle 3 mahine: ${p.recentOrders} order)`);
     else lines.push(p.label);
@@ -135,4 +148,4 @@ function cardText(perks = [], { groupSizes = [] } = {}) {
   return lines.join("\n");
 }
 
-module.exports = { PERKS, ADVANCE, PICKUP, karachiHour, standingOf, perksAtOpen, perksFromText, totalPct, applyPerks, cardText };
+module.exports = { PERKS, ADVANCE, PICKUP, karachiHour, goodMoodDay, standingOf, perksAtOpen, perksFromText, totalPct, applyPerks, cardText };

@@ -74,7 +74,10 @@ test("a full bargain on WhatsApp: lowball, refusals, counters, a settle; never a
   assert.ok(["fair_offer_after_rounds", "offer_above_ask_extra_refused"].includes(c.accepted_offer.why), c.accepted_offer.why);
   assert.ok(c.accepted_offer.unitPaisa >= 85000 && c.accepted_offer.unitPaisa < 200000);
   const out = await outbox(p);
-  assert.match(out.at(-1).body, /Sauda pakka.*Hamari team aap ko order confirm/);
+  assert.match(out.find((o) => o.decision.kind === "accept_followup").body, /Sauda pakka.*Hamari team aap ko order confirm/);
+  const win = out.at(-1);
+  assert.equal(win.decision.kind, "victory", "then her shareable victory card");
+  assert.match(win.body, /Aap ne Seth Ji ko hara diya![\s\S]*Shuru: Rs 1,800 → Aap ka sauda: Rs 1,\d00[\s\S]*BHAO ASB-NG-POT-5L/);
   // after acceptance the haggling is over, but Seth Ji still answers her (aftercare, 026)
   const thanks = await say(p, "shukriya", t + 1000);
   assert.equal(thanks.kind, "aftercare");

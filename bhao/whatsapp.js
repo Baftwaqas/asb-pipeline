@@ -39,6 +39,7 @@ const B = require("./engine");
 const V = require("./voice");
 const PW = require("./price-watch");
 const P = require("./perks");
+const G = require("./guard");
 
 // DRAFT policy (test values from docs/bhao-tao-engine-v1.md). Founder decision
 // pending; the version is stamped on every conversation.
@@ -131,6 +132,26 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         conv = null;
       }
       if (!conv) {
+        // Fair play first: daily limit, one deal per item per week, pauses.
+        if (!carryCode) {
+          const ok = await G.canStart(db, { phone, itemId: code, itemName: itemRow.name, now });
+          if (!ok.ok) {
+            const g = (await db.query(
+              `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at, ended_at)
+               VALUES ($1, $2, 'closed', $3, $4, $5, $5, $5) RETURNING id`,
+              [phone, code, { closedFor: ok.reason, policyVersion: POLICY.version }, POLICY.version, now])).rows[0];
+            const saved = await db.query(
+              `INSERT INTO bhao_messages (conversation_id, direction, inbound_wamid, body) VALUES ($1, 'in', $2, $3)
+               ON CONFLICT (inbound_wamid) DO NOTHING RETURNING id`, [g.id, wamid, body]);
+            if (!saved.rowCount) return { handled: true, duplicate: true, conversationId: g.id };
+            await db.query(
+              `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
+               VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
+              [g.id, ok.text, { kind: "guard", reason: ok.reason }, new Date(now.getTime() + 8000)]);
+            console.log(`[bhao] ${phone} -> not started (${ok.reason})`);
+            return { handled: true, guarded: ok.reason, conversationId: g.id, kind: "guard" };
+          }
+        }
         // Her Bhao Card: standing with ASB and the time of day, as she walks in.
         const perks = [...await P.perksAtOpen(db, { phone, now })];
         perks.push(...P.perksFromText(body, perks));
@@ -143,6 +164,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         // her last ask on this item (never lower, never back up to the anchor).
         const prev = (await db.query(
           `SELECT state FROM bhao_conversations WHERE phone = $1 AND item_id = $2 AND started_at > $3
+              AND state ? 'askPaisa'
             ORDER BY started_at DESC LIMIT 1`, [phone, code, new Date(now - RESTART_MEMORY_DAYS * 864e5)])).rows[0];
         if (prev && Number(prev.state.askPaisa) < state.askPaisa) {
           state.askPaisa = Math.max(Number(prev.state.askPaisa), item.floorPaisa);
@@ -152,7 +174,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at)
            VALUES ($1, $2, 'open', $3, $4, $5, $5) RETURNING *`, [phone, code, state, POLICY.version, now])).rows[0];
         if (carryCode) action = undefined; // not a greeting: answer what she just wrote
-        else card = P.cardText(perks, { groupSizes: item.groupTiers.map((t) => t.minQty) });
+        else card = P.cardText(perks, { groupSizes: item.groupTiers.map((t) => t.minQty), title: (await G.titleOf(db, phone)).label });
       }
     }
     // No open bargain: if she made a deal (or cancelled one) in the last
@@ -172,10 +194,17 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     if (!conv) return { handled: false, reason: "no open bargain" };
 
     const saved = await db.query(
-      `INSERT INTO bhao_messages (conversation_id, direction, inbound_wamid, body) VALUES ($1, 'in', $2, $3)
-       ON CONFLICT (inbound_wamid) DO NOTHING RETURNING id`, [conv.id, wamid, body]);
+      `INSERT INTO bhao_messages (conversation_id, direction, inbound_wamid, body, created_at) VALUES ($1, 'in', $2, $3, $4)
+       ON CONFLICT (inbound_wamid) DO NOTHING RETURNING id`, [conv.id, wamid, body, now]);
     if (!saved.rowCount) return { handled: true, duplicate: true, conversationId: conv.id };
     const inboundId = saved.rows[0].id;
+
+    // A burst of messages: the reply already queued will answer them
+    // together (it reads everything unanswered when it is composed next).
+    if (!aftercare && !action && await G.flooding(db, { conversationId: conv.id, now })) {
+      await db.query(`UPDATE bhao_conversations SET last_inbound_at = $2 WHERE id = $1`, [conv.id, now]);
+      return { handled: true, throttled: true, conversationId: conv.id };
+    }
 
     // Anything Seth Ji had not said yet is now out of date - but what it
     // ANSWERED is not. A real seller hears "200" and "fazool baat mat karo"
@@ -185,11 +214,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const waiting = (await db.query(
       `SELECT decision, send_after FROM bhao_messages
         WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'pending'
-          AND decision->>'kind' NOT IN ('accept_followup', 'bhao_card')
+          AND decision->>'kind' NOT IN ('accept_followup', 'bhao_card', 'victory')
         ORDER BY id DESC LIMIT 1`, [conv.id])).rows[0] || null;
     await db.query(
       `UPDATE bhao_messages SET send_status = 'superseded' WHERE conversation_id = $1 AND send_status = 'pending'
-          AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card')`, [conv.id]);
+          AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card', 'victory')`, [conv.id]);
 
     itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
     let gained = [];
@@ -210,7 +239,22 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     }
     const item = P.applyPerks(itemFor(itemRow), (state || conv.state).perks || []);
     let offerPaisa = null;
-    if (aftercare) {
+    const hardship = G.isHardship(body);
+    if (G.isAbuse(body) && !action) {
+      // Gaali: never answered in kind, never a price move. First time a calm
+      // warning; second time the bargain ends politely and pauses a week.
+      state = conv.state;
+      const strikes = Number(state.abuseStrikes || 0) + 1;
+      state = { ...state, abuseStrikes: strikes };
+      if (!aftercare && strikes >= G.LIMITS.ABUSE_STRIKES_TO_CLOSE) {
+        state = { ...state, closedFor: "abuse", status: "closed" };
+        action = { kind: "abuse_close" };
+        console.log(`[bhao] ${phone} bargain CLOSED for abuse (paused ${G.LIMITS.PAUSE_DAYS} days)`);
+      } else {
+        action = { kind: "abuse_warning" };
+      }
+      if (aftercare) await db.query(`UPDATE bhao_conversations SET state = $2 WHERE id = $1`, [conv.id, state]);
+    } else if (aftercare) {
       // The deal is done (or was cancelled): no price moves any more.
       state = conv.state;
       offerPaisa = readOffer(body); // she may quote someone else's price; he may repeat it, never match it
@@ -260,7 +304,8 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     if (aftercare) {
       await db.query(`UPDATE bhao_conversations SET last_inbound_at = $2 WHERE id = $1`, [conv.id, now]);
     } else {
-      const status = state.status === "accepted" ? "accepted" : state.status === "closed" ? "closed" : "open";
+      const status = action.kind === "abuse_close" ? "closed"
+        : state.status === "accepted" ? "accepted" : state.status === "closed" ? "closed" : "open";
       await db.query(
         `UPDATE bhao_conversations SET state = $2, status = $3, last_inbound_at = $4,
                 accepted_offer = $5, ended_at = CASE WHEN $3 = 'open' THEN NULL ELSE $4::timestamptz END
@@ -290,19 +335,21 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       claim = { claimedPaisa: claimed, neverSoldThatLow: low == null || claimed < Number(low) };
     }
     const latest = (await db.query(`SELECT * FROM competitor_price_latest WHERE item_id = $1`, [item.itemId])).rows;
-    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried, card, claim,
+    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried, card, claim, hardship,
              unanswered: unanswered.length ? unanswered : [body],
              history: (await db.query(
                `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND id <= $2
                    AND (direction = 'in' OR send_status = 'sent')
                  ORDER BY id DESC LIMIT 8`, [conv.id, lastSaid])).rows.reverse() };
   });
-  if (!step.handled || step.duplicate) return step;
+  if (!step.handled || step.duplicate || step.guarded || step.throttled) return step;
 
   // Words, outside the transaction (a model call takes seconds).
   const voiced = V.priceOf(step.action) ?? step.state.askPaisa;
   const competitorFacts = PW.competitorFacts({ latest: step.latest, ourUnitPaisa: voiced, now }).facts;
-  const said = await speak({
+  const said = step.action.kind === "abuse_close"
+    ? { text: V.template(step.action, {}), source: "template", provider: null, rejected: [] }
+    : await speak({
     decision: step.action, itemName: step.itemRow.name, qty: step.state.qty, offerPaisa: step.offerPaisa,
     customerText: step.unanswered.join("\n"), customerMessages: step.unanswered, history: step.history.map((h) => ({ from: h.direction === "in" ? "baji" : "seth", text: h.body })),
     groupSizes: step.item.groupTiers.map((t) => t.minQty), itemFacts: step.itemRow.facts || [],
@@ -310,7 +357,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     perks: (step.state.perks || []).map((p) => p.label.replace(/\s*\(.*\)$/, "")),
     morePerks: ["advance", "pickup"].filter((k) => !(step.state.perks || []).some((p) => p.key === k))
       .map((k) => P.PERKS[k].label),
-    claim: step.claim,
+    claim: step.claim, hardship: step.hardship,
   });
 
   // Queue the reply - unless she has written again meanwhile (that message
@@ -346,6 +393,17 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
              : "") +
            ` Hamari team aap ko order confirm karne ke liye abhi message karegi.`,
          { kind: "accept_followup", offerId: step.state.accepted.offerId }, new Date(due.getTime() + 5000)]);
+      const open = (step.state.events || []).find((e) => e.kind === "open");
+      const victory = G.victoryText({
+        openPaisa: open && open.askPaisa, unitPaisa: step.state.accepted.unitPaisa, qty: step.state.accepted.qty,
+        itemCode: step.itemRow.item_id, title: (await G.titleOf(db, (await db.query(
+          `SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label,
+        shareNumber: (env.BHAO_SHARE_NUMBER || "").replace(/\D/g, "") || null,
+      });
+      if (victory) await db.query(
+        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
+         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
+        [step.conversationId, victory, { kind: "victory" }, new Date(due.getTime() + 9000)]);
     }
     return { handled: true, conversationId: step.conversationId, kind: step.action.kind, source: said.source, due };
   });
