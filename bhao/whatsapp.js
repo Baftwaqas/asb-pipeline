@@ -221,21 +221,20 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card', 'victory')`, [conv.id]);
 
     itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
-    let gained = [];
+    let gained = [], perkQuotes = [];
     if (!aftercare && !action) {
-      // "advance de dungi", "khud le jaungi": a perk earned mid-bargain
-      gained = P.perksFromText(body, conv.state.perks || []);
-      if (gained.length) {
-        // a real seller drops the ask too: her current ask comes down by the
-        // extra room (capped), rounded to Rs 10, never below the new floor
-        const before = P.totalPct(conv.state.perks || []);
-        const perks = [...(conv.state.perks || []), ...gained];
-        const extra = P.totalPct(perks) - before;
-        const floorNow = P.applyPerks(itemFor(itemRow), perks).floorPaisa;
-        const ask = Number(conv.state.askPaisa);
-        const lowered = Math.max(floorNow, Math.ceil((ask * (1 - extra)) / P.PERKS.roundToPaisa) * P.PERKS.roundToPaisa);
-        conv.state = { ...conv.state, perks, askPaisa: Math.min(ask, lowered) };
-      }
+      const held = conv.state.perks || [];
+      const ask = Number(conv.state.askPaisa);
+      // "advance de dungi": she COMMITTED - a real seller drops the ask too,
+      // by the extra room (capped), rounded to Rs 10, never below the new floor
+      gained = P.perksFromText(body, held);
+      if (gained.length)
+        conv.state = { ...conv.state, perks: [...held, ...gained], askPaisa: P.askWith(itemFor(itemRow), held, gained, ask) };
+      // "agar advance karun toh kya milega?": she only ASKED - answer with the
+      // real number, change nothing until she commits
+      perkQuotes = P.perksAskedAbout(body, held)
+        .map((g) => ({ key: g.key, label: g.label, askPaisa: P.askWith(itemFor(itemRow), held, [g], ask) }))
+        .filter((q) => q.askPaisa < ask);
     }
     const item = P.applyPerks(itemFor(itemRow), (state || conv.state).perks || []);
     let offerPaisa = null;
@@ -276,7 +275,8 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         // talking, or naming a quantity: no price moves; the quantity is
         // remembered for her next offer ("5 lein" ... "1200"). Seth Ji may
         // repeat his CURRENT ask if she asks for it - never a lower one.
-        action = { kind: "talk", askPaisa: state.askPaisa, ...(gained.length ? { perksGained: gained.map((g) => g.label) } : {}) };
+        action = { kind: "talk", askPaisa: state.askPaisa, ...(gained.length ? { perksGained: gained.map((g) => g.label) } : {}),
+                   ...(perkQuotes.length ? { perkQuotes } : {}) };
         if (named) state = { ...state, pendingQty: named };
       } else {
         offerPaisa = amount;
@@ -355,9 +355,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     groupSizes: step.item.groupTiers.map((t) => t.minQty), itemFacts: step.itemRow.facts || [],
     competitorFacts, stockLeft: step.itemRow.stock_left, env, fetchImpl,
     perks: (step.state.perks || []).map((p) => p.label.replace(/\s*\(.*\)$/, "")),
-    morePerks: ["advance", "pickup"].filter((k) => !(step.state.perks || []).some((p) => p.key === k))
+    morePerks: ["advance", "pickup"].filter((k) => P.offered(k) && !(step.state.perks || []).some((p) => p.key === k))
       .map((k) => P.PERKS[k].label),
-    claim: step.claim, hardship: step.hardship,
+    claim: step.claim, hardship: step.hardship, pickupOffered: P.offered("pickup"),
   });
 
   // Queue the reply - unless she has written again meanwhile (that message

@@ -38,7 +38,9 @@ const PERKS = Object.freeze({
   bohni:   { pct: 0.03, label: "Subah ki bohni 🌅", beforeHour: 12 },
   shaam:   { pct: 0.02, label: "Dukaan band hone ka waqt 🌙", fromHour: 21 },
   advance: { pct: 0.03, label: "Advance payment 💵", conditional: true },
-  pickup:  { pct: 0.02, label: "Khud pickup 🛵", conditional: true },
+  // ASB does not offer self-pickup yet (founder's live test, 9 Nov: "khud
+  // pickup tu aap ki website pr arha hi nahi"). Off until it does.
+  pickup:  { pct: 0.02, label: "Khud pickup 🛵", conditional: true, enabled: false },
   // Some days Seth Ji is simply in a good mood - the SAME for everyone that
   // day (decided by the date alone), so it is fun and still fair.
   mood:    { pct: 0.01, label: "Aaj Seth Ji ka mood bohat acha hai 😄", everyNthDay: 4 },
@@ -97,13 +99,39 @@ async function perksAtOpen(db, { phone, now }) {
   return out;
 }
 
-/** Perks her message earns ("advance de dungi", "khud le jaungi"), not already held. */
+// She COMMITS ("advance de dungi", "haan, advance kar deti hoon") - as
+// opposed to ASKING ("agar advance karun toh kya milega?") or complaining
+// ("advance kyun mang rahe ho?"). Live test, 9 Nov: a question was taken as
+// a promise, the price moved silently, and Seth Ji then said "discount nahi
+// milta". Only a commitment earns the perk; a question gets a straight answer.
+const COMMIT = /\b(?:de\s*doo?n?\s*g[iea]|de\s*dun?g[iea]|kar\s*doo?n?\s*g[iea]|kar\s*dun?g[iea]|kar\s*det[ia]|kar\s*rah[ia]|bhej\s*doo?n?\s*g[iea]|bhej\s*dun?g[iea]|bhej\s*det[ia]|haan|ji\s+haan|theek\s+hai|thik\s+hai|ok\b|okay|chalo|chalein|done|pakka|manzoor)/i;
+const QUESTION = /\?|\bagar\b|\bkya\b|\bkia\b|\bkitn[aei]\b|\bkyun\b|\bkyu\b|\bkuu?\b|\bkoo\b|\bmil[ae]y?\s*g[aei]\b|\bmilta\b|\bfaida\b/i;
+const offered = (k) => PERKS[k].enabled !== false;
+const mentions = (text) => [["advance", ADVANCE], ["pickup", PICKUP]].filter(([k, re]) => offered(k) && re.test(text)).map(([k]) => k);
+
+/** Perks her message EARNS: she committed to them. */
 function perksFromText(text, held = []) {
   const have = new Set(held.map((p) => p.key));
-  const add = [];
-  if (ADVANCE.test(text) && !have.has("advance")) add.push({ key: "advance", pct: PERKS.advance.pct, label: PERKS.advance.label, conditional: true });
-  if (PICKUP.test(text) && !have.has("pickup")) add.push({ key: "pickup", pct: PERKS.pickup.pct, label: PERKS.pickup.label, conditional: true });
-  return add;
+  const committed = COMMIT.test(text) && !/\bagar\b/i.test(text);
+  if (!committed) return [];
+  return mentions(text).filter((k) => !have.has(k))
+    .map((k) => ({ key: k, pct: PERKS[k].pct, label: PERKS[k].label, conditional: true }));
+}
+
+/** Perks she only ASKED about (or questioned): answer with what it would really mean. */
+function perksAskedAbout(text, held = []) {
+  const have = new Set(held.map((p) => p.key));
+  if (perksFromText(text, held).length) return [];
+  return mentions(text).filter((k) => !have.has(k)).map((k) => ({ key: k, pct: PERKS[k].pct, label: PERKS[k].label }));
+}
+
+/** Her current ask if she adds these perks (Rs 10 rounding, never below the new floor). */
+function askWith(item, heldPerks, extraPerks, askPaisa) {
+  const perks = [...heldPerks, ...extraPerks];
+  const extra = totalPct(perks) - totalPct(heldPerks);
+  const floorNow = applyPerks(item, perks).floorPaisa;
+  const lowered = Math.max(floorNow, Math.ceil((askPaisa * (1 - extra)) / PERKS.roundToPaisa) * PERKS.roundToPaisa);
+  return Math.min(askPaisa, lowered);
 }
 
 const totalPct = (perks = []) => Math.min(PERKS.capPct, perks.reduce((a, p) => a + (p.pct || 0), 0));
@@ -140,12 +168,12 @@ function cardText(perks = [], { groupSizes = [], title = null } = {}) {
     else lines.push(p.label);
   }
   const more = [];
-  if (!have.has("advance")) more.push("💵 advance payment");
-  if (!have.has("pickup")) more.push("🛵 khud pickup");
+  if (!have.has("advance")) more.push("💵 advance payment (marzi hai, COD bhi chalega)");
+  if (offered("pickup") && !have.has("pickup")) more.push("🛵 khud pickup");
   if (groupSizes.length) more.push(`👥 ${groupSizes[0]} milke lein`);
   if (more.length) lines.push("Aur gunjaish chahiye? " + more.join(" · "));
   lines.push("_Har sauda alag hota hai - aap ka card aap ka bhao._");
   return lines.join("\n");
 }
 
-module.exports = { PERKS, ADVANCE, PICKUP, karachiHour, goodMoodDay, standingOf, perksAtOpen, perksFromText, totalPct, applyPerks, cardText };
+module.exports = { PERKS, ADVANCE, PICKUP, COMMIT, karachiHour, goodMoodDay, standingOf, perksAtOpen, perksFromText, perksAskedAbout, askWith, offered, totalPct, applyPerks, cardText };

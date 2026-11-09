@@ -29,9 +29,19 @@ test("perks lower the opening price and the floor a little - capped, rounded, ne
   assert.equal(P.applyPerks(POT, []), POT, "no perks: the item as approved");
 });
 
-test("what she writes can earn a perk: advance payment, self-pickup", () => {
+test("only a COMMITMENT earns a perk; a question or complaint about advance earns nothing (live test, 9 Nov)", () => {
   assert.deepEqual(P.perksFromText("advance de dungi").map((p) => p.key), ["advance"]);
-  assert.deepEqual(P.perksFromText("JazzCash se pehle payment kar doon gi, khud le jaungi").map((p) => p.key), ["advance", "pickup"]);
+  assert.deepEqual(P.perksFromText("JazzCash se pehle payment kar doon gi, khud le jaungi").map((p) => p.key), ["advance"],
+    "self-pickup is not offered by ASB yet");
+  for (const t of ["Liken aap ki website pr likha hae cash on delivery, phir aap advance Payment kuu mang rhaei hae bhai?",
+                   "Agar mae advance Payment karti hu, tu mughay kia sahulat Milay gi?",
+                   "mughay discount kia Milan ga, agar mae advance Payment karti hu?"]) {
+    assert.deepEqual(P.perksFromText(t), [], t);
+    assert.deepEqual(P.perksAskedAbout(t).map((p) => p.key), ["advance"], t);
+  }
+  assert.equal(P.askWith(POT, [], [{ pct: 0.03 }], 145000), 141000, "Rs 1,450 with advance -> Rs 1,410 (Rs 10 rounding)");
+  assert.doesNotMatch(P.cardText([], { groupSizes: [5] }), /pickup/);
+  assert.match(P.cardText([], { groupSizes: [5] }), /marzi hai, COD bhi chalega/);
   assert.deepEqual(P.perksFromText("advance", [{ key: "advance" }]), [], "earned once");
   assert.deepEqual(P.perksFromText("900 mein de do"), []);
   assert.ok(P.perksFromText("advance").every((p) => p.conditional));
@@ -47,7 +57,7 @@ test("the card shows what she has and what would give her more room - no percent
   assert.match(t, /Bhao Card/);
   assert.match(t, /Gold customer ⭐ \(pichle 3 mahine: 12 order\)/);
   assert.match(t, /Subah ki bohni/);
-  assert.match(t, /advance payment · 🛵 khud pickup · 👥 5 milke/);
+  assert.match(t, /advance payment \(marzi hai, COD bhi chalega\) · 👥 5 milke/);
   assert.doesNotMatch(t, /%/);
 });
 
@@ -114,6 +124,34 @@ test("'advance de dungi' mid-bargain earns room, and becomes a CONDITION written
   assert.deepEqual(c.accepted_offer.conditions, ["advance"]);
   assert.equal(c.accepted_offer.unitPaisa, 175000, "the ask, lowered 3% by advance payment (Rs 1,746 -> Rs 1,750)");
   assert.match((await outbox(p)).find((o) => o.decision.kind === "accept_followup").body, /Shart: Advance payment 💵 - is ke baghair yeh daam nahi/);
+});
+
+test("'agar advance karun toh kya milega?' gets the real number and changes nothing; 'haan, advance de dungi' then lowers it", async () => {
+  const noon = new Date("2026-11-12T08:00:00Z");
+  const seen = [];
+  const p = phone();
+  await BW.onInbound(db, { phone: p, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: noon, env: {}, speak: speakSpy(seen) });
+  const ask = () => db.query(`SELECT state FROM bhao_conversations WHERE phone = $1`, [p]).then((r) => Number(r.rows[0].state.askPaisa));
+  await BW.onInbound(db, { phone: p, text: "Agar mae advance Payment karti hu, tu mughay kia sahulat Milay gi?", wamid: wamid(), now: new Date(noon.getTime() + 30e3), env: {}, speak: speakSpy(seen) });
+  assert.deepEqual(seen.at(-1).decision.perkQuotes.map((q) => [q.key, q.askPaisa]), [["advance", 175000]]);
+  assert.equal(await ask(), 180000, "a question changes nothing");
+  await BW.onInbound(db, { phone: p, text: "theek hai, advance kar deti hoon", wamid: wamid(), now: new Date(noon.getTime() + 90e3), env: {}, speak: speakSpy(seen) });
+  assert.equal(await ask(), 175000);
+  assert.deepEqual(seen.at(-1).decision.perksGained, ["Advance payment 💵"]);
+  assert.equal(seen.at(-1).pickupOffered, false);
+});
+
+test("the voice may not invent services, offer pickup, ask for HER 'aakhri daam', or repeat itself", () => {
+  const V = require("../bhao/voice");
+  const d = { kind: "talk", askPaisa: 145000, perkQuotes: [{ key: "advance", label: "Advance payment 💵", askPaisa: 141000 }] };
+  const live = "Arre baji, advance se priority packing aur khud pickup ka faida milta hai. Aap ka aakhri daam kya rakhna chahti hain? 😊";
+  const why = V.checkReply(live, { decision: d, qty: 1 }).why.join(" | ");
+  assert.match(why, /invented a service/); assert.match(why, /self-pickup/); assert.match(why, /aakhri daam/);
+  assert.equal(V.checkReply("Baji, COD bilkul chalega. Advance dein toh Rs 1,410, warna Rs 1,450. Aap bataiye, kitna denge?", { decision: d, qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Baji Rs 1,400 kar deta hoon", { decision: d, qty: 1 }).ok, false);
+  assert.match(V.checkReply("Mota steel hai baji. Aap kitne mein lengi?", { decision: { kind: "talk" }, qty: 1, lastSaid: "Ji baji. Aap kitne mein lengi?" }).why.join(), /repeats/);
+  const u = V.buildPrompt({ decision: d, itemName: "x", qty: 1, customerText: "", history: [] }).user;
+  assert.match(u, /cash on delivery is available/); assert.match(u, /NO self-pickup/); assert.match(u, /Rs 1,410 instead of Rs 1,450/);
 });
 
 test("'meri dost ko 800 mein mili': checked against our records, never revealing anyone's price", async () => {
