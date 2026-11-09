@@ -166,12 +166,13 @@ Lifts only **raise** the floor above the approved floor and never above the open
 
 **Picture cards and tap buttons** (`bhao/cards.js`, migration 027, founder 9 Nov)
 - **The opening is always the listed price.** Perks lower only the floor. If Seth Ji opened lower for some customers, the listed price would read as fake. **She names the first bargaining number.**
-- After the greeting, the **Bhao Card** arrives as a JPG picture (Seth Ji ki Dukaan, her perks, the price tag) with three tap buttons:
-  - `✅ Rs 1,800 manzoor`
+- After the greeting, the **Bhao Card** arrives as a JPG picture (Seth Ji ki Dukaan, her perks, the price tag) with tap buttons that **only ask her**:
   - `🙋 Apna daam`, always there: it invites her number
-  - `💵 Advance pe kitna?`, or `👥 5 lein toh?` once she has committed to advance
-- Every refusal, counter, final offer and chat reply carries the same three buttons, showing his current price.
-- A tap is read exactly as if she had typed it. The "manzoor" button carries the price she saw.
+  - `💵 Advance pe kitna?`, until she has committed to advance
+  - `👥 5 lein toh?`, while she is buying fewer than the group size
+- There is **no "✅ Rs X manzoor" button**. Seth Ji never puts a price in her mouth (founder, 9 Nov: "we should just ask at what rate they are willing to buy"). She can still type a price, including his, to close.
+- Every refusal, counter, final offer and chat reply carries the same buttons.
+- A tap is read exactly as if she had typed it.
 - After a deal won below the listed price, the **victory card** arrives as a JPG made to be forwarded. Accepting the listed price gives no victory card, so there is never a fake "bachat".
 - **"BHAO" alone** returns a tap menu of the items (up to 10).
 - `bhao_messages.ui` records exactly what she was shown, and it never changes. If a picture or button cannot be sent, the same words go as plain text.

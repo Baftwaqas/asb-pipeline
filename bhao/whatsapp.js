@@ -61,20 +61,18 @@ const rsText = (paisa) => "Rs " + Math.round(paisa / 100).toLocaleString("en-US"
 
 // ---------------------------------------------------------------------------
 // Tap buttons (migration 027). Founder, 9 Nov: the opening price is the
-// listed price, and SHE names the first bargaining number - so one of the
-// three buttons is always "🙋 Apna daam" (hers), never a cut from us.
-// Button ids carry the conversation and, for "manzoor", the exact price she
-// saw, so a tap is read the same as typing it.
+// listed price, and SHE names the bargaining number - so the buttons only
+// ever ASK her ("🙋 Apna daam") or answer what she would want to know
+// (advance, neighbours). There is no "✅ Rs X manzoor" button: Seth Ji never
+// puts a price in her mouth (live test, 9 Nov: "why have you given 910
+// manzoor? we should just ask at what rate they are willing to buy").
 // ---------------------------------------------------------------------------
 function priceButtons(convId, askPaisa, state, item) {
-  const buttons = [
-    { id: `bhao:ok:${convId}:${askPaisa}`, title: `✅ ${rsText(askPaisa)} manzoor` },
-    { id: `bhao:mine:${convId}`, title: "🙋 Apna daam" },
-  ];
+  const buttons = [{ id: `bhao:mine:${convId}`, title: "🙋 Apna daam" }];
   const held = new Set((state.perks || []).map((p) => p.key));
   const tier = (item.groupTiers || []).find((t) => (state.qty || 1) < t.minQty);
   if (P.offered("advance") && !held.has("advance")) buttons.push({ id: `bhao:adv:${convId}`, title: "💵 Advance pe kitna?" });
-  else if (tier) buttons.push({ id: `bhao:group:${convId}:${tier.minQty}`, title: `👥 ${tier.minQty} lein toh?` });
+  if (tier) buttons.push({ id: `bhao:group:${convId}:${tier.minQty}`, title: `👥 ${tier.minQty} lein toh?` });
   return buttons;
 }
 const BUTTON_KINDS = new Set(["open", "refuse", "counter", "final_offer", "talk"]);
@@ -85,6 +83,7 @@ function fromButton(id) {
   if (!m) return null;
   const [, kind, a, b] = m;
   switch (kind) {
+    // older messages may still carry a "manzoor" button: read it as typed
     case "ok": return Number.isSafeInteger(Number(b)) ? { text: rsText(Number(b)), intent: "accept_tap" } : null;
     case "mine": return { text: "Main apna daam lagana chahti hoon", intent: "mine" };
     case "adv": return { text: "Advance pe kitna hoga?", intent: "advance_question" };
@@ -456,7 +455,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       const title = (await G.titleOf(db, (await db.query(`SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label;
       const ui = step.uiReady && buttons ? {
         type: "buttons",
-        text: `Ye raha aap ka Bhao Card, baji 👆\nSeth Ji ka daam ${rsText(ask)}. Ab aap apna daam lagayein - number likh dein (jaise 1200), ya neeche se chunein:`,
+        text: `Ye raha aap ka Bhao Card, baji 👆\nSeth Ji ka daam ${rsText(ask)}. Ab aap bataiye - aap kitne mein lengi? Apna daam number mein likh dein (jaise 1200).`,
         image: { kind: "bhao_card", itemName: step.itemRow.name, askPaisa: ask, perks: perkLabels, more, title },
         buttons,
       } : null;

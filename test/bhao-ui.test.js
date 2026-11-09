@@ -43,14 +43,16 @@ test("the Bhao Card and the victory card are drawn as JPG, in ASB's brand; no sa
   assert.equal(K.plain("Gold customer ⭐"), "Gold customer");
 });
 
-test("buttons: her price is always one of the three; ids carry the price she saw; titles fit WhatsApp's 20 characters", () => {
+test("buttons only ever ASK her price - never a 'Rs X manzoor' (founder, 9 Nov); titles fit WhatsApp's 20 characters", () => {
   const item = { groupTiers: [{ minQty: 5, floorPaisa: 75000 }] };
-  const b = BW.priceButtons(42, 1250000, { perks: [], qty: 1 }, item);
-  assert.deepEqual(b.map((x) => x.id), ["bhao:ok:42:1250000", "bhao:mine:42", "bhao:adv:42"]);
-  assert.ok(b.every((x) => [...x.title].length <= 20), JSON.stringify(b.map((x) => x.title)));
-  assert.equal(b[1].title, "🙋 Apna daam");
-  const afterAdvance = BW.priceButtons(42, 175000, { perks: [{ key: "advance" }], qty: 1 }, item);
-  assert.deepEqual(afterAdvance.map((x) => x.id), ["bhao:ok:42:175000", "bhao:mine:42", "bhao:group:42:5"]);
+  const b = BW.priceButtons(42, 91000, { perks: [], qty: 1 }, item);
+  assert.deepEqual(b.map((x) => x.id), ["bhao:mine:42", "bhao:adv:42", "bhao:group:42:5"]);
+  assert.ok(b.every((x) => !/Rs|\d{3}/.test(x.title)), "no price on any button: " + JSON.stringify(b.map((x) => x.title)));
+  assert.ok(b.every((x) => [...x.title].length <= 20));
+  assert.equal(b[0].title, "🙋 Apna daam");
+  const afterAdvance = BW.priceButtons(42, 91000, { perks: [{ key: "advance" }], qty: 1 }, item);
+  assert.deepEqual(afterAdvance.map((x) => x.id), ["bhao:mine:42", "bhao:group:42:5"]);
+  assert.deepEqual(BW.priceButtons(42, 91000, { perks: [{ key: "advance" }], qty: 5 }, item).map((x) => x.id), ["bhao:mine:42"]);
 });
 
 test("a tap reads exactly as if she had typed it", () => {
@@ -80,7 +82,7 @@ test("opening: a plain greeting, then the Bhao Card as a picture with the three 
   assert.equal(reply.ui.text, reply.body, "the buttons carry his own words");
 });
 
-test("tapping 'Apna daam' invites her number; tapping 'manzoor' closes the deal at the price on the button", async () => {
+test("tapping 'Apna daam' invites her number; her typed price then bargains as usual", async () => {
   const p = phone();
   const seen = [];
   const spy = async (a) => { seen.push(a); return { text: "Ji baji.", source: "template", rejected: [] }; };
@@ -90,9 +92,10 @@ test("tapping 'Apna daam' invites her number; tapping 'manzoor' closes the deal 
   assert.equal(seen.at(-1).decision.herPriceInvited, true);
   assert.equal(require("../bhao/voice").priceOf(seen.at(-1).decision), null, "her turn: he names no price");
   const card = (await outbox(p)).find((o) => o.decision.kind === "bhao_card");
-  const ok = BW.fromButton(card.ui.buttons[0].id);
-  const r = await say(p, ok.text, 120, { speak: spy, intent: ok.intent });
-  assert.equal(r.kind, "accept");
+  assert.ok(!card.ui.buttons.some((b) => b.id.startsWith("bhao:ok:")), "no 'manzoor' button on the card");
+  assert.match(card.ui.text, /aap kitne mein lengi/);
+  const r = await say(p, "Rs 1,800", 120, { speak: spy });
+  assert.equal(r.kind, "accept", "typing the listed price still closes the deal");
   const victory = (await outbox(p)).find((o) => o.decision.kind === "victory");
   assert.equal(victory, undefined, "accepting the listed price is no victory - no fake 'bachat'");
 });
