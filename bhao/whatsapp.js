@@ -55,7 +55,10 @@ const RESTART_MEMORY_DAYS = 7;
 const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
 const START = /^\s*bhao\s+([a-z0-9][a-z0-9-]{2,40})\b/i;
 // "Meri dost ne / padosan ko ... mein mili": she says someone else paid less.
-const CLAIM = /\b(?:dost|saheli|padosan|padosi|neighbou?r|behen|bhabhi|kisi\s+ne|us\s*ne|unhon\s*ne|mili|mila|li\s+(?:hai|thi)|liya)\b/i;
+// Live test, 9 Nov: "meri behan nay bataya hae kay aap nay usay yeh 800 rupay
+// mae di hae" was missed ("behan", "di hae"), and Seth Ji then CONFIRMED a
+// sale at Rs 800 that never happened. Spellings vary; cast the net wide.
+const CLAIM = /\b(?:dost|friend|saheli|sahel[iy]|padosan|padosi|parosi|parosan|neighbou?r|beh[ae]?n|bahen|behn|sister|didi|bhabh?i|bhai|brother|ammi|amma|khala|phuppo|phupho|mami|chachi|saas|colleague|kisi\s+(?:ne|nay|ko)|us\s*(?:ne|nay|ko)|usay|unhon\s*(?:ne|nay)|unko|mil[ia]|li\s+(?:hai|hae|thi)|di\s+(?:hai|hae|thi)|dia\s+(?:hai|hae|tha)|diya|liya|lia)\b/i;
 // After a bargain ends with a deal, Seth Ji keeps answering her for this
 // long (migration 026): a question about the deal, or "cancel kar do".
 const AFTERCARE_HOURS = 24;

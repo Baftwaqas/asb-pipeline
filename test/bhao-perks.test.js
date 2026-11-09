@@ -154,6 +154,27 @@ test("the voice may not invent services, offer pickup, ask for HER 'aakhri daam'
   assert.match(u, /cash on delivery is available/); assert.match(u, /NO self-pickup/); assert.match(u, /Rs 1,410 instead of Rs 1,450/);
 });
 
+test("live test 9 Nov: 'meri behan nay bataya ... usay yeh 800 rupay mae di hae' is a claim; Seth Ji may not confirm it, gift free delivery, or parrot himself", async () => {
+  const noon = new Date("2026-11-12T09:00:00Z");
+  const seen = [];
+  const p = phone();
+  await BW.onInbound(db, { phone: p, text: "BHAO ASB-NG-POT-5L", wamid: wamid(), now: noon, env: {}, speak: speakSpy(seen) });
+  await BW.onInbound(db, { phone: p, text: "Mughay , meri behan nay bataya hae kay aap nay usay yeh 800 rupay mae di hae,", wamid: wamid(), now: new Date(noon.getTime() + 30e3), env: {}, speak: speakSpy(seen) });
+  assert.deepEqual(seen.at(-1).claim, { claimedPaisa: 80000, neverSoldThatLow: true });
+  const V = require("../bhao/voice");
+  const claim = { claimedPaisa: 80000, neverSoldThatLow: true };
+  assert.equal(V.checkReply("Arre baji, aap ka bhai ne jo 800 diya wo uski alag halat thi.", { decision: { kind: "talk" }, qty: 1, offerPaisa: 80000, claim }).ok, false);
+  assert.equal(V.checkReply("Baji, yeh degchi hamari dukaan se 800 mein kabhi nahi gayi. Aap bataiye, kitna denge?", { decision: { kind: "talk" }, qty: 1, offerPaisa: 80000, claim }).ok, true);
+  assert.equal(V.checkReply("Haan baji, unhein 800 mein mili thi.", { decision: { kind: "talk" }, qty: 1, offerPaisa: 80000, claim: { claimedPaisa: 80000, neverSoldThatLow: false } }).ok, false,
+    "even when someone did get it lower, never the details");
+  assert.match(V.checkReply("Rs 990, aur padosi le aayenge to delivery free.", { decision: { kind: "counter", askPaisa: 99000 }, qty: 1 }).why.join(), /delivery is free for everyone/);
+  const hist = ["Baji, delivery bilkul free hai, aapke darwaze tak cash on delivery se le aate hain."];
+  assert.match(V.checkReply("Arre baji, cash on delivery se le aate hain. Kitne mein lengi?", { decision: { kind: "talk" }, qty: 1, lastSaid: hist }).why.join(), /repeats/);
+  const u = V.buildPrompt({ decision: { kind: "talk" }, itemName: "x", qty: 1, customerText: "delivery kab hogi?", history: [] });
+  assert.match(u.user, /delivery is FREE for everyone/); assert.match(u.user, /team will confirm the day/);
+  assert.match(u.system, /'behan' is her sister, never 'bhai'/);
+});
+
 test("'meri dost ko 800 mein mili': checked against our records, never revealing anyone's price", async () => {
   const noon = new Date("2026-11-11T07:00:00Z");
   const seen = [];

@@ -98,6 +98,7 @@ const PERSONA = [
   "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
   "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters (up to 260 when she asked several things). Call her 'baji'. At most one emoji.",
   "Be a real person, not a script: answer EVERY question and point in her messages, in order, in ONE reply - if she asks two things, answer both - and only then do the INSTRUCTION. Never ignore what she said.",
+  "Never confirm, guess or explain what ANY other customer paid - not even to agree with her. Refer to the person exactly as she did (her 'behan' is her sister, never 'bhai').",
   "If she says someone else got it cheaper from US, be honest: every sauda is different - her BHAO CARD (being a regular or gold customer, the morning bohni, advance payment, self-pickup, neighbours buying together, and how hard she bargained) decides her price. Never deny prices differ, never say everyone pays the same, never reveal who bought or what anyone paid. Use CLAIM CHECK when given.",
   "If she says she found it cheaper elsewhere, online, or that a friend paid less, never call her a liar and never match it on your own: answer it warmly (e.g. 'aap ne jo dekhi woh aur maal hoga baji') and stay with the INSTRUCTION. Never name another shop or website unless CHECKED COMPETITOR PRICES lists it.",
   "'Aakhri daam' only ever means YOUR OWN final price. Never ask her for 'aap ka aakhri daam' - ask 'aap kitne mein lengi?', 'aap bataiye, kitna denge?' and vary it. Never repeat a sentence you already said in RECENT CHAT; do not end every message with the same question.",
@@ -163,10 +164,14 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
 }
 
 /** What ASB really offers - the voice may not promise anything else. */
+// Founder, 9 Nov: "aap ki delivery tu wasay bhi free hae".
+const SHOP = Object.freeze({ deliveryFree: true });
 function SHOP_FACTS(pickupOffered) {
   return "SHOP FACTS (the only services you may mention): cash on delivery is available on every order; advance payment is OPTIONAL and only gives a little more room on the price; ASB delivers to her door" +
+    (SHOP.deliveryFree ? ", and delivery is FREE for everyone, always - so never offer free delivery as a reward or condition" : "") +
     (pickupOffered ? "; she may also collect it herself (self-pickup)" : "; there is NO self-pickup") +
-    ". Never invent services or benefits - no 'priority packing', no faster or free delivery, no 'line ka wait nahi'.";
+    "; the delivery day is confirmed by our team after the deal - if she asks when, say the team will confirm the day, never promise a day or time" +
+    ". Never invent services or benefits - no 'priority packing', no faster delivery, no 'line ka wait nahi'. Do not repeat these facts unless she asks.";
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +215,8 @@ function maxLengthFor(customerMessages = []) {
 
 // Invented services (live test, 9 Nov: "priority packing", "line ka wait nahi",
 // "pickup se delivery charge bacha jaata hai" - none of it real).
+// "padosi le aayenge to delivery free" - delivery is free for everyone anyway
+const FREE_DELIVERY_AS_REWARD = /\b(?:agar|to|toh|tab)\b[^.?!\n]{0,50}\bdelivery\s+(?:bhi\s+)?(?:free|muft)|\b(?:free|muft)\s+delivery\b[^.?!\n]{0,40}\b(?:agar|to|toh)\b/i;
 const INVENTED = /\bpriority\b|\bline\s+(?:ka|ki|mein)\s+(?:wait|intezar)|\bfree\s+delivery\b|\bdelivery\s+(?:charge|kharcha|fee)\w*\s+(?:bach|maaf|nahi)|\bjaldi\s+(?:deliver|pohanch|mil\s+jaye)|\bexpress\b|\bpehle\s+bhej/i;
 const PICKUP_TALK = /\bpick\s*-?\s*up\b|\bkhud\s+(?:le|utha|aa)\w*/i;
 // "aap ka aakhri daam kya hai?" - his own final price is the only aakhri daam
@@ -217,7 +224,7 @@ const HER_LAST_PRICE = /\baap\s*k[ae]\s+aakhri\s+daam|\baapk[ae]\s+aakhri\s+daam
 const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 
 function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null, maxLength = 220,
-                            pickupOffered = false, lastSaid = null }) {
+                            pickupOffered = false, lastSaid = null, claim = null }) {
   const why = [];
   const t = String(text || "").trim();
   if (!t) why.push("empty");
@@ -229,10 +236,21 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (INVENTED.test(t)) why.push("invented a service ASB does not offer");
   if (!pickupOffered && PICKUP_TALK.test(t)) why.push("self-pickup is not offered");
   if (HER_LAST_PRICE.test(t)) why.push("'aakhri daam' is only your own final price - ask 'aap kitne mein lengi?'");
+  if (FREE_DELIVERY_AS_REWARD.test(t)) why.push("delivery is free for everyone - never a reward or condition");
+  // No parroting: any run of 5 words he already used in his recent messages
+  // (live test, 9 Nov: "cash on delivery se aapke darwaze tak" three times).
   if (lastSaid) {
-    const prev = norm(lastSaid);
-    for (const sen of t.split(/[.?!\n]+/).map(norm).filter((x) => x.split(" ").length >= 4))
-      if (prev.includes(sen)) { why.push("repeats what you already said: " + JSON.stringify(sen)); break; }
+    const said = (Array.isArray(lastSaid) ? lastSaid : [lastSaid]).map(norm).join(" | ");
+    const w = norm(t).split(" ");
+    for (let i = 0; i + 5 <= w.length; i++) {
+      const g = w.slice(i, i + 5).join(" ");
+      if (said.includes(g)) { why.push("repeats what you already said: " + JSON.stringify(g)); break; }
+    }
+  }
+  // Her claim about someone else's price: never confirmed, never detailed.
+  if (claim && claim.claimedPaisa != null && numbersIn(t).includes(claim.claimedPaisa / 100)) {
+    const denies = /\bkabhi\s+nahi\b|\bnahi\s+(?:gayi|gaya|di|diya|bik\w*|mili)\b/i.test(t);
+    if (!claim.neverSoldThatLow || !denies) why.push("never confirm or repeat what someone else paid");
   }
   const backed = new Set(competitorFacts.map((f) => String(f.marketplace).toLowerCase()));
   let named = false;
@@ -357,7 +375,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
   if (!PROVIDERS[provider]) return fallback([], 0);
 
   const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft, perks, morePerks, claim, hardship, pickupOffered });
-  const lastSaid = [...(history || [])].reverse().find((h) => h.from === "seth")?.text || null;
+  const lastSaid = (history || []).filter((h) => h.from === "seth").slice(-3).map((h) => h.text);
   const maxLength = maxLengthFor(customerMessages && customerMessages.length ? customerMessages : [customerText]);
   const rejected = [];
   let retryNote = null;
@@ -370,7 +388,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
       return fallback(rejected, attempt); // provider trouble: no second call
     }
     const text = raw.trim().replace(/^["“]|["”]$/g, "");
-    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid });
+    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim });
     if (c.ok) return { text, source: "ai", provider, attempts: attempt, rejected };
     rejected.push(c.why.join("; "));
     retryNote = c.why.join("; ");
