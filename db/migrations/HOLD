@@ -28,3 +28,6 @@
 
 # 027 is simulation-only bill reconciliation. Never migrate actual ASB databases.
 027_apna_amendment_bill_simulations.sql
+
+# 028 mock Shopify orderEdit commit intent: do not run outside disposable tests.
+028_apna_edit_commit_intents.sql
