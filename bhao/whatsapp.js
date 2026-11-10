@@ -339,11 +339,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const waiting = (await db.query(
       `SELECT decision, send_after FROM bhao_messages
         WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'pending'
-          AND decision->>'kind' NOT IN ('accept_followup', 'bhao_card', 'victory')
+          AND decision->>'kind' NOT IN ('accept_followup', 'bhao_card', 'victory', 'open')
         ORDER BY id DESC LIMIT 1`, [conv.id])).rows[0] || null;
     await db.query(
       `UPDATE bhao_messages SET send_status = 'superseded' WHERE conversation_id = $1 AND send_status = 'pending'
-          AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card', 'victory')`, [conv.id]);
+          AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card', 'victory', 'open')`, [conv.id]);
 
     itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
     // What she meant: the model's reading when it is for THIS bargain, else the rules'.
@@ -536,7 +536,12 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const newer = (await db.query(
       `SELECT 1 FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2`, [step.conversationId, step.inboundId])).rowCount;
     if (newer) return { handled: true, conversationId: step.conversationId, superseded: true };
-    const due = ["cancel", "aftercare", "guarded"].includes(step.action.kind)
+    // A greeting comes at once - a shopkeeper does not make a new customer
+    // wait (live test, 10 Nov: a 30 s pause, she asked again, and the
+    // waiting greeting was lost). The thinking pause is for prices only.
+    const due = step.action.kind === "open" && !step.carried
+      ? new Date(now.getTime() + 3000)
+      : ["cancel", "aftercare", "guarded"].includes(step.action.kind)
       ? new Date(now.getTime() + (10 + Math.floor(Math.random() * 21)) * 1000) // 10-30 s: no haggling pause now
       : step.carried
       ? new Date(Math.max(step.carried.getTime(), now.getTime() + 5000))

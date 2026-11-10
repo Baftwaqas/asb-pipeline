@@ -104,7 +104,7 @@ test("a burst of messages is answered once, together", async () => {
   const r = [];
   for (let i = 0; i < 9; i++) r.push(await say(p, "jaldi batao " + i, 100 + i * 3));
   assert.ok(r.some((x) => x.throttled), "the burst is throttled");
-  const pending = (await outbox(p)).filter((o) => o.send_status === "pending" && o.decision.kind !== "bhao_card");
+  const pending = (await outbox(p)).filter((o) => o.send_status === "pending" && !["bhao_card", "open"].includes(o.decision.kind));
   assert.equal(pending.length, 1, "one reply waiting, not nine");
 });
 

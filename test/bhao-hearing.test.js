@@ -208,3 +208,27 @@ test("a competitor claim from elsewhere ('Joria bazaar') is passed to the voice 
   assert.equal(a.understood.claimWhere, "elsewhere");
   assert.match(V.buildPrompt({ decision: a.decision, itemName: "Steel ki Karahi", qty: 1, customerText: "x", understood: a.understood }).user, /somewhere else/);
 });
+
+test("live test 10 Nov: 'Tum kia bot hu?' is answered honestly - never a claim to be human", async () => {
+  const msgs = ["Tum kia bot hu?"];
+  const f = (text) => async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: text } }] }) });
+  const base = { decision: { kind: "talk", askPaisa: 180000 }, itemName: "Degchi", customerMessages: msgs, env: GROQ };
+  const lie = await V.speak({ ...base, fetchImpl: f("Nahi nahi, main toh asli insaan hoon! Boliye kitne mein lenge?") });
+  assert.equal(lie.source, "template", "a denial is never sent");
+  assert.match(lie.rejected[0], /never claim to be human/);
+  assert.match(lie.text, /AI bhao assistant/);
+  const honest = await V.speak({ ...base, fetchImpl: f("Ji, main Apna Sasta Bazaar ka AI bhao assistant hoon - daam ASB tay karta hai. Aap boliye, kitne mein lenge?") });
+  assert.equal(honest.source, "ai");
+  const plain = await V.speak({ ...base, customerMessages: ["kitne ki hai?"], fetchImpl: f("Rs 1,800 ki hai, mota steel. Aap boliye?") });
+  assert.equal(plain.source, "ai", "no AI talk when nobody asked");
+});
+
+test("live test 10 Nov: the greeting goes out within seconds, and asking again does not cancel it", async () => {
+  const p = phone();
+  await say(p, "BHAO KARAHI", 0);
+  const greet = (await outbox(p)).find((o) => o.decision.kind === "open");
+  assert.ok(new Date(greet.send_after) - at(0) <= 3000);
+  await say(p, "BHAO KARAHI", 5);
+  const again = (await db.query(`SELECT send_status FROM bhao_messages WHERE id = $1`, [greet.id])).rows[0];
+  assert.equal(again.send_status, "pending", "still going out");
+});

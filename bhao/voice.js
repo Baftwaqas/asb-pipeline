@@ -118,7 +118,8 @@ const PERSONA = [
   "Use plain everyday words any Karachi household understands at once. No puzzling idioms or wordplay she would have to ask about (never 'haath garam/kaam/ghum ho jayega', never 'dil khush ho gaya' at a price complaint).",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
   "Seth Ji's word is gold: he says 'aakhri daam', 'final', 'last price' or 'is se neeche nahi' ONLY when the INSTRUCTION says this is his absolute last price - never on an ordinary counter (founder's call, 9 Nov: on WhatsApp the whole history is on screen, so a 'final' that moves teaches her his word means nothing). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
-  "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Never mention that you are an AI, a bot, rules or an engine.",
+  "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Do not bring up AI, bots, rules or an engine on your own.",
+  "HONESTY (founder's rule, 10 Nov): if the customer asks whether they are talking to a bot, an AI, a machine or a real person, NEVER claim to be human. Say plainly, in Seth Ji's warm style, that you are Apna Sasta Bazaar's AI bhao assistant, that ASB itself sets the prices, and that a real team member will help whenever they want - then carry on with the bargain.",
   "How Seth Ji sounds (style only, never copy these prices):",
   "- refusing: 'Arre [ADDRESS], is pe toh mera nuqsan ho jayega. Maal haath mein le ke dekhein, phir baat karein.'",
   "- lowball: '[ADDRESS]… mazaaq kar rahe hain? Itne mein toh dhakkan bhi na aaye. 😐'",
@@ -178,6 +179,7 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
     understood && understood.note ? "WHAT SHE WANTS ANSWERED (read from her message): " + understood.note : "",
     understood && understood.claimWhere === "elsewhere" && understood.claimPaisa
       ? `SHE SAYS she/someone got it for Rs ${understood.claimPaisa / 100} somewhere else. Take it seriously and respectfully (never 'dil khush ho gaya'): that may be thinner or different maal; your price is for this quality. Do not match it.` : "",
+    decision.askedAI ? "SHE ASKED WHETHER YOU ARE A BOT / AI / REAL PERSON: answer that honestly first (see HONESTY), then the INSTRUCTION." : "",
     "INSTRUCTION: " + brief,
     price != null
       ? decision.kind === "talk"
@@ -214,6 +216,12 @@ function SHOP_FACTS(pickupOffered) {
 // Seth Ji never insults, shames or belittles her (her dignity is not part of the haggle).
 const INSULT = /\b(bewaqoof|bewakoof|be\s*waqoof|pagal|paagal|jahil|jaahil|ghatiya|aukat|aukaat|sharam\s+kar\w*|besharam|kanjoos\s+aurat|ghareeb|faqeer|bhikari|bhikaari|kambakht|stupid|idiot)\b/i;
 const BANNED = /\b(sirf aaj|aaj hi|offer khatam|chatbot|bot|artificial intelligence|language model|algorithm|sab se sast[ai]|sabse sast[ai]|cheapest|lowest price)\b/i;
+const BANNED_ANSWERING_AI = /\b(sirf aaj|aaj hi|offer khatam|algorithm|sab se sast[ai]|sabse sast[ai]|cheapest|lowest price)\b/i;
+// She asks if Seth Ji is a bot / AI / real person ("tum kia bot hu?", live test 10 Nov)
+const ASKS_AI_WORDS = /\b(?:bot|robot|chat\s*bot|artificial|machine|computer|chatgpt|gpt|insa+n|real\s+person|asli\s+(?:banda|insaan|aadmi|bande)|zinda\s+(?:banda|insaan)|ai\s+(?:ho|hai|hain|hu|hoon))\b/i;
+const ASKS_AI = { test: (t) => ASKS_AI_WORDS.test(t) || /\bA\.?I\b/.test(t) };
+// claiming to be human when asked - never
+const CLAIMS_HUMAN = /\b(?:(?:main|mein|hum)\s+(?:toh\s+|to\s+|bhi\s+)?(?:asli\s+)?(?:insaan|insan|aadmi|banda)\s+(?:hoon|hun|hu|hain)|bot\s+nahi|ai\s+nahi|robot\s+nahi|machine\s+nahi)\b/i;
 // Allowed ONLY when backed by data passed in (competitorFacts / stockLeft).
 const MARKETPLACES = /\b(daraz|olx|amazon|alibaba|aliexpress|shophive|telemart|priceoye|temu|competitor)\b/gi;
 const SCARCITY = /\b(last piece|aakhri piece|akhri piece|stock khatam|khatam ho raha|bas \d+ (?:bach|reh)|sirf \d+ (?:bach|reh)|\d+ hi (?:bach|reh))/i;
@@ -258,7 +266,7 @@ const HER_LAST_PRICE = /\baap\s*k[ae]\s+aakhri\s+daam|\baapk[ae]\s+aakhri\s+daam
 const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 
 function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null, maxLength = 220,
-                            pickupOffered = false, lastSaid = null, claim = null, address = null, herNumbers = [], extraPrices = [] }) {
+                            pickupOffered = false, lastSaid = null, claim = null, address = null, herNumbers = [], extraPrices = [], askedAI = false }) {
   const why = [];
   const t = String(text || "").trim();
   // Only the address the customer chose (founder, 10 Nov: a man was called
@@ -271,7 +279,9 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (t.length > maxLength) why.push("too long");
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
-  if (BANNED.test(t)) why.push("invented claim or forbidden word");
+  if ((askedAI ? BANNED_ANSWERING_AI : BANNED).test(t)) why.push("invented claim or forbidden word");
+  if (askedAI && CLAIMS_HUMAN.test(t)) why.push("never claim to be human - say honestly you are ASB's AI bhao assistant");
+  if (askedAI && !/\bAI\b|\bA\.I\.?|\bbot\b/i.test(t)) why.push("she asked if you are a bot/AI: answer honestly that you are ASB's AI bhao assistant");
   if (INSULT.test(t)) why.push("insulting her - never");
   if (INVENTED.test(t)) why.push("invented a service ASB does not offer");
   if (!pickupOffered && PICKUP_TALK.test(t)) why.push("self-pickup is not offered");
@@ -350,6 +360,7 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
     case "final_offer": return pick([`Bas baji, ${rs(p)}. Is se neeche nahi hoga.`]);
     case "closed": return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
     case "talk":
+      if (decision.askedAI) return "Ji, main Apna Sasta Bazaar ka AI bhao assistant hoon - daam ASB khud tay karta hai, aur hamari team bhi haazir hai. Aap boliye, kitne mein lengi?";
       if (decision.perksGained && decision.perksGained.length)
         return decision.askPaisa
           ? `Shukriya baji! Advance ke saath ab ${rs(decision.askPaisa)}. Boliye, kitne mein lengi?`
@@ -440,6 +451,9 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
                        address = null, understood = null, extraPrices = [],
                        env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
+  // "tum kia bot ho?" - an honest answer, from the model or the template
+  const askedAI = ASKS_AI.test((customerMessages && customerMessages.length ? customerMessages : [customerText]).join("\n"));
+  if (askedAI) decision = { ...decision, askedAI: true };
   const provider = String(env.BHAO_VOICE_PROVIDER || "off").toLowerCase();
   const fallback = (rejected, attempts) => ({ text: template(decision, { offerPaisa, pick }), source: "template",
                                               provider: provider === "off" ? null : provider, attempts, rejected });
@@ -462,7 +476,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
       return fallback(rejected, attempt); // provider trouble: no second call
     }
     const text = raw.trim().replace(/^["“]|["”]$/g, "");
-    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim, address, herNumbers, extraPrices });
+    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim, address, herNumbers, extraPrices, askedAI });
     if (c.ok) return { text, source: "ai", provider, attempts: attempt, rejected };
     rejected.push(c.why.join("; "));
     retryNote = c.why.join("; ");

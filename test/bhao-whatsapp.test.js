@@ -95,13 +95,13 @@ test("Meta redelivering the same message changes nothing", async () => {
   assert.equal((await outbox(p)).length, before);
 });
 
-test("her new message supersedes a reply Seth Ji has not sent yet", async () => {
+test("her new message supersedes a reply Seth Ji has not sent yet - never the greeting (live test 10 Nov)", async () => {
   const p = phone();
   await say(p, "BHAO ASB-NG-POT-5L", 0);
   await say(p, "900", 10);
   await say(p, "acha 950?", 20);
   const out = await outbox(p);
-  assert.deepEqual(out.map((o) => o.send_status), ["superseded", "superseded", "pending"]);
+  assert.deepEqual(out.map((o) => o.send_status), ["pending", "superseded", "pending"]);
 });
 
 test("messages that are not a bargain stay with the normal inbox", async () => {
