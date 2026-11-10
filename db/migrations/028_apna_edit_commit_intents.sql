@@ -14,7 +14,9 @@ CREATE TABLE checkout_apna_edit_commit_attempts (
   calculated_order_gid TEXT NOT NULL
     CHECK (calculated_order_gid ~ '^gid://shopify/CalculatedOrder/[1-9][0-9]*$'),
   intent_key TEXT NOT NULL UNIQUE CHECK (intent_key ~ '^asb-edit-[a-f0-9]{40}$'),
-  proof_sha256 TEXT NOT NULL CHECK (proof_sha256 ~ '^[a-f0-9]{64}
+  proof_sha256 TEXT NOT NULL CHECK (proof_sha256 ~ '^[a-f0-9]{64}$'),
+  expected_additions JSONB NOT NULL CHECK (jsonb_typeof(expected_additions) = 'array'),
+  source_bill_sha256 TEXT NOT NULL CHECK (source_bill_sha256 ~ '^[a-f0-9]{64}$'),
   expected_total_paisa BIGINT NOT NULL CHECK (expected_total_paisa >= 0),
   state TEXT NOT NULL DEFAULT 'intent_recorded'
     CHECK (state IN ('intent_recorded','needs_reconcile','verified_simulation')),
