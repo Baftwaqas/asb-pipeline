@@ -35,27 +35,27 @@ async function fixture(name){
   const order="gid://shopify/Order/"+(901000+n);
   const signed={quoteId,cycleCode:cycle.code,customerReference:householdKey,
     lines:[first]};
-  await pool.query(\`INSERT INTO checkout_quotes
+  await pool.query(`INSERT INTO checkout_quotes
    (quote_id,version,shop_domain,household_key,cycle_code,delivery_date,
     issued_at,expires_at,signed_quote)
     VALUES($1,1,$2,$3,$4,$5,clock_timestamp()-interval '1 minute',
-      clock_timestamp()+interval '2 hours',$6::jsonb)\`,
+      clock_timestamp()+interval '2 hours',$6::jsonb)`,
     [quoteId,SHOP,householdKey,cycle.code,cycle.date,JSON.stringify(signed)]);
-  const claim=(await pool.query(\`INSERT INTO checkout_redemptions
+  const claim=(await pool.query(`INSERT INTO checkout_redemptions
    (quote_id,quote_version,shop_domain,household_key,cycle_code,
     redemption_key,state,policy_version,shopify_order_gid,
     expected_cod_paisa,completed_at)
     VALUES($1,1,$2,$3,$4,$5,'completed','SYNTHETIC-LAB',$6,4500,clock_timestamp())
-    RETURNING claim_id\`,[quoteId,SHOP,householdKey,cycle.code,
+    RETURNING claim_id`,[quoteId,SHOP,householdKey,cycle.code,
       "asb-adr002-"+n.toString(16).padStart(40,"0"),order])).rows[0];
   const snap={originalQuoteId:quoteId,proposalId:"LAB-P-"+n,
     originalClaimId:claim.claim_id,originalLines:[first],
     proposedLines:[first,added],policyVersion:"SYNTHETIC-LAB"};
-  const reservation=(await pool.query(\`INSERT INTO checkout_apna_amendment_reservations
+  const reservation=(await pool.query(`INSERT INTO checkout_apna_amendment_reservations
     (shop_domain,household_key,cycle_code,original_claim_id,original_quote_id,
      shopify_order_gid,idempotency_key,snapshot_sha256,proposed_snapshot,additional_paisa)
      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,9000)
-     RETURNING reservation_id\`,
+     RETURNING reservation_id`,
     [SHOP,householdKey,cycle.code,claim.claim_id,quoteId,order,
       "asb-amendment-"+n.toString(16).padStart(40,"0"),hash(snap),
       JSON.stringify(snap)])).rows[0];
@@ -67,11 +67,11 @@ async function fixture(name){
     replacesBillVersion:1,previousBillDigest:hash(prior),currency:"PKR",
     totalPaisa:13500,amendmentDeltaPaisa:9000,
     lines:[first,added],groupedByDoor:{apna_order:["ORIG","ADD"]}};
-  await pool.query(\`INSERT INTO checkout_apna_amendment_bill_simulations
+  await pool.query(`INSERT INTO checkout_apna_amendment_bill_simulations
     (reservation_id,shop_domain,shopify_order_gid,original_bill_version,
      draft_bill_version,original_bill_sha256,draft_bill_sha256,
      expected_total_paisa,additional_paisa,draft_json)
-    VALUES($1,$2,$3,1,2,$4,$5,13500,9000,$6::jsonb)\`,
+    VALUES($1,$2,$3,1,2,$4,$5,13500,9000,$6::jsonb)`,
     [rid,SHOP,order,hash(prior),hash(draft),JSON.stringify(draft)]);
   return {rid,householdKey,quoteId,order,draft};
 }
@@ -136,10 +136,10 @@ before(async()=>{
       path.join(__dirname,"..","db","migrations",name),"utf8"));
   const date=day();
   cycle={date,code:"MON-"+date};
-  await pool.query(\`INSERT INTO cycles
+  await pool.query(`INSERT INTO cycles
     (code,cycle_date,opens_at,locks_at,delivery_date,status)
     VALUES($1,$2,clock_timestamp()-interval '1 day',
-      clock_timestamp()+interval '1 day',$2,'open')\`,
+      clock_timestamp()+interval '1 day',$2,'open')`,
     [cycle.code,date]);
 });
 after(async()=>{if(pool)await pool.end();});
