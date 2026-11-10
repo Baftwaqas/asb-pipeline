@@ -1,0 +1,23 @@
+name: Apna Order Amendment Preflight
+on:
+  push:
+    branches:
+      - feature/apna-amendment-preflight-v1-20261110
+  pull_request:
+    paths:
+      - 'checkout/apna-order-amendment-preflight-v1.js'
+      - 'test/adr002-apna-order-amendment-preflight.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  amendment-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+      - name: Test pure additive amendment safeguards
+        run: node --test test/adr002-apna-order-amendment-preflight.test.js test/apna-limits.test.js
