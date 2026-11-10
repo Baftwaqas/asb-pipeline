@@ -25,3 +25,6 @@
 # 026 is only for disposable PostgreSQL amendment reservation tests.
 # Never release to a deployed DB until signed quote edits, reconciliation and billing are reviewed.
 026_apna_amendment_reservations.sql
+
+# 027 is simulation-only bill reconciliation. Never migrate actual ASB databases.
+027_apna_amendment_bill_simulations.sql
