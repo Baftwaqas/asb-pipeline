@@ -1,0 +1,27 @@
+name: ASB Lab Order Edit Readiness Guard
+on:
+  push:
+    branches:
+      - test/apna-lab-orderedit-readiness-20261110
+  pull_request:
+    paths:
+      - 'checkout/apna-lab-orderedit-readiness-v1.js'
+      - 'test/adr002-apna-lab-orderedit-readiness.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  read-only-orderedit-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+      - name: Verify no mutation capable components in gate
+        run: |
+          node --check checkout/apna-lab-orderedit-readiness-v1.js
+          node --check test/adr002-apna-lab-orderedit-readiness.test.js
+      - name: Test lab order edit read-only safeguards
+        run: node --test test/adr002-apna-lab-orderedit-readiness.test.js
