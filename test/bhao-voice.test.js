@@ -77,12 +77,12 @@ test("a reply with a price the engine did not give is rejected, retried once wit
   assert.match(f.calls[1].body.messages[1].content, /PREVIOUS REPLY WAS REJECTED: number not allowed: 1200/);
 });
 
-test("two bad replies fall back to the template; the customer never sees a wrong price", async () => {
-  const f = fake(["Rs 999 le lo baji", "Rs 1,000 final"]);
+test("three bad replies fall back to the template; the customer never sees a wrong price", async () => {
+  const f = fake(["Rs 999 le lo baji", "Rs 1,000 final", "Rs 1,001 le lo"]);
   const r = await V.speak({ ...base, decision: counter(154000), env: XAI, fetchImpl: f.fn });
   assert.equal(r.source, "template");
   assert.match(r.text, /Rs 1,540/);
-  assert.equal(r.rejected.length, 2);
+  assert.equal(r.rejected.length, 3);
 });
 
 test("waqas case 1: Rs 2,000 against Rs 1,800 - the extra is refused, honestly", async () => {

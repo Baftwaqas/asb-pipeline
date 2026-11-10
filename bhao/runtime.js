@@ -34,7 +34,7 @@ async function onInbound(db, { phone, text, wamid, tap = null, wa = null }) {
     if (r.menu) {
       const send = (wa || require("../whatsapp"));
       const res = await send.sendList(phone, {
-        header: "Seth Ji ki Dukaan", body: "Kis cheez pe bhao lagana hai, baji? Neeche se chunein 👇",
+        header: "Seth Ji ki Dukaan", body: r.menuText || "Kis cheez pe bhao lagana hai? Neeche se chunein 👇",
         buttonText: "Cheezein dekhein", rows: r.menu, footer: "Har sauda alag hota hai",
       }).catch(() => ({ ok: false }));
       console.log(`[bhao] ${phone} -> menu (${r.menu.length} items, ${res && res.ok ? "sent" : "send failed"})`);

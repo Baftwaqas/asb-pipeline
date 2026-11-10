@@ -41,6 +41,7 @@ const PW = require("./price-watch");
 const P = require("./perks");
 const G = require("./guard");
 const K = require("./cards");
+const U = require("./understand");
 
 // DRAFT policy (test values from docs/bhao-tao-engine-v1.md). Founder decision
 // pending; the version is stamped on every conversation.
@@ -75,28 +76,41 @@ function priceButtons(convId, askPaisa, state, item) {
   if (tier) buttons.push({ id: `bhao:group:${convId}:${tier.minQty}`, title: `👥 ${tier.minQty} lein toh?` });
   return buttons;
 }
+const addressButtons = (convId) => [
+  { id: `bhao:addr:${convId}:baji`, title: "Baji" },
+  { id: `bhao:addr:${convId}:bhai`, title: "Bhai" },
+  { id: `bhao:addr:${convId}:other`, title: "Kuch aur" },
+];
 const BUTTON_KINDS = new Set(["open", "refuse", "counter", "final_offer", "talk"]);
 
 /** What a tap means, as if she had typed it. Null for taps that are not Seth Ji's. */
 function fromButton(id) {
-  const m = /^bhao:(ok|mine|adv|group|item):([^:]+)(?::(\w+))?$/.exec(String(id || ""));
+  const m = /^bhao:(ok|mine|adv|group|item|addr):([^:]+)(?::(\w+))?$/.exec(String(id || ""));
   if (!m) return null;
   const [, kind, a, b] = m;
   switch (kind) {
     // older messages may still carry a "manzoor" button: read it as typed
     case "ok": return Number.isSafeInteger(Number(b)) ? { text: rsText(Number(b)), intent: "accept_tap" } : null;
-    case "mine": return { text: "Main apna daam lagana chahti hoon", intent: "mine" };
+    case "mine": return { text: "Main apna daam lagana chahta/chahti hoon", intent: "mine" };
     case "adv": return { text: "Advance pe kitna hoga?", intent: "advance_question" };
     case "group": return { text: `${b} lein toh kitna?`, intent: "group_question" };
     case "item": return { text: `BHAO ${a}`, intent: "start" };
+    // "Aap ko kya keh ke bulaun?" - baji / bhai / kuch aur
+    case "addr": return ["baji", "bhai", "other"].includes(b)
+      ? { text: b === "other" ? "Kuch aur" : `Mujhe ${b} kahiye`, intent: "address:" + b } : null;
     default: return null;
   }
 }
 
 /** "BHAO" alone: the items she can bargain on, as a tap menu (max 10). */
-async function menu(db) {
+async function menu(db, { phone = null, now = new Date() } = {}) {
+  // items she already made a deal on this week are left out: tapping one
+  // only to hear "sauda ho chuka" is a dead end (live test, 10 Nov)
   const rows = (await db.query(
-    `SELECT item_id, name, anchor_paisa FROM bhao_items WHERE active ORDER BY name LIMIT 10`)).rows;
+    `SELECT i.item_id, i.name, i.anchor_paisa FROM bhao_items i
+      WHERE i.active AND NOT EXISTS (
+        SELECT 1 FROM bhao_conversations c WHERE c.phone = $1 AND c.item_id = i.item_id AND c.status = 'accepted' AND c.ended_at > $2)
+      ORDER BY i.name LIMIT 10`, [phone, new Date(now.getTime() - G.LIMITS.DEAL_COOLDOWN_DAYS * 864e5)])).rows;
   return rows.map((r) => ({ id: `bhao:item:${r.item_id}`, title: r.name.slice(0, 24), description: `Seth Ji ka daam ${rsText(Number(r.anchor_paisa))}` }));
 }
 // "Meri dost ne / padosan ko ... mein mili": she says someone else paid less.
@@ -149,13 +163,42 @@ async function tx(db, fn) {
  * One new inbound text. `db` is a single client (transactions run on it).
  * Returns { handled, conversationId?, duplicate?, reason? }.
  */
-async function onInbound(db, { phone, text, wamid, now = new Date(), env = process.env, fetchImpl = fetch, speak = V.speak, intent = null }) {
+async function onInbound(db, { phone, text, wamid, now = new Date(), env = process.env, fetchImpl = fetch, speak = V.speak, intent = null,
+                                understand = U.understand }) {
   const body = String(text || "").slice(0, 1000);
   if (BARE.test(body)) {
-    const rows = await menu(db);
-    return rows.length ? { handled: true, menu: rows } : { handled: false, reason: "no items" };
+    const rows = await menu(db, { phone, now });
+    return rows.length ? { handled: true, menu: rows, menuText: "Kis cheez pe bhao lagana hai? Neeche se chunein 👇" }
+      : { handled: false, reason: "no items" };
   }
   const start = START.exec(body);
+
+  // Seth Ji HEARS her first (bhao/understand.js): what her latest message
+  // means, read the way a person reads it - outside the transaction, since
+  // a model call takes seconds. Taps mean exactly what they say; no model.
+  let heard = null, heardFor = null;
+  if (!start && !(intent && intent !== "accept_tap")) {
+    const pre = (await db.query(
+      `SELECT c.id, c.state, i.name FROM bhao_conversations c JOIN bhao_items i ON i.item_id = c.item_id
+        WHERE c.phone = $1 AND c.status = 'open' ORDER BY c.id DESC LIMIT 1`, [phone])).rows[0];
+    if (pre) {
+      const lastOut = (await db.query(
+        `SELECT id, body FROM bhao_messages WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'sent'
+          ORDER BY id DESC LIMIT 1`, [pre.id])).rows[0];
+      const earlier = (await db.query(
+        `SELECT body FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2 ORDER BY id`,
+        [pre.id, lastOut ? lastOut.id : 0])).rows.map((r) => r.body);
+      heard = await understand({
+        latest: body, earlier, lastSeth: lastOut && lastOut.body, askPaisa: Number(pre.state.askPaisa) || null, itemName: pre.name,
+        addressAsked: !!pre.state.addressAsked && !pre.state.address, held: pre.state.perks || [], readOffer, readQty, env, fetchImpl,
+      }).catch(() => null);
+      heardFor = pre.id;
+      if (heard && heard.source === "ai")
+        console.log(`[bhao] ${phone} heard: ${heard.kind || "?"}${heard.offerPaisa ? " offer " + heard.offerPaisa / 100 : ""}${heard.accept ? " ACCEPT" : ""}` +
+          `${heard.advance ? " advance:" + heard.advance : ""}${heard.address ? " address:" + heard.address : ""}${heard.dropped && heard.dropped.length ? " (ignored: " + heard.dropped.join(", ") + ")" : ""}`);
+      else if (heard && heard.aiError) console.warn(`[bhao] ${phone} understanding fell back to rules (${heard.aiError})`);
+    }
+  }
 
   const step = await tx(db, async () => {
     let conv = (await db.query(`SELECT * FROM bhao_conversations WHERE phone = $1 AND status = 'open' FOR UPDATE`, [phone])).rows[0];
@@ -182,10 +225,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       const code = start ? start[1].toUpperCase() : carryCode;
       itemRow = (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1 AND active`, [code])).rows[0];
       if (!itemRow) return { handled: false, reason: "unknown item " + code }; // the inbox sees it
-      if (conv && conv.item_id !== code) {
-        await db.query(`UPDATE bhao_conversations SET status = 'closed', ended_at = $2 WHERE id = $1`, [conv.id, now]);
-        conv = null;
-      }
+      // Another item: her open bargain is closed only once the new one may
+      // really start (live test, 10 Nov: tapping a refused item silently
+      // ended the karahi bargain she was in the middle of).
+      let other = null;
+      if (conv && conv.item_id !== code) { other = conv; conv = null; }
       // "BHAO <same item>" while that bargain is still open: she is coming
       // back to it. Say so, with where it stood (live test, 9 Nov: picking
       // the item again silently resumed at Rs 910, and the listed Rs 1,800
@@ -196,6 +240,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         if (!carryCode) {
           const ok = await G.canStart(db, { phone, itemId: code, itemName: itemRow.name, now });
           if (!ok.ok) {
+            ok.text = U.addressify(ok.text, await U.addressOf(db, phone));
             const g = (await db.query(
               `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at, ended_at)
                VALUES ($1, $2, 'closed', $3, $4, $5, $5, $5) RETURNING id`,
@@ -208,10 +253,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
               `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
                VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
               [g.id, ok.text, { kind: "guard", reason: ok.reason }, new Date(now.getTime() + 8000)]);
-            console.log(`[bhao] ${phone} -> not started (${ok.reason})`);
+            console.log(`[bhao] ${phone} -> not started (${ok.reason})${other ? " - her open bargain on " + other.item_id + " stays open" : ""}`);
             return { handled: true, guarded: ok.reason, conversationId: g.id, kind: "guard" };
           }
         }
+        if (other) await db.query(`UPDATE bhao_conversations SET status = 'closed', ended_at = $2 WHERE id = $1`, [other.id, now]);
         // Her Bhao Card: standing with ASB and the time of day, as she walks in.
         const perks = [...await P.perksAtOpen(db, { phone, now })];
         perks.push(...P.perksFromText(body, perks));
@@ -238,6 +284,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           state.askPaisa = Math.max(Number(prev.state.askPaisa), item.floorPaisa);
           action = { ...action, askPaisa: state.askPaisa, resumed: true };
         }
+        // Founder, 10 Nov: never assume "baji" - ask how to address them, once.
+        if (!carryCode && !(await U.addressOf(db, phone)).known) {
+          state = { ...state, addressAsked: true };
+          action = { ...action, askAddress: true };
+        }
         conv = (await db.query(
           `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at)
            VALUES ($1, $2, 'open', $3, $4, $5, $5) RETURNING *`, [phone, code, state, POLICY.version, now])).rows[0];
@@ -252,11 +303,17 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     if (!conv && !start) {
       const ready = (await db.query(`SELECT to_regprocedure('asb026_aftercare_ready()') IS NOT NULL AS ok`)).rows[0].ok;
       if (ready) {
+        // ...and if Seth Ji just told her a bargain could not start (sauda ho
+        // chuka, daily limit, pause), whatever she says next is still
+        // answered - live test, 10 Nov: "mera tu koi sauda nhi hua" and "?"
+        // met silence. The most recent of these is the one she is answering.
         conv = (await db.query(
-          `SELECT * FROM bhao_conversations WHERE phone = $1 AND status IN ('accepted', 'cancelled')
-              AND COALESCE(cancelled_at, ended_at) > $2
+          `SELECT * FROM bhao_conversations WHERE phone = $1 AND (
+                (status IN ('accepted', 'cancelled') AND COALESCE(cancelled_at, ended_at) > $2)
+             OR (status = 'closed' AND state->>'closedFor' IN ('deal_cooldown', 'daily_limit', 'paused_cancellations') AND ended_at > $2))
             ORDER BY id DESC LIMIT 1 FOR UPDATE`, [phone, new Date(now - AFTERCARE_HOURS * 3600e3)])).rows[0];
         aftercare = !!conv;
+        if (conv && conv.status === "closed") conv.guarded = conv.state.closedFor;
       }
     }
     if (!conv) return { handled: false, reason: "no open bargain" };
@@ -289,18 +346,27 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card', 'victory')`, [conv.id]);
 
     itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
+    // What she meant: the model's reading when it is for THIS bargain, else the rules'.
+    const ears = heard && heardFor === conv.id ? heard
+      : U.byRules(body, { readOffer, readQty, held: conv.state.perks || [], addressAsked: !!conv.state.addressAsked && !conv.state.address });
     let gained = [], perkQuotes = [];
     if (!aftercare && !action) {
       const held = conv.state.perks || [];
       const ask = Number(conv.state.askPaisa);
       // "advance de dungi": she COMMITTED - a real seller drops the ask too,
       // by the extra room (capped), rounded to Rs 10, never below the new floor
-      gained = P.perksFromText(body, held);
+      const ADV = { key: "advance", pct: P.PERKS.advance.pct, label: P.PERKS.advance.label, conditional: true };
+      const hasAdv = held.some((p) => p.key === "advance");
+      gained = ears.source === "ai"
+        ? (ears.advance === "commit" && !hasAdv && P.offered("advance") ? [ADV] : [])
+        : P.perksFromText(body, held);
       if (gained.length)
         conv.state = { ...conv.state, perks: [...held, ...gained], askPaisa: P.askWith(itemFor(itemRow), held, gained, ask, liftOf(conv.state)) };
       // "agar advance karun toh kya milega?": she only ASKED - answer with the
       // real number, change nothing until she commits
-      perkQuotes = P.perksAskedAbout(body, held)
+      const askedAdv = !gained.length && !hasAdv && P.offered("advance") &&
+        (intent === "advance_question" || ears.advance === "ask" || (ears.source !== "ai" && P.perksAskedAbout(body, held).length > 0));
+      perkQuotes = (askedAdv ? [ADV] : P.perksAskedAbout(body, held).filter((g) => g.key !== "advance"))
         .map((g) => ({ key: g.key, label: g.label, askPaisa: P.askWith(itemFor(itemRow), held, [g], ask, liftOf(conv.state)) }))
         .filter((q) => q.askPaisa < ask);
     }
@@ -327,7 +393,10 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       offerPaisa = readOffer(body); // she may quote someone else's price; he may repeat it, never match it
       // "kya cancel ho sakta hai?" is a question, not a cancellation: he answers it
       const asking = /\?|^\s*(?:kya|kia)\b/i.test(body);
-      if (conv.status === "accepted" && CANCEL.test(body) && !asking) {
+      if (conv.guarded) {
+        action = { kind: "guarded", reason: conv.guarded };
+        console.log(`[bhao] TEAM CHECK: ${phone} answered "${conv.guarded}" on ${conv.item_id}: ${JSON.stringify(body.slice(0, 120))}`);
+      } else if (conv.status === "accepted" && CANCEL.test(body) && !asking) {
         await db.query(`UPDATE bhao_conversations SET status = 'cancelled', cancelled_at = $2 WHERE id = $1`, [conv.id, now]);
         action = { kind: "cancel", offer: conv.accepted_offer, itemCode: conv.item_id };
         console.log(`[bhao] ${phone} CANCELLED the deal on ${conv.item_id} (team: do not confirm this order)`);
@@ -337,10 +406,25 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     } else if (!action && continuing) {
       state = conv.state;
       action = { kind: "talk", askPaisa: Number(state.askPaisa), continuing: true };
+    } else if (!action && (intent && intent.startsWith("address:") || ears.address)) {
+      // her answer to "aap ko kya keh ke bulaun?"
+      state = conv.state;
+      const choice = intent && intent.startsWith("address:") ? intent.slice(8) : ears.address;
+      if (choice === "other") action = { kind: "talk", askPaisa: state.askPaisa, addressOther: true };
+      else {
+        const info = U.addressInfo(choice);
+        state = { ...state, address: info.word || "aap", addressAsked: false };
+        action = { kind: "talk", askPaisa: state.askPaisa, addressSet: true };
+        console.log(`[bhao] ${phone} wants to be called "${state.address}"`);
+      }
     } else if (!action) {
       state = conv.state;
-      const amount = readOffer(body);
-      const q = readQty(body);
+      // her bid - read from the sentence, not from its first number ("sirf
+      // 70 rupay ka discount?" is a complaint, live test 10 Nov); "theek hai,
+      // de do" agrees to his current price
+      const amount = ears.accept && Number.isSafeInteger(Number(state.askPaisa)) ? Number(state.askPaisa)
+        : ears.source === "ai" ? ears.offerPaisa : readOffer(body);
+      const q = ears.qty ?? readQty(body);
       const named = q && q >= 1 && q <= item.maxQty ? q : null;
       if (amount == null) {
         // talking, or naming a quantity: no price moves; the quantity is
@@ -356,6 +440,12 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         const r = B.offer(state, { item, policy: POLICY, pricePaisa: amount, qty, now });
         state = { ...r.state, pendingQty: undefined };
         action = r.action;
+        // a second, third... joke-low number: remind her of the real price
+        // instead of the same "nuqsan ho jayega" (live test, 10 Nov: 7 times)
+        if (action.kind === "lowball_check") {
+          const n = (state.events || []).filter((e) => e.kind === "lowball_check").length;
+          action = { ...action, lowballCount: n, ...(n >= 2 ? { askPaisa: state.askPaisa } : {}) };
+        }
         if (state.accepted) {
           // advance / pickup are CONDITIONS of this price: the team checks them
           const conditions = (state.perks || []).filter((p) => p.conditional).map((p) => p.key);
@@ -399,8 +489,8 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     // She says someone else paid less: check it against OUR records - never
     // revealing who, or what anyone actually paid.
     let claim = null;
-    const claimed = offerPaisa ?? readOffer(body);
-    if (claimed != null && CLAIM.test(body)) {
+    const claimed = ears.source === "ai" ? (ears.claimWhere === "elsewhere" ? null : ears.claimPaisa) : offerPaisa ?? readOffer(body);
+    if (claimed != null && (ears.source === "ai" || CLAIM.test(body))) {
       const low = (await db.query(
         `SELECT min((accepted_offer->>'unitPaisa')::bigint) AS low FROM bhao_conversations
           WHERE item_id = $1 AND status = 'accepted'`, [item.itemId])).rows[0].low;
@@ -409,7 +499,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const latest = (await db.query(`SELECT * FROM competitor_price_latest WHERE item_id = $1`, [item.itemId])).rows;
     const uiReady = (await db.query(
       `SELECT 1 FROM information_schema.columns WHERE table_name = 'bhao_messages' AND column_name = 'ui'`)).rowCount > 0;
+    const address = state && state.address ? U.addressInfo(state.address) : await U.addressOf(db, phone);
     return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried, card, claim, hardship, uiReady,
+             ears, address,
              unanswered: unanswered.length ? unanswered : [body],
              history: (await db.query(
                `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND id <= $2
@@ -432,7 +524,10 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     morePerks: ["advance", "pickup"].filter((k) => P.offered(k) && !(step.state.perks || []).some((p) => p.key === k))
       .map((k) => P.PERKS[k].label),
     claim: step.claim, hardship: step.hardship, pickupOffered: P.offered("pickup"),
+    address: step.address, understood: step.ears && step.ears.source === "ai" ? step.ears : null,
+    extraPrices: [step.item.anchorPaisa, Number(step.state.askPaisa)].filter((x) => Number.isSafeInteger(x)),
   });
+  said.text = U.addressify(said.text, step.address);
 
   // Queue the reply - unless she has written again meanwhile (that message
   // gets its own, newer reply).
@@ -441,7 +536,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const newer = (await db.query(
       `SELECT 1 FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2`, [step.conversationId, step.inboundId])).rowCount;
     if (newer) return { handled: true, conversationId: step.conversationId, superseded: true };
-    const due = ["cancel", "aftercare"].includes(step.action.kind)
+    const due = ["cancel", "aftercare", "guarded"].includes(step.action.kind)
       ? new Date(now.getTime() + (10 + Math.floor(Math.random() * 21)) * 1000) // 10-30 s: no haggling pause now
       : step.carried
       ? new Date(Math.max(step.carried.getTime(), now.getTime() + 5000))
@@ -450,7 +545,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const ask = Number(step.state.askPaisa);
     const buttons = step.uiReady && step.state.status === "open" && Number.isSafeInteger(ask)
       ? priceButtons(step.conversationId, ask, step.state, step.item) : null;
-    const replyUi = buttons && BUTTON_KINDS.has(step.action.kind) && step.action.kind !== "open"
+    const replyUi = step.uiReady && step.action.askAddress
+      ? { type: "buttons", text: said.text, buttons: addressButtons(step.conversationId) }
+      : buttons && BUTTON_KINDS.has(step.action.kind) && step.action.kind !== "open"
       ? { type: "buttons", text: said.text, buttons } : null;
     await db.query(
       `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status${replyUi ? ", ui" : ""})
@@ -463,7 +560,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       const title = (await G.titleOf(db, (await db.query(`SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label;
       const ui = step.uiReady && buttons ? {
         type: "buttons",
-        text: `Ye raha aap ka Bhao Card, baji 👆\nSeth Ji ka daam ${rsText(ask)}. Ab aap bataiye - aap kitne mein lengi? Apna daam number mein likh dein (jaise 1200).`,
+        text: U.addressify(`Ye raha aap ka Bhao Card, baji 👆\nSeth Ji ka daam ${rsText(ask)}. Ab aap bataiye - aap kitne mein lengi? Apna daam number mein likh dein.`, step.address),
         image: { kind: "bhao_card", itemName: step.itemRow.name, askPaisa: ask, perks: perkLabels, more, title },
         buttons,
       } : null;

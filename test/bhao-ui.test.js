@@ -66,11 +66,13 @@ test("a tap reads exactly as if she had typed it", () => {
   assert.equal(BW.fromButton("bhao:ok:42:notanumber"), null);
 });
 
-test("opening: a plain greeting, then the Bhao Card as a picture with the three buttons; replies carry buttons too", async () => {
+test("opening: a greeting that asks how to address them (founder, 10 Nov), then the Bhao Card as a picture with the three buttons; replies carry buttons too", async () => {
   const p = phone();
   await say(p, "BHAO ASB-NG-POT-5L", 0);
   const [greet, card] = await outbox(p);
-  assert.equal(greet.ui, null, "the greeting itself has no buttons");
+  assert.equal(greet.decision.askAddress, true, "a new customer is asked, never assumed 'baji'");
+  assert.deepEqual(greet.ui.buttons.map((b) => b.title), ["Baji", "Bhai", "Kuch aur"]);
+  assert.doesNotMatch(card.ui.text, /\bbaji\b/i, "no address word until they choose one");
   assert.equal(card.ui.type, "buttons");
   assert.equal(card.ui.image.kind, "bhao_card");
   assert.equal(card.ui.image.askPaisa, 180000);
@@ -93,7 +95,8 @@ test("tapping 'Apna daam' invites her number; her typed price then bargains as u
   assert.equal(require("../bhao/voice").priceOf(seen.at(-1).decision), null, "her turn: he names no price");
   const card = (await outbox(p)).find((o) => o.decision.kind === "bhao_card");
   assert.ok(!card.ui.buttons.some((b) => b.id.startsWith("bhao:ok:")), "no 'manzoor' button on the card");
-  assert.match(card.ui.text, /aap kitne mein lengi/);
+  assert.match(card.ui.text, /aap kitne mein lenge/, "respectful plural until they say how to be addressed");
+  assert.doesNotMatch(card.ui.text, /1200/, "no fixed example amount (live test 10 Nov: 'jaise 1200' was then called too low)");
   const r = await say(p, "Rs 1,800", 120, { speak: spy });
   assert.equal(r.kind, "accept", "typing the listed price still closes the deal");
   const victory = (await outbox(p)).find((o) => o.decision.kind === "victory");

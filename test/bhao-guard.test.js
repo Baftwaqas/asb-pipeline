@@ -51,7 +51,7 @@ test("one deal per item per week: buying again lower is not a game", async () =>
   assert.equal((await say(p, "Rs 2,000", 10)).kind, "accept");
   const r = await say(p, "BHAO ASB-NG-POT-5L", 3600);
   assert.equal(r.guarded, "deal_cooldown");
-  assert.match((await outbox(p)).at(-1).body, /abhi abhi hua hai/);
+  assert.match((await outbox(p)).at(-1).body, /is hafte ho chuka hai/);
   assert.equal((await say(p, "BHAO ASB-NG-POT-5L", 8 * 86400)).kind, "open");
 });
 

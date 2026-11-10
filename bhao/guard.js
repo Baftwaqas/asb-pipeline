@@ -73,7 +73,7 @@ async function canStart(db, { phone, itemId, itemName, now }) {
     `SELECT 1 FROM bhao_conversations WHERE phone = $1 AND item_id = $2 AND status = 'accepted' AND ended_at > $3 LIMIT 1`,
     [phone, itemId, daysAgo(now, LIMITS.DEAL_COOLDOWN_DAYS)])).rowCount;
   if (recent) return { ok: false, reason: "deal_cooldown",
-    text: `Baji, ${itemName} ka sauda toh abhi abhi hua hai! Agle hafte phir bhao lagayen - tab tak koi aur cheez dekhein? 😄` };
+    text: `Baji, ${itemName} ka sauda toh is hafte ho chuka hai! Agle hafte phir bhao lagayen - tab tak koi aur cheez dekhein? Agar aap ke khayal mein koi sauda nahi hua, bata dein - team check kar legi. 🙏` };
 
   // a few bargains a day, not a hundred
   const today = (await db.query(
@@ -124,7 +124,7 @@ function victoryText({ openPaisa, unitPaisa, qty = 1, itemCode, title, shareNumb
     `Shuru: ${nf(openPaisa)} → Aap ka sauda: ${nf(unitPaisa)}${qty > 1 ? ` × ${qty}` : ""}`,
     `Bachat: ${nf(saved)} (${pct}%)`,
     title ? `Aap ka darja: ${title}` : null,
-    `Saheliyon ko bhejein 👇\n${share}${link}`,
+    `Doston aur ghar walon ko bhejein 👇\n${share}${link}`,
   ].filter(Boolean).join("\n");
 }
 
