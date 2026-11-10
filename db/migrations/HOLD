@@ -21,3 +21,7 @@
 006_individual_flow.sql
 007_protect_hero_unlock.sql
 008_hero_setup_checks.sql
+
+# 026 is only for disposable PostgreSQL amendment reservation tests.
+# Never release to a deployed DB until signed quote edits, reconciliation and billing are reviewed.
+026_apna_amendment_reservations.sql
