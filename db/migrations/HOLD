@@ -31,3 +31,7 @@
 
 # 028 mock Shopify orderEdit commit intent: do not run outside disposable tests.
 028_apna_edit_commit_intents.sql
+
+# 029 lab-only signed amendment authorization; apply only in scratch test PG.
+# A synthetic authorization is NOT real customer consent or a Shopify commit.
+029_lab_signed_apna_amendments.sql
