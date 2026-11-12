@@ -1,0 +1,32 @@
+name: ASB Checkout Lab Bridge Scope Audit
+on:
+  push:
+    branches:
+      - fix/lab-bridge-scope-verify-20261112
+  pull_request:
+    paths:
+      - 'checkout/dev-shopify-credentials-v1.js'
+      - 'checkout/apna-lab-orderedit-readiness-v1.js'
+      - 'checkout/lab-bridge-server.js'
+      - 'scripts/lab-scopes-readonly-v1.js'
+      - 'test/adr002-bridge-granted-scopes-readonly.test.js'
+      - 'test/adr002-apna-lab-orderedit-readiness.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scope-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+      - name: Check syntax (no store credentials)
+        run: |
+          node --check checkout/dev-shopify-credentials-v1.js
+          node --check checkout/lab-bridge-server.js
+          node --check scripts/lab-scopes-readonly-v1.js
+      - name: Verify read-only scope audit and previous app auth
+        run: node --test test/adr002-bridge-granted-scopes-readonly.test.js test/adr002-apna-lab-orderedit-readiness.test.js test/adr002-dev-credentials.test.js
