@@ -21,3 +21,20 @@
 006_individual_flow.sql
 007_protect_hero_unlock.sql
 008_hero_setup_checks.sql
+
+# 026 is only for disposable PostgreSQL amendment reservation tests.
+# Never release to a deployed DB until signed quote edits, reconciliation and billing are reviewed.
+026_apna_amendment_reservations.sql
+
+# 027 is simulation-only bill reconciliation. Never migrate actual ASB databases.
+027_apna_amendment_bill_simulations.sql
+
+# 028 mock Shopify orderEdit commit intent: do not run outside disposable tests.
+028_apna_edit_commit_intents.sql
+
+# 029 lab-only signed amendment authorization; apply only in scratch test PG.
+# A synthetic authorization is NOT real customer consent or a Shopify commit.
+029_lab_signed_apna_amendments.sql
+
+# 030 single-attempt REAL lab Shopify commit + unsent bill draft; unreviewed, MUST remain held.
+030_lab_apna_commit_and_bill_history.sql

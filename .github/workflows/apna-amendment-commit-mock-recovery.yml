@@ -1,0 +1,50 @@
+name: ASB Apna Edit Commit One-Shot Mock Recovery
+on:
+  push:
+    branches:
+      - feature/apna-amendment-commit-recovery-v1-20261110
+  pull_request:
+    paths:
+      - 'db/migrations/028_apna_edit_commit_intents.sql'
+      - 'db/migrations/HOLD'
+      - 'checkout/apna-amendment-commit-mock-pg-v1.js'
+      - 'test/adr002-apna-amendment-commit-mock-pg.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mock-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54339:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54339
+      PGSSLMODE: disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Ensure all amendment migrations remain held
+        run: |
+          grep -Fxq '026_apna_amendment_reservations.sql' db/migrations/HOLD
+          grep -Fxq '027_apna_amendment_bill_simulations.sql' db/migrations/HOLD
+          grep -Fxq '028_apna_edit_commit_intents.sql' db/migrations/HOLD
+      - name: Test durable no-retry mock order-edit commit recovery
+        run: node --test --test-concurrency=1 test/adr002-apna-amendment-commit-mock-pg.test.js test/adr002-apna-amendment-reservation-pg.test.js test/adr002-apna-amendment-bill-simulation-pg.test.js test/adr002-apna-orderedit-simulation.test.js

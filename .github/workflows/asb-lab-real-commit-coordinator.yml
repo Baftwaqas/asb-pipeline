@@ -1,0 +1,75 @@
+name: ASB Lab Real Commit Coordinator — scratch PostgreSQL, mock Shopify
+on:
+  push:
+    branches:
+      - feature/apna-lab-real-commit-coordinator-v1-20261112
+  pull_request:
+    paths:
+      - 'db/migrations/030_lab_apna_commit_and_bill_history.sql'
+      - 'db/migrations/HOLD'
+      - 'checkout/dev-shopify-credentials-v1.js'
+      - 'checkout/lab-apna-postcommit-verifier-v1.js'
+      - 'checkout/lab-apna-real-commit-pg-v1.js'
+      - 'test/adr002-lab-real-commit-pg.test.js'
+      - 'test/adr002-lab-postcommit-verifier.test.js'
+      - 'test/adr002-lab-real-shopify-commit-transport.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-real-commit-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54359:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54359
+      PGSSLMODE: disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Confirm all 026 through 030 migrations remain held
+        run: |
+          for migration in 026_apna_amendment_reservations.sql 027_apna_amendment_bill_simulations.sql 028_apna_edit_commit_intents.sql 029_lab_signed_apna_amendments.sql 030_lab_apna_commit_and_bill_history.sql; do
+            grep -Fxq "$migration" db/migrations/HOLD
+          done
+      - name: Syntax check real commit code
+        run: |
+          node --check checkout/lab-apna-real-commit-pg-v1.js
+          node --check checkout/lab-apna-postcommit-verifier-v1.js
+          node --check checkout/dev-shopify-credentials-v1.js
+          node --check scripts/lab-apna-commit-readiness-readonly-v1.js
+          node --check checkout/lab-bridge-server.js
+      - name: Scratch PG and fake Shopify crash, concurrency and billing tests
+        run: |
+          node --test --test-concurrency=1 \
+            test/adr002-lab-real-commit-pg.test.js \
+            test/adr002-lab-postcommit-verifier.test.js \
+            test/adr002-lab-real-shopify-commit-transport.test.js \
+            test/adr002-bridge-granted-scopes-readonly.test.js
+      - name: Repeat simultaneous-commit race 5 times to catch lock-order regressions
+        run: |
+          for attempt in 1 2 3 4 5; do
+            node --test --test-name-pattern="two concurrent requests" test/adr002-lab-real-commit-pg.test.js
+          done
+      - name: Verify no runtime order-edit execution path is connected
+        run: |
+          ! grep -q 'makeLabCommitCoordinator' checkout/lab-bridge-server.js
+          ! grep -q 'ASB_LAB_REAL_COMMIT' checkout/lab-bridge-server.js
