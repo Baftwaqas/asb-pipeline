@@ -14,7 +14,7 @@ const cycle={code:"THU-2026-11-12",status:"open",verifiedFromDb:true,
   deliveryDate:"2026-11-12"};
 const full={shopDomain:shop,order,cycle,nowIso:"2026-11-10T06:30:00Z",
   sourceVerified:true,dbClockVerified:true,
-  accessScopes:["read_products","read_orders","write_order_edits"],
+  accessScopes:["read_products","write_orders","write_order_edits"],
   scopesVerifiedByTargetApp:true,originalBillVerified:true,
   customerConsentVerified:true,signedAmendmentVerified:true};
 function inspect(over={}){return evaluateLabOrderEditReadiness({...full,...over});}
@@ -42,9 +42,14 @@ test("only read_products, as declared in the checked-in app config, does not suf
   const r=inspect({accessScopes:["read_products"]});
   assert.equal(r.status,"BLOCKED");
   assert.ok(r.blockers.includes("APP_SCOPE_MISSING_write_order_edits"));
-  assert.ok(r.blockers.includes("APP_SCOPE_MISSING_read_orders"));
+  assert.ok(r.blockers.includes("APP_SCOPE_MISSING_write_orders"));
 });
-test("another connector's scopes cannot substitute for the target app's verified grants",()=>{
+test("write_orders grants order read access without separately listing read_orders",()=>{
+  const r=inspect({accessScopes:["read_products","write_orders","write_order_edits"]});
+  assert.equal(r.status,"READ_ONLY_PRECHECK_ONLY");
+  assert.equal(r.mayCommit,false);
+});
+test("another connector\'s scopes cannot substitute for the target app\'s verified grants",()=>{
   const r=inspect({scopesVerifiedByTargetApp:false});
   assert.ok(r.blockers.includes("TARGET_APP_GRANTED_SCOPES_NOT_CHECKED"));
 });

@@ -67,6 +67,12 @@ function runOrder(){
     ASB_LAB_CLI_APPROVAL:"ASB_LAB_ONLY_ONE_TEST_ORDER"
   },(err)=>{if(!err)console.log("[checkout-lab] test order stage completed safely");});
 }
+// Exact operator-controlled, read-only scope audit for the installed Bridge app.
+// No route is exposed and no Shopify order is touched.
+if(process.env.ASB_LAB_SCOPES_READONLY==="RUN_SCOPE_CHECK"){
+  const scopeProbe=pathModule.join(__dirname,"../scripts/lab-scopes-readonly-v1.js");
+  launch([scopeProbe],{},()=>{});
+}
 if(process.env.ASB_LAB_CATALOG_AUDIT==="RUN_READ_ONLY_CATALOG"){
   const audit=pathModule.join(__dirname,"../scripts/lab-apna-catalog-readonly-v1.js");
   launch([audit],{},()=>{});

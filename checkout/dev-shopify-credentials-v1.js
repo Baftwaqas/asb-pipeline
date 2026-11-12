@@ -138,10 +138,45 @@ function createDevCredentialsShopifyClient({
     return products;
   }
 
+
+  // Read-only scope audit bound to THIS installed app's own client credentials.
+  // A separate Shopify/ChatGPT app can never attest Bridge permissions.
+  async function readGrantedScopesForLab(){
+    await checkShop();  // existing shop/currency/timezone identity proof
+    const token=await getToken();
+    const query="query ASBBridgeScopeAudit { currentAppInstallation { accessScopes { handle } } }";
+    const response=await fetchImpl(
+      "https://"+shopDomain+"/admin/api/2026-10/graphql.json",{
+        method:"POST",redirect:"error",
+        headers:{"Content-Type":"application/json",
+          "X-Shopify-Access-Token":token},
+        body:JSON.stringify({query})
+      });
+    if(!response?.ok)throw new QuoteError("DEV_SCOPE_AUDIT_HTTP_FAILED");
+    const json=await response.json();
+    const values=json?.data?.currentAppInstallation?.accessScopes;
+    if(json?.errors?.length||!Array.isArray(values)||values.some(x=>
+      typeof x?.handle!=="string"||!x.handle.length))
+      throw new QuoteError("DEV_SCOPE_AUDIT_INVALID_RESPONSE");
+    const installed=new Set(values.map(x=>x.handle));
+    const required=["read_products","write_orders","write_order_edits"];
+    const granted=required.filter(x=>installed.has(x)&&currentScopes.has(x));
+    // Token-grant response and GraphQL installation must agree on each
+    // required scope; inconsistency is a failure, never treated as approval.
+    const disagree=required.some(x=>installed.has(x)!==currentScopes.has(x));
+    if(disagree)throw new QuoteError("DEV_SCOPE_AUDIT_GRANT_MISMATCH");
+    return Object.freeze({
+      shopDomain,ready:granted.length===required.length,
+      readProducts:granted.includes("read_products"),
+      writeOrders:granted.includes("write_orders"),
+      writeOrderEdits:granted.includes("write_order_edits")
+    });
+  }
+
   async function createOrder({query,variables}={}){
     await checkShop();  // fail closed BEFORE an irreversible orderCreate.
     return graphql(query,variables);
   }
-  return {checkShop,createOrder,readProductsForPolicy};
+  return {checkShop,createOrder,readProductsForPolicy,readGrantedScopesForLab};
 }
 module.exports={createDevCredentialsShopifyClient};
