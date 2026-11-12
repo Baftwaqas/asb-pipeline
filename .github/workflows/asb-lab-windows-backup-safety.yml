@@ -1,0 +1,60 @@
+name: ASB Lab Windows PostgreSQL Backup Script Safety
+on:
+  push:
+    branches:
+      - ops/asb-checkout-lab-pg18-backup-windows-20261112
+  pull_request:
+    paths:
+      - 'ops/windows/Backup-ASBCheckoutLab.ps1'
+      - 'ops/windows/README_ASB_LAB_BACKUP.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  powershell-static-validation:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse the script as Windows PowerShell 5.1 (no database)
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          $p = (Resolve-Path "ops\windows\Backup-ASBCheckoutLab.ps1").Path
+          [System.Management.Automation.Language.Parser]::ParseFile($p, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Host
+            exit 1
+          }
+          Write-Host "WINDOWS_POWERSHELL_5_1_SYNTAX=PASS"
+      - name: Verify strict source identity, secret handling, isolated restore
+        shell: powershell
+        run: |
+          $s = Get-Content -LiteralPath "ops\windows\Backup-ASBCheckoutLab.ps1" -Raw
+          $checks = @(
+            "REFUSED_WRONG_RENDER_DATABASE_HOST",
+            "asb_checkout_lab_pg18",
+            "19011998580770",
+            "Read-Host",
+            "-AsSecureString",
+            "Remove-Item Env:PGPASSWORD",
+            "pg_restore",
+            "--network none",
+            "--no-owner",
+            "--no-acl",
+            "VERIFIED_IN_ISOLATED_DOCKER"
+          )
+          foreach ($check in $checks) {
+            if (-not $s.Contains($check)) { throw "MISSING_REQUIRED_SAFETY_STRING: $check" }
+          }
+          if ($s.Contains("0.0.0.0/0")) { throw "IP_ALLOWLIST_WIDE_OPEN_FORBIDDEN" }
+          Write-Host "BACKUP_SAFETY_STATIC_GATES=PASS"
+      - name: Confirm database migration files remain held
+        shell: powershell
+        run: |
+          $hold = Get-Content "db\migrations\HOLD"
+          foreach ($n in (26..30)) {
+            if (-not ($hold | Where-Object { $_ -match ("^0" + $n + "_") })) { throw "MIGRATION_NOT_HELD_$n" }
+          }
+          Write-Host "MIGRATIONS_026_TO_030_HELD=PASS"
