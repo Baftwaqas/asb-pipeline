@@ -64,6 +64,11 @@ jobs:
             test/adr002-lab-postcommit-verifier.test.js \
             test/adr002-lab-real-shopify-commit-transport.test.js \
             test/adr002-bridge-granted-scopes-readonly.test.js
+      - name: Repeat simultaneous-commit race 5 times to catch lock-order regressions
+        run: |
+          for attempt in 1 2 3 4 5; do
+            node --test --test-name-pattern="two concurrent requests" test/adr002-lab-real-commit-pg.test.js
+          done
       - name: Verify no runtime order-edit execution path is connected
         run: |
           ! grep -q 'makeLabCommitCoordinator' checkout/lab-bridge-server.js
