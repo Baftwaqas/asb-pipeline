@@ -55,6 +55,8 @@ jobs:
           node --check checkout/lab-apna-real-commit-pg-v1.js
           node --check checkout/lab-apna-postcommit-verifier-v1.js
           node --check checkout/dev-shopify-credentials-v1.js
+          node --check scripts/lab-apna-commit-readiness-readonly-v1.js
+          node --check checkout/lab-bridge-server.js
       - name: Scratch PG and fake Shopify crash, concurrency and billing tests
         run: |
           node --test --test-concurrency=1 \
