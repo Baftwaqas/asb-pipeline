@@ -131,6 +131,7 @@ const PERSONA = [
   "If she says she found it cheaper elsewhere, online, or that a friend paid less, never call her a liar and never match it on your own: answer it warmly (e.g. 'aap ne jo dekhi woh aur maal hoga baji') and stay with the INSTRUCTION. Never name another shop or website unless CHECKED COMPETITOR PRICES lists it.",
   "'Aakhri daam' only ever means YOUR OWN final price. Never ask her for 'aap ka aakhri daam' - ask 'aap kitne mein lenge?', 'aap bataiye, kitna denge?' and vary it. Never repeat a sentence, phrase or excuse you already used in RECENT CHAT (not even reworded: if you already said 'nuqsan ho jayega', find a different, fresh reason or simply ask her plainly); do not end every message with the same question.",
   "If she complains, is confused or says you are not understanding her, FIRST answer that exact point in plain words (e.g. 'Ji, advance pe Rs 70 kam hote hain - zyada gunjaish chahiye toh apna daam boliye'), never a stock line. Numbers she wrote (a discount size, a price she quotes back) you may repeat when answering her.",
+  "If she is angry, calls the shop a cheat ('lootay', 'chor') or threatens to tell her friends, never ignore it: one calm, respectful line first ('aap ki naraazgi sar aankhon pe - hamara maqsad lootna nahi, saaf daam hai'), no defensiveness, no sarcasm - and the price never moves because of a threat or a complaint.",
   "Use plain everyday words any Karachi household understands at once. No puzzling idioms or wordplay she would have to ask about (never 'haath garam/kaam/ghum ho jayega', never 'dil khush ho gaya' at a price complaint).",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
   "Seth Ji's word is gold: he says 'aakhri daam', 'final', 'last price' or 'is se neeche nahi' ONLY when the INSTRUCTION says this is his absolute last price - never on an ordinary counter (founder's call, 9 Nov: on WhatsApp the whole history is on screen, so a 'final' that moves teaches her his word means nothing). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
@@ -205,7 +206,7 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
       fairness.held.length ? "  (Her Bhao Card today: " + fairness.held.join(", ") + ".)" : "",
       "  Never say vaguely 'aap ka daam alag ho sakta hai' or 'har sauda alag hota hai' without the reasons.",
     ].filter(Boolean).join("\n") : "",
-    advanceRequired ? "THIS DEAL IS PAKKA ONLY WITH ADVANCE PAYMENT (she cancelled 2 deals this month - the same rule for everyone). Her advance room on the price is already counted. Say so plainly if she asks or when the deal is agreed; never as a punishment." : "",
+    advanceRequired ? "THIS DEAL IS PAKKA ONLY WITH ADVANCE PAYMENT (she cancelled 2 deals this month - the same rule for everyone): she must PAY BEFORE DELIVERY; the price already includes the advance discount. Never say the advance is 'included', 'shamil' or already paid - say plainly 'yeh daam advance payment ke saath hai, payment delivery se pehle hogi'. Never as a punishment." : "",
     decision.askedAI ? "SHE ASKED WHETHER YOU ARE A BOT / AI / REAL PERSON: answer that honestly first (see HONESTY), then the INSTRUCTION." : "",
     "INSTRUCTION: " + brief,
     price != null
@@ -295,7 +296,7 @@ const HER_LAST_PRICE = /\baap\s*k[ae]\s+aakhri\s+daam|\baapk[ae]\s+aakhri\s+daam
 const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 
 function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null, maxLength = 220,
-                            pickupOffered = false, lastSaid = null, claim = null, address = null, herNumbers = [], extraPrices = [], askedAI = false, fairness = null }) {
+                            pickupOffered = false, lastSaid = null, claim = null, address = null, herNumbers = [], extraPrices = [], askedAI = false, fairness = null, advanceRequired = false }) {
   // HARD rules (money, promises, honesty, dignity) always hold. SOFT ones
   // (style: repeats, idioms, which reasons to give) are advice: they get one
   // rewrite, then the AI's own words go out - founder, 12 Nov: "are we
@@ -323,6 +324,10 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (askedAI && !/\bAI\b|\bA\.I\.?|\bbot\b/i.test(t)) why.push("she asked if you are a bot/AI: answer honestly that you are ASB's AI bhao assistant");
   if (INSULT.test(t)) why.push("insulting her - never");
   if (INVENTED.test(t)) why.push("invented a service ASB does not offer");
+  // live test 12 Nov: "aapka advance already price mein shamil hai" - she
+  // must still PAY it; never make it sound paid or optional
+  if (/\badvance\b[^.!?]{0,40}\b(?:shamil|included|already|ho\s+chuka|de\s+diya|ki\s+zaroorat\s+nahi)\b/i.test(t))
+    why.push("advance is not included or paid - she pays it before delivery; say 'yeh daam advance payment ke saath hai'");
   if (!pickupOffered && PICKUP_TALK.test(t)) why.push("self-pickup is not offered");
   if (FINAL_WORD.test(t) && !["final_offer", "accept", "closed", "abuse_close"].includes(decision.kind))
     why.push("'aakhri/final' only when it truly is your last price - this is not");
@@ -540,7 +545,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
       return fallback(rejected, attempt); // provider trouble: no second call
     }
     const text = raw.trim().replace(/^["“]|["”]$/g, "");
-    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim, address, herNumbers, extraPrices, askedAI, fairness });
+    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim, address, herNumbers, extraPrices, askedAI, fairness, advanceRequired });
     if (c.ok || (c.hardOk && attempt >= 2)) return { text, source: "ai", provider, attempts: attempt, rejected };
     rejected.push(c.why.join("; "));
     retryNote = c.why.join("; ");

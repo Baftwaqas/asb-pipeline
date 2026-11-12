@@ -329,3 +329,29 @@ test("'itne mein nahi, 2000 mein do' is still bargaining, not a walk-away", asyn
   const r = await hear(p, "Itne mein nahi chahiye, 2000 mein do", 60, R({ kind: "offer", offer: 2000 }));
   assert.notEqual(r.kind, "closed");
 });
+
+test("live test 12 Nov: a restart never resumes an ask from an older policy, never below his line, and no fake 47% 'victory'", async () => {
+  const p = phone();
+  // an old-policy bargain that got down to Rs 950
+  await db.query(`INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at, ended_at)
+                  VALUES ($1, 'DEGCHI', 'expired', '{"askPaisa": 95000}', 'BHAO-DRAFT-2', $2, $2, $2)`, [p, at(-86400)]);
+  await say(p, "BHAO DEGCHI", 0);
+  assert.equal((await conv(p)).state.askPaisa, 180000, "old policy's ask is not carried over");
+  // same policy: resumes, but never below this bargain's own line, and the victory measures from the resumed ask
+  const q = phone();
+  await say(q, "BHAO DEGCHI", 0, { env: { BHAO_STUBBORN: "off" } });
+  await db.query(`UPDATE bhao_conversations SET state = jsonb_set(state, '{askPaisa}', '95000'), status = 'expired' WHERE phone = $1`, [q]);
+  await say(q, "BHAO DEGCHI", 600, { env: { BHAO_STUBBORN: "off" } });
+  const c = await conv(q);
+  assert.ok(c.state.askPaisa >= 95000 && c.state.askPaisa < 180000, "resumed - but never below this bargain's own line: " + c.state.askPaisa);
+  assert.equal(c.state.events.find((e) => e.kind === "open").askPaisa, c.state.askPaisa);
+  await say(q, String(c.state.askPaisa / 100), 700);
+  assert.equal((await conv(q)).status, "accepted");
+  assert.equal((await outbox(q)).find((o) => o.decision.kind === "victory"), undefined, "paying the price he opened at is no victory");
+});
+
+test("live test 12 Nov: never 'aapka advance already price mein shamil hai' - she must pay it", () => {
+  const d = { kind: "accept", offer: { unitPaisa: 95000, why: "offer_meets_ask" }, askPaisa: 95000 };
+  assert.match(V.checkReply("Rs 950 pe pakka - aapka advance already price mein shamil hai.", { decision: d, qty: 1 }).why.join(), /advance is not included/);
+  assert.equal(V.checkReply("Rs 950 pe pakka! Yeh daam advance payment ke saath hai, payment delivery se pehle hogi.", { decision: d, qty: 1 }).why.join(), "");
+});

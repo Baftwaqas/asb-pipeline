@@ -299,13 +299,22 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         // her last ask on this item (never lower, never back up to the anchor).
         const prev = (await db.query(
           `SELECT state FROM bhao_conversations WHERE phone = $1 AND item_id = $2 AND started_at > $3
-              AND state ? 'askPaisa'
-            ORDER BY started_at DESC LIMIT 1`, [phone, code, new Date(now - RESTART_MEMORY_DAYS * 864e5)])).rows[0];
+              AND state ? 'askPaisa' AND (policy_version = $4 OR $5)
+            ORDER BY started_at DESC LIMIT 1`, [phone, code, new Date(now - RESTART_MEMORY_DAYS * 864e5), POLICY.version, !!carryCode])).rows[0];
+        // (A bargain still OPEN when the policy changed is carried over at its
+        // own last ask - she was in the middle of it.)
+        // Live test, 12 Nov: a Degchi bargain resumed at Rs 950 - an ask left
+        // over from an OLDER policy's test days - below today's stubborn line,
+        // and "950 hi hai mera" closed it at 47% off at once. Memory now comes
+        // only from bargains under the same policy, and never goes below the
+        // lowest he will go in THIS bargain (stubbornness included).
         // ...and a stubborn bargain stays stubborn: walking out and coming
         // back never buys a softer Seth Ji
         if (prev && Number(prev.state.stubbornRatio) > (Number(state.stubbornRatio) || 0)) state.stubbornRatio = Number(prev.state.stubbornRatio);
         if (prev && Number(prev.state.askPaisa) < state.askPaisa) {
-          state.askPaisa = Math.max(Number(prev.state.askPaisa), item.floorPaisa);
+          state.askPaisa = Math.max(Number(prev.state.askPaisa), B.floorOf(item, state.qty || 1, state, POLICY));
+          // the victory card measures from where THIS bargain opened, not the list price
+          state.events = state.events.map((e) => (e.kind === "open" ? { ...e, askPaisa: state.askPaisa, resumed: true } : e));
           action = { ...action, askPaisa: state.askPaisa, resumed: true };
         }
         // Founder, 10 Nov: never assume "baji" - ask how to address them, once.
