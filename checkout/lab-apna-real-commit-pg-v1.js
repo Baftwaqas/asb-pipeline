@@ -124,6 +124,7 @@ function makeLabCommitCoordinator({
         "SELECT household_key FROM checkout_household_cycle_locks"+
         " WHERE shop_domain=$1 AND household_key=$2 AND cycle_code=$3 FOR UPDATE",
         [SHOP,initial.household_key,CYCLE]);
+      const row=await source(db,authorizationId,true);
       const packet=verifySource(row);
       const prior=await getAttempt(db,authorizationId,true);
       if(prior){
@@ -198,7 +199,6 @@ function makeLabCommitCoordinator({
         return {state:"needs_reconcile",attemptId:attempt.attempt_id,
           billSent:false,mayRetryCommit:false};
       }
-      const row=await source(db,authorizationId,true);
       const packet=verifySource(row);
       fail(attempt.signed_packet_sha256===sha(packet)&&
         attempt.source_quote_sha256===sha(row.signed_quote),
