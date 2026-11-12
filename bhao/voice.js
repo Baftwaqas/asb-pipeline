@@ -75,6 +75,8 @@ function briefFor(d) {
     case "guarded":
       return { brief: `Seth Ji could not start a new bargain for this customer (${d.reason || "a fair-play limit"}) and already said why. Now answer what they wrote, kindly and plainly. If they say the reason is wrong (e.g. 'mera koi sauda nahi hua'), believe them politely: say our team will check it and fix it, and that they can bargain on another item meanwhile. Never argue, never name a price.`, mustSayPrice: false };
     case "aftercare":
+      if (d.confirmCancel) return { brief: "She wants to CANCEL because of a reason (another price, a relative paid less, it feels expensive). The deal still stands. First answer her reason (see the WHY PRICES DIFFER section), then ask her kindly, once, if she still wants to cancel - she can tap the buttons below. No pressure, no guilt.", mustSayPrice: false };
+      if (d.kept) return { brief: "She decided to KEEP the deal. Thank her warmly; the deal stands at the PRICE and our team will message her to confirm the order.", mustSayPrice: false };
       if (d.status === "cancelled")
         return { brief: `She cancelled this deal earlier. Answer what she says kindly. If she wants the item after all, tell her to write "BHAO ${d.itemCode || ""}" to start again. Never revive the old price.`, mustSayPrice: false };
       return { brief: "The deal is ALREADY DONE at the PRICE. Answer every question she asks; the price cannot change any more (not up, not down); our team will message her to confirm the order and delivery. Never invent delivery times or promises.", mustSayPrice: false };
@@ -138,7 +140,7 @@ function addressLine(address) {
 }
 
 function buildPrompt({ decision, itemName, qty, customerText, customerMessages = null, history, itemFacts = [], competitorFacts = [], stockLeft = null,
-                       perks = [], morePerks = [], claim = null, hardship = false, pickupOffered = false, address = null, understood = null }) {
+                       perks = [], morePerks = [], claim = null, hardship = false, pickupOffered = false, address = null, understood = null, fairness = null }) {
   const { brief } = briefFor(decision);
   const price = priceOf(decision);
   const msgs = (customerMessages && customerMessages.length ? customerMessages : [customerText || ""])
@@ -179,6 +181,16 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
     understood && understood.note ? "WHAT SHE WANTS ANSWERED (read from her message): " + understood.note : "",
     understood && understood.claimWhere === "elsewhere" && understood.claimPaisa
       ? `SHE SAYS she/someone got it for Rs ${understood.claimPaisa / 100} somewhere else. Take it seriously and respectfully (never 'dil khush ho gaya'): that may be thinner or different maal; your price is for this quality. Do not match it.` : "",
+    fairness ? [
+      "SHE ASKS WHY PRICES DIFFER / WHY SHE SHOULD PAY MORE THAN SOMEONE ELSE. Answer this FIRST, firmly and warmly - it is the heart of Bhao Tao:",
+      "  1. Same rules for everyone; the price moves only for clear reasons, the same for every customer - nobody gets a cheaper price by luck or by knowing someone.",
+      claim && claim.neverSoldThatLow
+        ? `  2. TRUTH FROM OUR RECORDS: this item has never been sold by us at ${rs(claim.claimedPaisa)} or less - say so plainly and kindly ('hamare record mein yeh kabhi ${rs(claim.claimedPaisa)} mein nahi gayi'), maybe it was other maal or another shop. Never call her or her relative a liar.`
+        : claim ? "  2. Some customers did pay less - because of those reasons (advance, buying together, morning bohni, being a regular). Never reveal who or how much." : "",
+      "  3. Then give HER the way to a lower price, concretely - pick the one or two best of: " + fairness.levers.map((l) => l.text).join("; ") + ".",
+      fairness.held.length ? "  (Her Bhao Card today: " + fairness.held.join(", ") + ".)" : "",
+      "  Never say vaguely 'aap ka daam alag ho sakta hai' or 'har sauda alag hota hai' without the reasons.",
+    ].filter(Boolean).join("\n") : "",
     decision.askedAI ? "SHE ASKED WHETHER YOU ARE A BOT / AI / REAL PERSON: answer that honestly first (see HONESTY), then the INSTRUCTION." : "",
     "INSTRUCTION: " + brief,
     price != null
@@ -266,7 +278,7 @@ const HER_LAST_PRICE = /\baap\s*k[ae]\s+aakhri\s+daam|\baapk[ae]\s+aakhri\s+daam
 const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 
 function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null, maxLength = 220,
-                            pickupOffered = false, lastSaid = null, claim = null, address = null, herNumbers = [], extraPrices = [], askedAI = false }) {
+                            pickupOffered = false, lastSaid = null, claim = null, address = null, herNumbers = [], extraPrices = [], askedAI = false, fairness = null }) {
   const why = [];
   const t = String(text || "").trim();
   // Only the address the customer chose (founder, 10 Nov: a man was called
@@ -275,6 +287,11 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (address && word !== "baji" && /\bbaji\b/i.test(t)) why.push(word ? `call them "${word}", not baji` : "address not known: no 'baji' - use only 'aap'");
   if (address && word !== "bhai" && !(word && /bhai/.test(word)) && /\bbhai\b/i.test(t)) why.push(word ? `call them "${word}", not bhai` : "address not known: no 'bhai' - use only 'aap'");
   if (/\bhaath\s+(?:garam|kaam|ghum|kat|tang)\b/i.test(t)) why.push("puzzling idiom - say it plainly");
+  // "why two prices?" needs the reasons and her way to a lower price (founder, 12 Nov)
+  if (fairness && !/advance|milke|mil\s*ke|saath\s+l|bohni|subah|purane|regular|darja/i.test(t))
+    why.push("she asked why prices differ: give the real reasons and her way to a lower price (advance, milke lena, subah ki bohni)");
+  if (fairness && claim && claim.neverSoldThatLow && /\bho\s+sakta\s+hai\b/i.test(t) && !/kabhi\s+nahi/i.test(t))
+    why.push("our records say it was never sold that low - say so plainly, do not say it may be so");
   if (!t) why.push("empty");
   if (t.length > maxLength) why.push("too long");
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
@@ -326,6 +343,7 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   // differences between real prices ("advance pe Rs 70 kam") are true too
   const real = [price, offerPaisa, ...extraPrices, ...(decision.perkQuotes || []).map((q) => q.askPaisa)].filter((x) => Number.isSafeInteger(x));
   for (const a of real) for (const b of real) if (a > b) allowed.add((a - b) / 100);
+  for (const x of extraPrices) if (Number.isSafeInteger(x)) allowed.add(x / 100);
   if (price != null) allowed.add(price / 100);
   if (offerPaisa != null) allowed.add(offerPaisa / 100);
   for (const f of competitorFacts) allowed.add(f.pricePaisa / 100);
@@ -344,7 +362,13 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
 // ---------------------------------------------------------------------------
 // Templates: always correct, used whenever the model is off or fails.
 // ---------------------------------------------------------------------------
-function template(decision, { offerPaisa, pick = (a) => a[0] }) {
+// Said first whenever she asks why prices differ and the model could not answer.
+const FAIRNESS_LINE = "Daam sab ke liye ek hi usool se tay hota hai - advance payment, milke lena aur subah ki bohni pe daam kam hota hai; aap bhi in se faida utha sakte hain.";
+function template(decision, opts) {
+  const line = templateLine(decision, opts);
+  return decision.fairnessAsked ? FAIRNESS_LINE + " " + line : line;
+}
+function templateLine(decision, { offerPaisa, pick = (a) => a[0] }) {
   const p = priceOf(decision);
   switch (decision.kind) {
     case "open":
@@ -380,6 +404,7 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
         ? "Ji, maafi - hamari team yeh check kar ke theek kar degi. Tab tak koi aur cheez dekhni ho toh \"BHAO\" likh dein. 🙏"
         : "Ji, hamari team aap ki baat dekh legi. Tab tak koi aur cheez dekhni ho toh \"BHAO\" likh dein. 🙏";
     case "aftercare":
+      if (decision.confirmCancel) return "Phir bhi cancel karna hai? Neeche tap kar dein - sauda tab tak pakka hai.";
       return decision.status === "accepted" && p != null
         ? `Ji baji, sauda ${rs(p)} pe pakka hai. Hamari team order confirm karne ke liye aap ko message karegi.`
         : `Ji baji, woh sauda cancel ho chuka hai. Phir lena ho toh "BHAO ${decision.itemCode || ""}" likh dein.`;
@@ -448,21 +473,22 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl, {
 async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", customerMessages = null, history = [],
                        groupSizes = [], itemFacts = [], competitorFacts = [], stockLeft = null,
                        perks = [], morePerks = [], claim = null, hardship = false, pickupOffered = false,
-                       address = null, understood = null, extraPrices = [],
+                       address = null, understood = null, extraPrices = [], fairness = null,
                        env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
   // "tum kia bot ho?" - an honest answer, from the model or the template
   const askedAI = ASKS_AI.test((customerMessages && customerMessages.length ? customerMessages : [customerText]).join("\n"));
   if (askedAI) decision = { ...decision, askedAI: true };
+  if (fairness) decision = { ...decision, fairnessAsked: true };
   const provider = String(env.BHAO_VOICE_PROVIDER || "off").toLowerCase();
   const fallback = (rejected, attempts) => ({ text: template(decision, { offerPaisa, pick }), source: "template",
                                               provider: provider === "off" ? null : provider, attempts, rejected });
   if (!PROVIDERS[provider]) return fallback([], 0);
 
-  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft, perks, morePerks, claim, hardship, pickupOffered, address, understood });
+  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft, perks, morePerks, claim, hardship, pickupOffered, address, understood, fairness });
   const herNumbers = numbersIn((customerMessages && customerMessages.length ? customerMessages : [customerText]).join("\n"));
   const lastSaid = (history || []).filter((h) => h.from === "seth").slice(-3).map((h) => h.text);
-  const maxLength = maxLengthFor(customerMessages && customerMessages.length ? customerMessages : [customerText]);
+  const maxLength = fairness ? 360 : maxLengthFor(customerMessages && customerMessages.length ? customerMessages : [customerText]);
   const rejected = [];
   let retryNote = null;
   // Three tries: a stock line is the last resort, not the second one
@@ -476,7 +502,7 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
       return fallback(rejected, attempt); // provider trouble: no second call
     }
     const text = raw.trim().replace(/^["“]|["”]$/g, "");
-    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim, address, herNumbers, extraPrices, askedAI });
+    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim, address, herNumbers, extraPrices, askedAI, fairness });
     if (c.ok) return { text, source: "ai", provider, attempts: attempt, rejected };
     rejected.push(c.why.join("; "));
     retryNote = c.why.join("; ");

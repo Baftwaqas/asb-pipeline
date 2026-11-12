@@ -32,7 +32,7 @@ const PERKS = Object.freeze({
   capPct: 0.10,
   standing: Object.freeze({
     new:        { pct: 0,    label: "Naye mehmaan 🙏" },
-    occasional: { pct: 0.02, label: "Kabhi kabhi aane wali customer" },
+    occasional: { pct: 0.02, label: "Kabhi kabhi aane wale mehmaan" },
     regular:    { pct: 0.04, label: "Regular customer 🌟" },
     gold:       { pct: 0.06, label: "Gold customer ⭐" },
   }),

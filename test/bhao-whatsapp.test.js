@@ -8,6 +8,7 @@ const path = require("path");
 const { Client } = require("pg");
 const H = require("./support/harness");
 const BW = require("../bhao/whatsapp");
+const V = require("../bhao/voice");
 const RT = require("../bhao/runtime");
 
 let db, n = 0;
@@ -273,22 +274,56 @@ async function strikeDeal(speak) {
   return p;
 }
 
-test("after a deal she writes 'order cancel karo, dost ne 800 mein li': Seth Ji answers, the deal is cancelled (kept as evidence)", async () => {
+test("after a deal she writes 'order cancel karo, dost ne 800 mein li': Seth Ji answers the reason first and asks once; a confirm cancels (kept as evidence)", async () => {
   const seen = [];
   const speak = async (args) => { seen.push(args); return { text: "Koi baat nahi baji.", source: "template", rejected: [] }; };
   const p = await strikeDeal(speak);
   const r = await BW.onInbound(db, { phone: p, text: "Nhi order cancel karu, mughay nhi chayee, meri dost nay yahi degchi aap sae 800 mae li hae.",
                                      wamid: wamid(), now: at(700), env: {}, speak });
   assert.equal(r.handled, true);
-  assert.equal(r.kind, "cancel");
-  const wait = (new Date(r.due) - at(700)) / 1000;
+  assert.equal(r.kind, "aftercare", "founder 12 Nov: the reason is answered before anything is cancelled");
+  assert.equal(seen.at(-1).decision.confirmCancel, true);
+  assert.equal(seen.at(-1).claim.claimedPaisa, 80000, "her friend's Rs 800 is checked against our records");
+  assert.ok(seen.at(-1).fairness.levers.some((l) => l.key === "advance"), "her ways to a lower price go to the voice");
+  assert.equal((await conv(p)).status, "accepted", "the deal stands until she confirms");
+  const out = (await db.query(`SELECT m.ui FROM bhao_messages m JOIN bhao_conversations c ON c.id = m.conversation_id WHERE c.phone = $1 ORDER BY m.id DESC LIMIT 1`, [p])).rows[0];
+  if (out.ui) assert.deepEqual(out.ui.buttons.map((b) => b.title), ["Nahi, sauda rakhein", "Haan, cancel karein"]);
+  const yes = BW.fromButton("bhao:cxl:1:yes");
+  const r2 = await BW.onInbound(db, { phone: p, text: yes.text, wamid: wamid(), now: at(760), env: {}, speak, intent: yes.intent });
+  assert.equal(r2.kind, "cancel");
+  const wait = (new Date(r2.due) - at(760)) / 1000;
   assert.ok(wait >= 10 && wait <= 30, "no haggling pause now: " + wait);
   const c = await conv(p);
   assert.equal(c.status, "cancelled");
   assert.ok(c.cancelled_at);
   assert.equal(c.accepted_offer.unitPaisa, 180000, "what was agreed stays on record");
-  assert.equal(seen.at(-1).offerPaisa, 80000, "he may repeat her friend's 800 - never match it");
-  assert.equal(seen.at(-1).decision.kind, "cancel");
+});
+
+test("'Nahi, sauda rakhein' keeps the deal; a plain 'cancel karo' (no reason) still cancels at once", async () => {
+  const speak = async () => ({ text: "Ji.", source: "template", rejected: [] });
+  const p = await strikeDeal(speak);
+  await BW.onInbound(db, { phone: p, text: "Cancel karo, mehnga hai, dost ko 800 mein mili", wamid: wamid(), now: at(700), env: {}, speak });
+  const no = BW.fromButton("bhao:cxl:1:no");
+  const k = await BW.onInbound(db, { phone: p, text: no.text, wamid: wamid(), now: at(720), env: {}, speak, intent: no.intent });
+  assert.equal(k.kind, "aftercare");
+  assert.equal((await conv(p)).status, "accepted");
+  const p2 = await strikeDeal(speak);
+  const c = await BW.onInbound(db, { phone: p2, text: "order cancel kar dein please", wamid: wamid(), now: at(700), env: {}, speak });
+  assert.equal(c.kind, "cancel");
+});
+
+test("founder 12 Nov: 'aik hi cheez ke alag alag bhao?' gets the reasons and her own way to a lower price - never a vague 'alag ho sakta hai'", () => {
+  const fairness = { held: ["Naye mehmaan 🙏"], levers: [{ key: "advance", text: "advance payment - is sauda pe daam Rs 2,430 ho jayega", askPaisa: 243000 }, { key: "group", text: "3 ya zyada milke lena" }] };
+  const decision = { kind: "talk", askPaisa: 250000 };
+  const prompt = V.buildPrompt({ decision, itemName: "Karahi", qty: 1, customerText: "Kuu? aisa kuu hae bhai? aik hi cheeze kay alag alag bhao?", fairness });
+  assert.match(prompt.user, /Same rules for everyone/);
+  assert.match(prompt.user, /Rs 2,430/);
+  const chk = (t, extra = {}) => V.checkReply(t, { decision, qty: 1, fairness, extraPrices: [243000], groupSizes: [3], ...extra }).why.join();
+  assert.match(chk("Ji, har BHAO ka apna hisaab hota hai."), /real reasons/);
+  assert.equal(chk("Usool sab ke liye ek hain - advance dein toh yeh Rs 2,430 ki, ya 3 milke lein toh aur kam."), "");
+  const claim = { claimedPaisa: 120000, neverSoldThatLow: true };
+  assert.match(chk("Aap ki behan ko 1200 mein mili ho sakta hai, advance diya hoga.", { claim, herNumbers: [1200] }), /never sold that low/);
+  assert.match(V.template({ kind: "aftercare", status: "cancelled", fairnessAsked: true }, {}), /usool/);
 });
 
 test("after a deal, a question is answered at the agreed price; 'kya cancel ho sakta hai?' is a question, not a cancellation", async () => {
