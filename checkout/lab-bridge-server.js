@@ -73,6 +73,25 @@ if(process.env.ASB_LAB_SCOPES_READONLY==="RUN_SCOPE_CHECK"){
   const scopeProbe=pathModule.join(__dirname,"../scripts/lab-scopes-readonly-v1.js");
   launch([scopeProbe],{},()=>{});
 }
+
+// Operator-only, one idempotent synthetic 500g Apna Onion order. The entrypoint
+// validates exact lab shop, exact DB, signed quote and product-catalog price.
+// No public HTTP route or customer-facing checkout is enabled.
+if(process.env.ASB_LAB_APNA_ONE_SHOT==="CREATE_APNA_500G_ONCE"){
+  try{
+    assertExactLabDatabase();
+    const one=pathModule.join(__dirname,"../scripts/lab-apna-onion-order-v1.js");
+    launch([one,"--create-single-apna-onion-order"],{},()=>{});
+  }catch{
+    console.error("[checkout-lab] Apna test order refused: unsafe lab database");
+  }
+}
+// Read-only audit for precisely one known synthetic Apna-only Shopify order.
+if(process.env.ASB_LAB_APNA_ORDER_AUDIT==="READ_APNA_ORDER"){
+  const read=pathModule.join(__dirname,"../scripts/lab-apna-order-readonly-v1.js");
+  launch([read],{},()=>{});
+}
+
 if(process.env.ASB_LAB_CATALOG_AUDIT==="RUN_READ_ONLY_CATALOG"){
   const audit=pathModule.join(__dirname,"../scripts/lab-apna-catalog-readonly-v1.js");
   launch([audit],{},()=>{});
