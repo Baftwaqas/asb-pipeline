@@ -118,6 +118,18 @@ if(process.env.ASB_LAB_COMMIT_READONLY==="VERIFY_FULL_ORDER_FIELDS"){
     console.error("[checkout-lab] commit readback audit refused: unsafe DB");
   }
 }
+// Read-only, operator-only pre-migration schema and ledger audit.
+// No backups, no migrations, no data export or customer data in logs.
+if(process.env.ASB_LAB_DB_AUDIT==="READONLY_SCHEMA_GATE"){
+  try{
+    assertExactLabDatabase();
+    const audit=pathModule.join(__dirname,
+      "../scripts/lab-db-migration-audit-readonly-v1.js");
+    launch([audit],{},()=>{});
+  }catch{
+    console.error("[checkout-lab] DB audit refused: unsafe target");
+  }
+}
 // Operator-only, one idempotent synthetic 500g Apna Onion order. The entrypoint
 // validates exact lab shop, exact DB, signed quote and product-catalog price.
 // No public HTTP route or customer-facing checkout is enabled.
