@@ -124,7 +124,6 @@ function makeLabCommitCoordinator({
         "SELECT household_key FROM checkout_household_cycle_locks"+
         " WHERE shop_domain=$1 AND household_key=$2 AND cycle_code=$3 FOR UPDATE",
         [SHOP,initial.household_key,CYCLE]);
-      const row=await source(db,authorizationId,true);
       const packet=verifySource(row);
       const prior=await getAttempt(db,authorizationId,true);
       if(prior){
@@ -162,6 +161,20 @@ function makeLabCommitCoordinator({
   }
   async function settle(authorizationId,evidence,reason){
     return tx(async db=>{
+      // Exactly the SAME lock ordering as recordIntent:
+      // household-cycle -> source authorization/claim -> commit attempt.
+      // Inverted order here previously allowed a real deadlock under races.
+      const initial=await source(db,authorizationId,false);
+      fail(initial?.shop_domain===SHOP,"LAB_REAL_COMMIT_AUTH_NOT_FOUND");
+      await db.query(
+        "INSERT INTO checkout_household_cycle_locks(shop_domain,household_key,cycle_code)"+
+        " VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+        [SHOP,initial.household_key,CYCLE]);
+      await db.query(
+        "SELECT household_key FROM checkout_household_cycle_locks"+
+        " WHERE shop_domain=$1 AND household_key=$2 AND cycle_code=$3 FOR UPDATE",
+        [SHOP,initial.household_key,CYCLE]);
+      const row=await source(db,authorizationId,true);
       const attempt=await getAttempt(db,authorizationId,true);
       fail(attempt&&attempt.shop_domain===SHOP&&attempt.shopify_order_gid===ORDER,
         "LAB_REAL_COMMIT_INTENT_MISSING");
