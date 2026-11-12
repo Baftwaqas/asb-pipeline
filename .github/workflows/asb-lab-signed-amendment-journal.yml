@@ -47,5 +47,10 @@ jobs:
           grep -Fxq '027_apna_amendment_bill_simulations.sql' db/migrations/HOLD
           grep -Fxq '028_apna_edit_commit_intents.sql' db/migrations/HOLD
           grep -Fxq '029_lab_signed_apna_amendments.sql' db/migrations/HOLD
+      - name: Syntax checks for read-only operator entrypoint
+        run: |
+          node --check checkout/lab-apna-signed-amendment-pg-v1.js
+          node --check scripts/lab-amendment-authorization-readonly-v1.js
+          node --check checkout/lab-bridge-server.js
       - name: Test signed authorization and synthetic no-write invariants
         run: node --test --test-concurrency=1 test/adr002-lab-signed-amendment-pg.test.js test/adr002-apna-order-amendment-preflight.test.js
