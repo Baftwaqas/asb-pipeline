@@ -74,6 +74,16 @@ if(process.env.ASB_LAB_SCOPES_READONLY==="RUN_SCOPE_CHECK"){
   launch([scopeProbe],{},()=>{});
 }
 
+// Pure read-only authentication and catalog check; no DB mutation.
+if(process.env.ASB_LAB_APNA_CHECK_ONLY==="RUN_CHECK_ONLY"){
+  try{
+    assertExactLabDatabase();
+    const check=pathModule.join(__dirname,"../scripts/lab-apna-onion-order-v1.js");
+    launch([check,"--check-only"],{},()=>{});
+  }catch{
+    console.error("[checkout-lab] Apna preflight refused: unsafe lab DB");
+  }
+}
 // Operator-only, one idempotent synthetic 500g Apna Onion order. The entrypoint
 // validates exact lab shop, exact DB, signed quote and product-catalog price.
 // No public HTTP route or customer-facing checkout is enabled.
