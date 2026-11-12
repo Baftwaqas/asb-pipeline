@@ -35,3 +35,6 @@
 # 029 lab-only signed amendment authorization; apply only in scratch test PG.
 # A synthetic authorization is NOT real customer consent or a Shopify commit.
 029_lab_signed_apna_amendments.sql
+
+# 030 single-attempt REAL lab Shopify commit + unsent bill draft; unreviewed, MUST remain held.
+030_lab_apna_commit_and_bill_history.sql
