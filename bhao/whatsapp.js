@@ -245,14 +245,15 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       if (conv) continuing = true;
       if (!conv) {
         // Fair play first: daily limit, one deal per item per week, pauses.
+        let fair = { ok: true };
         if (!carryCode) {
-          const ok = await G.canStart(db, { phone, itemId: code, itemName: itemRow.name, now });
+          const ok = fair = await G.canStart(db, { phone, itemId: code, itemName: itemRow.name, now });
           if (!ok.ok) {
             ok.text = U.addressify(ok.text, await U.addressOf(db, phone));
             const g = (await db.query(
               `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at, ended_at)
                VALUES ($1, $2, 'closed', $3, $4, $5, $5, $5) RETURNING id`,
-              [phone, code, { closedFor: ok.reason, policyVersion: POLICY.version }, POLICY.version, now])).rows[0];
+              [phone, code, { closedFor: ok.reason, policyVersion: POLICY.version, until: ok.until || null, everything: !!ok.everything }, POLICY.version, now])).rows[0];
             const saved = await db.query(
               `INSERT INTO bhao_messages (conversation_id, direction, inbound_wamid, body) VALUES ($1, 'in', $2, $3)
                ON CONFLICT (inbound_wamid) DO NOTHING RETURNING id`, [g.id, wamid, body]);
@@ -269,6 +270,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         // Her Bhao Card: standing with ASB and the time of day, as she walks in.
         const perks = [...await P.perksAtOpen(db, { phone, now })];
         perks.push(...P.perksFromText(body, perks));
+        // cancelled twice this month: this deal is pakka only with advance
+        // payment - a condition, and like anyone paying advance she gets
+        // its room on the price too
+        if (fair.advanceOnly && P.offered("advance") && !perks.some((p) => p.key === "advance"))
+          perks.push({ key: "advance", pct: P.PERKS.advance.pct, conditional: true, required: true, label: P.PERKS.advance.label + " (is saude ke liye zaroori)" });
         // Probing protection: this conversation's own floor (weekly drift,
         // a private cushion, new numbers higher, probe guard). Audit only.
         const seed = `${phone}:${code}:${now.toISOString()}`;
@@ -279,7 +285,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         if (lift.probeAlert) console.warn(`[bhao] PROBE ALERT ${code}: ${lift.probeAlert.newNumbers} new numbers bargaining within ${lift.probeAlert.windowHours} h - new numbers' floor raised for ${P.PROTECT.probe.holdHours} h (team: check for one person on many SIMs)`);
         const item = P.applyPerks(itemFor(itemRow), perks, { liftPct: lift.pct });
         const opened = B.open({ conversationId: `${phone}:${code}:${now.getTime()}`, item, qty: 1, policy: POLICY, seed });
-        state = { ...opened.state, perks, perksVersion: P.PERKS.version,
+        state = { ...opened.state, perks, perksVersion: P.PERKS.version, ...(fair.advanceOnly ? { advanceRequired: true } : {}),
                   floorLift: { pct: lift.pct, ...lift.parts, version: lift.version } };
         action = opened.action;
         // Restarting never resets the bargain: within 7 days she continues at
@@ -402,7 +408,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       // "kya cancel ho sakta hai?" is a question, not a cancellation: he answers it
       const asking = /\?|^\s*(?:kya|kia)\b/i.test(body);
       if (conv.guarded) {
-        action = { kind: "guarded", reason: conv.guarded };
+        action = { kind: "guarded", reason: conv.guarded, until: conv.state.until || null, everything: !!conv.state.everything, itemName: itemRow && itemRow.name };
         console.log(`[bhao] TEAM CHECK: ${phone} answered "${conv.guarded}" on ${conv.item_id}: ${JSON.stringify(body.slice(0, 120))}`);
       } else if (conv.status === "accepted" && intent !== "cancel_no" && (intent === "cancel_yes" || (CANCEL.test(body) && !asking))
                  && !state.cancelPending && (ears.kind === "claim" || ears.kind === "fairness" || ears.kind === "complaint" || ears.claimPaisa != null || FAIR.test(body) || CLAIM.test(body) && readOffer(body) != null)
@@ -414,7 +420,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         action = { kind: "aftercare", status: "accepted", offer: conv.accepted_offer, itemCode: conv.item_id, confirmCancel: true };
       } else if (conv.status === "accepted" && intent !== "cancel_no" && (intent === "cancel_yes" || (CANCEL.test(body) && !asking))) {
         await db.query(`UPDATE bhao_conversations SET status = 'cancelled', cancelled_at = $2 WHERE id = $1`, [conv.id, now]);
-        action = { kind: "cancel", offer: conv.accepted_offer, itemCode: conv.item_id };
+        action = { kind: "cancel", offer: conv.accepted_offer, itemCode: conv.item_id, cancelCount: await G.cancelsOf(db, phone, now) };
         console.log(`[bhao] ${phone} CANCELLED the deal on ${conv.item_id} (team: do not confirm this order)`);
       } else {
         if (intent === "cancel_no") state = { ...state, cancelPending: false };
@@ -545,7 +551,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
              history: (await db.query(
                `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND id <= $2
                    AND (direction = 'in' OR send_status = 'sent')
-                 ORDER BY id DESC LIMIT 8`, [conv.id, lastSaid])).rows.reverse() };
+                 ORDER BY id DESC LIMIT 16`, [conv.id, lastSaid])).rows.reverse() };
   });
   if (!step.handled || step.duplicate || step.guarded || step.throttled) return step;
 
@@ -564,10 +570,13 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
       .map((k) => P.PERKS[k].label),
     claim: step.claim, hardship: step.hardship, pickupOffered: P.offered("pickup"),
     address: step.address, understood: step.ears && step.ears.source === "ai" ? step.ears : null, fairness: step.fairness,
+    advanceRequired: !!(step.state && step.state.advanceRequired),
     extraPrices: [step.item.anchorPaisa, Number(step.state.askPaisa), ...((step.fairness && step.fairness.levers) || []).map((l) => l.askPaisa)]
       .filter((x) => Number.isSafeInteger(x)),
   });
   said.text = U.addressify(said.text, step.address);
+  if (said.rejected && said.rejected.length)
+    console.warn(`[bhao] ${phone} voice ${said.source === "ai" ? "rewrote" : "FELL BACK to stock line"} after: ${said.rejected.map((x) => String(x).slice(0, 160)).join(" | ")}`);
 
   // Queue the reply - unless she has written again meanwhile (that message
   // gets its own, newer reply).

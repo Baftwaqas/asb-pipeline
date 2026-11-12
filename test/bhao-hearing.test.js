@@ -139,7 +139,9 @@ test("live test 10 Nov: after 'sauda ho chuka', 'Mera tu koi sauda nhi hua' is a
   const r = await say(p, "Mera tu koi sauda nhi hua, bhai", 7300);
   assert.equal(r.kind, "guarded");
   assert.equal((await outbox(p)).at(-1).decision.kind, "guarded", "a reply is queued");
-  assert.match(V.template({ kind: "guarded", reason: "deal_cooldown" }, {}), /team .*check/);
+  const line = V.template({ kind: "guarded", reason: "deal_cooldown" }, {});
+  assert.match(line, /hafte mein ek sauda/, "the rule, plainly");
+  assert.doesNotMatch(line, /check|theek kar/, "founder 12 Nov: no false 'team will check' promise");
   const again = await say(p, "?", 9000);
   assert.equal(again.kind, "guarded", "and again");
 });
@@ -248,4 +250,31 @@ test("founder 12 Nov: repeating the same number never wins - he holds his price 
   assert.equal(state.status, "open", "no deal for standing still");
   const moved = go(195000);
   assert.ok(["counter", "accept", "final_offer"].includes(moved.kind), "moving up gets him moving again");
+});
+
+test("founder 12 Nov: style rules are advice - after one rewrite the AI's own words go out; hard rules never bend", async () => {
+  const f = (texts) => { let i = 0; return async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: texts[Math.min(i++, texts.length - 1)] } }] }) }); };
+  const history = [{ from: "seth", text: "Arre, itni kam keemat pe mera nuqsan ho jayega." }];
+  const base = { decision: { kind: "refuse", angle: "running_costs" }, itemName: "Karahi", customerMessages: ["1800"], history, env: GROQ };
+  const soft = await V.speak({ ...base, fetchImpl: f(["Nuqsan ho jayega ji, thoda barhaiye.", "Is daam pe toh nuqsan hai ji, thoda aur barhaiye."]) });
+  assert.equal(soft.source, "ai", "a style slip is not worth a stock line");
+  assert.equal(soft.attempts, 2);
+  const hard = await V.speak({ ...base, fetchImpl: f(["Chalo Rs 1,500 mein le lo.", "Rs 1,400 bas.", "Rs 1,300."]) });
+  assert.equal(hard.source, "template", "a made-up price never goes out");
+});
+
+test("a stock line never goes out twice in a row", async () => {
+  const d = { kind: "guarded", reason: "deal_cooldown", itemName: "Degchi" };
+  const first = V.template(d, {});
+  const r = await V.speak({ decision: d, itemName: "Degchi", customerMessages: ["kyun?"], history: [{ from: "seth", text: first }], env: {} });
+  assert.notEqual(r.text, first);
+});
+
+test("the rule is told honestly: a daily-limit or abuse pause covers every item, so no 'try another item'; the first cancel warns, the second says advance", () => {
+  const all = V.template({ kind: "guarded", reason: "daily_limit", everything: true, until: "2026-11-13T19:00:00Z" }, {});
+  assert.doesNotMatch(all, /baqi cheez|koi aur cheez/i);
+  assert.match(all, /14 Nov/);
+  assert.match(V.buildPrompt({ decision: { kind: "guarded", reason: "daily_limit", everything: true }, itemName: "x", qty: 1, customerText: "why" }).user, /do NOT suggest another item/);
+  assert.match(V.template({ kind: "cancel", cancelCount: 1 }, {}), /ek aur sauda cancel/);
+  assert.match(V.template({ kind: "cancel", cancelCount: 2 }, {}), /advance payment ke saath/);
 });

@@ -9,8 +9,12 @@
 //   * one deal per item per phone per DEAL_COOLDOWN_DAYS (no reselling, no
 //     "buy it again lower");
 //   * restarting never resets the ask (whatsapp.js, 7-day memory);
-//   * MAX_CANCELLATIONS cancelled deals in 30 days pauses her Bhao Tao for
-//     PAUSE_DAYS - saying "pakka" and backing out is how a floor gets probed;
+//   * MAX_CANCELLATIONS cancelled deals in 30 days: she can still bargain on
+//     everything, but her next deals are pakka only WITH ADVANCE PAYMENT -
+//     saying "pakka" and backing out is how a floor gets probed, and a
+//     deposit makes that cost something (founder, 12 Nov: a ban punished
+//     the right to cancel that Seth Ji himself offers; a shopkeeper says
+//     "pehle paise, phir sauda" instead);
 //   * a burst of messages (FLOOD_MAX in FLOOD_WINDOW_S) is answered once,
 //     together, not message by message.
 // Against abuse of Seth Ji:
@@ -54,35 +58,46 @@ const nf = (paisa) => "Rs " + Math.round(paisa / 100).toLocaleString("en-US");
  * { ok: false, reason, text } - text is Seth Ji's polite line.
  */
 async function canStart(db, { phone, itemId, itemName, now }) {
-  // paused: insults, or deals said "pakka" and then cancelled
+  // paused: insults only
   const paused = (await db.query(
-    `SELECT 1 FROM bhao_conversations WHERE phone = $1 AND state->>'closedFor' = 'abuse' AND ended_at > $2 LIMIT 1`,
-    [phone, daysAgo(now, LIMITS.PAUSE_DAYS)])).rowCount;
-  if (paused) return { ok: false, reason: "paused_abuse",
-    text: "Baji, pichli dafa baat izzat se nahi hui thi, is liye Seth Ji ne kuch din ka waqfa liya hai. Saman aap website se le sakti hain. 🙏" };
-  const cancels = (await db.query(
-    `SELECT count(*)::int AS n, max(cancelled_at) AS last FROM bhao_conversations
-      WHERE phone = $1 AND status = 'cancelled' AND cancelled_at > $2`,
-    [phone, daysAgo(now, LIMITS.CANCEL_WINDOW_DAYS)])).rows[0];
-  if (cancels.n >= LIMITS.MAX_CANCELLATIONS && new Date(cancels.last) > daysAgo(now, LIMITS.PAUSE_DAYS))
-    return { ok: false, reason: "paused_cancellations",
-      text: `Baji, pichle dinon ${cancels.n} dafa sauda pakka hua aur phir cancel. Bhao Tao kuch din aaram karega - agle hafte phir aaiye ga, chai pe baat hogi. 🙏` };
+    `SELECT max(ended_at) AS last FROM bhao_conversations WHERE phone = $1 AND state->>'closedFor' = 'abuse' AND ended_at > $2`,
+    [phone, daysAgo(now, LIMITS.PAUSE_DAYS)])).rows[0].last;
+  if (paused) {
+    const until = new Date(new Date(paused).getTime() + LIMITS.PAUSE_DAYS * 864e5);
+    return { ok: false, reason: "paused_abuse", until, everything: true,
+      text: `Baji, pichli dafa baat izzat se nahi hui thi, is liye Seth Ji ne ${dayText(until)} tak waqfa liya hai. Saman aap website se le sakti hain. 🙏` };
+  }
 
   // one deal per item per week
   const recent = (await db.query(
-    `SELECT 1 FROM bhao_conversations WHERE phone = $1 AND item_id = $2 AND status = 'accepted' AND ended_at > $3 LIMIT 1`,
-    [phone, itemId, daysAgo(now, LIMITS.DEAL_COOLDOWN_DAYS)])).rowCount;
-  if (recent) return { ok: false, reason: "deal_cooldown",
+    `SELECT ended_at FROM bhao_conversations WHERE phone = $1 AND item_id = $2 AND status = 'accepted' AND ended_at > $3
+      ORDER BY ended_at DESC LIMIT 1`, [phone, itemId, daysAgo(now, LIMITS.DEAL_COOLDOWN_DAYS)])).rows[0];
+  if (recent) return { ok: false, reason: "deal_cooldown", until: new Date(new Date(recent.ended_at).getTime() + LIMITS.DEAL_COOLDOWN_DAYS * 864e5),
     text: `Baji, ${itemName} ka sauda toh is hafte ho chuka hai! Agle hafte phir bhao lagayen - tab tak koi aur cheez dekhein? Agar aap ke khayal mein koi sauda nahi hua, bata dein - team check kar legi. 🙏` };
 
   // a few bargains a day, not a hundred
   const today = (await db.query(
     `SELECT count(*)::int AS n FROM bhao_conversations WHERE phone = $1 AND started_at >= $2
         AND COALESCE(state->>'closedFor', '') = ''`, [phone, karachiDayStart(now)])).rows[0].n;
-  if (today >= LIMITS.DAILY_BARGAINS) return { ok: false, reason: "daily_limit",
+  if (today >= LIMITS.DAILY_BARGAINS) return { ok: false, reason: "daily_limit", everything: true,
+    until: new Date(karachiDayStart(now).getTime() + 864e5),
     text: `Baji, aaj ${today} bhao ho gaye - Seth Ji ka gala baith gaya! 😄 Kal phir aaiye ga.` };
 
-  return { ok: true };
+  // cancelled twice in a month: deals only with advance payment
+  const cancels = await cancelsOf(db, phone, now);
+  return { ok: true, advanceOnly: cancels >= LIMITS.MAX_CANCELLATIONS, cancels };
+}
+
+/** Deals she said "pakka" to and then cancelled, in the last CANCEL_WINDOW_DAYS. */
+async function cancelsOf(db, phone, now) {
+  return (await db.query(
+    `SELECT count(*)::int AS n FROM bhao_conversations WHERE phone = $1 AND status = 'cancelled' AND cancelled_at > $2`,
+    [phone, daysAgo(now, LIMITS.CANCEL_WINDOW_DAYS)])).rows[0].n;
+}
+
+/** "15 Nov" in Karachi time. */
+function dayText(d) {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Karachi", day: "numeric", month: "short" }).format(d);
 }
 
 /** Too many messages from her in the last minute: answer them together, once. */
@@ -128,4 +143,4 @@ function victoryText({ openPaisa, unitPaisa, qty = 1, itemCode, title, shareNumb
   ].filter(Boolean).join("\n");
 }
 
-module.exports = { LIMITS, ABUSE, HARDSHIP, canStart, flooding, isAbuse, isHardship, TITLES, titleOf, victoryText };
+module.exports = { LIMITS, ABUSE, HARDSHIP, canStart, cancelsOf, dayText, flooding, isAbuse, isHardship, TITLES, titleOf, victoryText };

@@ -55,7 +55,7 @@ test("one deal per item per week: buying again lower is not a game", async () =>
   assert.equal((await say(p, "BHAO ASB-NG-POT-5L", 8 * 86400)).kind, "open");
 });
 
-test("two deals said 'pakka' and cancelled in a month pause Bhao Tao for a week", async () => {
+test("two deals said 'pakka' and cancelled in a month: she still bargains, but her next deal is pakka only with advance (founder, 12 Nov)", async () => {
   const p = phone();
   for (const [i, code] of ["ASB-NG-POT-5L", "ASB-NG-TAWA"].entries()) {
     const t = i * 2 * 86400;
@@ -64,8 +64,10 @@ test("two deals said 'pakka' and cancelled in a month pause Bhao Tao for a week"
     assert.equal((await say(p, "cancel kar do", t + 600)).kind, "cancel");
   }
   const r = await say(p, "BHAO ASB-NG-KARAHI", 5 * 86400);
-  assert.equal(r.guarded, "paused_cancellations");
-  assert.equal((await say(p, "BHAO ASB-NG-KARAHI", 12 * 86400)).kind, "open", "a week after the last cancellation");
+  assert.equal(r.kind, "open", "never banned for using the right to cancel");
+  const c = (await db.query(`SELECT state FROM bhao_conversations WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [p])).rows[0].state;
+  assert.equal(c.advanceRequired, true);
+  assert.ok(c.perks.some((x) => x.key === "advance"), "the advance is a condition - and she gets its room on the price too");
 });
 
 test("gaali: first a calm warning and no price move; the second time the bargain ends and pauses", async () => {
