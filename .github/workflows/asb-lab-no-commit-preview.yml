@@ -1,0 +1,37 @@
+name: ASB Lab No-Commit Shopify Order Edit Preview
+on:
+  push:
+    branches:
+      - feature/apna-lab-orderedit-preview-no-commit-20261112
+  pull_request:
+    paths:
+      - 'checkout/dev-shopify-credentials-v1.js'
+      - 'checkout/lab-bridge-server.js'
+      - 'scripts/lab-apna-orderedit-preview-v1.js'
+      - 'test/adr002-apna-real-shopify-staged-preview.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  no-commit-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Syntax checks
+        run: |
+          node --check checkout/dev-shopify-credentials-v1.js
+          node --check scripts/lab-apna-orderedit-preview-v1.js
+          node --check checkout/lab-bridge-server.js
+      - name: Mock GraphQL stages with NO orderEditCommit
+        run: node --test test/adr002-apna-real-shopify-staged-preview.test.js test/adr002-lab-apna-order-readonly.test.js test/adr002-bridge-granted-scopes-readonly.test.js
+      - name: Explicitly guard against commit mutations in preview module
+        run: |
+          ! grep -q 'mutation ASB.*Commit' scripts/lab-apna-orderedit-preview-v1.js
+          ! grep -q 'orderEditCommit(' scripts/lab-apna-orderedit-preview-v1.js

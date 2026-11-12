@@ -222,10 +222,100 @@ function createDevCredentialsShopifyClient({
     return order;
   }
 
+
+  // Deliberately non-committing Shopify edit SESSION preview for the single
+  // synthetic Apna Onion order created Nov 12. Uses real Shopify calculated
+  // prices; NEVER calls orderEditCommit or writes a bill/customer notification.
+  async function previewLabApnaOnionUncommitted({
+    orderGid,operatorApproval,previewMode
+  }={}){
+    const TARGET="gid://shopify/Order/19011998580770";
+    const ONEKG="gid://shopify/ProductVariant/69644381716514";
+    if(orderGid!==TARGET||
+       operatorApproval!=="ASB_LAB_APNA_ONION_STAGE_ONLY"||
+       previewMode!=="STAGE_WITHOUT_COMMIT")
+      throw new QuoteError("LAB_APNA_PREVIEW_NOT_ARMED");
+    const order=await readLabOrderForAmendment({orderGid:TARGET});
+    const {parseMoneyAsPaisa}=require("./ordercreate-v1");
+    const first=order.lineItems?.nodes?.[0];
+    const props=new Map((first?.customAttributes||[]).map(x=>[x.key,x.value]));
+    const money=order.currentTotalPriceSet?.shopMoney;
+    const outstanding=order.totalOutstandingSet?.shopMoney;
+    if(!order.tags.includes("ASB-APNA-AMENDMENT-TARGET")||
+       !order.tags.includes("ASB-CYCLE-MON-2026-11-16")||
+       order.lineItems.nodes.length!==1||
+       first?.variant?.id!=="gid://shopify/ProductVariant/69644381683746"||
+       first?.quantity!==1||
+       props.get("_asb_door")!=="apna_order"||
+       props.get("_asb_product")!=="ASB-CANON-ONION"||
+       money?.currencyCode!=="PKR"||
+       outstanding?.currencyCode!=="PKR"||
+       parseMoneyAsPaisa(money.amount)!==4500||
+       parseMoneyAsPaisa(outstanding.amount)!==4500)
+      throw new QuoteError("LAB_APNA_PREVIEW_SOURCE_NOT_ELIGIBLE");
+    const granted=await readGrantedScopesForLab();
+    if(!granted.ready)throw new QuoteError("LAB_APNA_PREVIEW_SCOPE_NOT_GRANTED");
+    const token=await getToken();
+    async function fixedMutation(query,variables,key){
+      const response=await fetchImpl(
+        "https://"+shopDomain+"/admin/api/2026-10/graphql.json",{
+          method:"POST",redirect:"error",
+          headers:{"Content-Type":"application/json",
+            "X-Shopify-Access-Token":token},
+          body:JSON.stringify({query,variables})
+        });
+      if(!response?.ok)throw new QuoteError("LAB_APNA_PREVIEW_HTTP_UNCERTAIN");
+      const json=await response.json();
+      const entry=json?.data?.[key];
+      if(json?.errors?.length||!entry||
+         !Array.isArray(entry.userErrors)||entry.userErrors.length||
+         !entry.calculatedOrder?.id)
+        throw new QuoteError("LAB_APNA_PREVIEW_SHOPIFY_REJECTED");
+      const co=entry.calculatedOrder;
+      if(!/^gid:\/\/shopify\/CalculatedOrder\/[1-9][0-9]*$/.test(co.id))
+        throw new QuoteError("LAB_APNA_PREVIEW_INVALID_CALCULATED_ORDER");
+      return co;
+    }
+    const beginQuery=[
+      "mutation ASBLabApnaOnionBegin($id:ID!){",
+      " orderEditBegin(id:$id){ calculatedOrder {id",
+      " totalPriceSet{shopMoney{amount currencyCode}}",
+      " totalOutstandingSet{shopMoney{amount currencyCode}}}",
+      " userErrors{field message}}}"
+    ].join(" ");
+    const addedQuery=[
+      "mutation ASBLabApnaOnionAdd($id:ID!,$variantId:ID!,$quantity:Int!){",
+      " orderEditAddVariant(id:$id,variantId:$variantId,quantity:$quantity,allowDuplicates:false){",
+      " calculatedOrder{id totalPriceSet{shopMoney{amount currencyCode}}",
+      " totalOutstandingSet{shopMoney{amount currencyCode}}}",
+      " userErrors{field message}}}"
+    ].join(" ");
+    const stage=await fixedMutation(beginQuery,{id:TARGET},"orderEditBegin");
+    if(stage.totalPriceSet?.shopMoney?.currencyCode!=="PKR"||
+       parseMoneyAsPaisa(stage.totalPriceSet.shopMoney.amount)!==4500)
+      throw new QuoteError("LAB_APNA_PREVIEW_ORIGINAL_MONEY_CHANGED");
+    const preview=await fixedMutation(addedQuery,{
+      id:stage.id,variantId:ONEKG,quantity:1
+    },"orderEditAddVariant");
+    if(preview.id!==stage.id||
+       preview.totalPriceSet?.shopMoney?.currencyCode!=="PKR"||
+       preview.totalOutstandingSet?.shopMoney?.currencyCode!=="PKR"||
+       parseMoneyAsPaisa(preview.totalPriceSet.shopMoney.amount)!==13500||
+       parseMoneyAsPaisa(preview.totalOutstandingSet.shopMoney.amount)!==13500)
+      throw new QuoteError("LAB_APNA_PREVIEW_FINAL_MONEY_MISMATCH");
+    return Object.freeze({
+      state:"STAGED_ONLY_NOT_COMMITTED",
+      calculatedOrderId:preview.id,
+      originalPaisa:4500,additionalPaisa:9000,expectedFinalPaisa:13500,
+      orderModified:false,billSent:false,
+      explicitNoCommit:true
+    });
+  }
+
   async function createOrder({query,variables}={}){
     await checkShop();  // fail closed BEFORE an irreversible orderCreate.
     return graphql(query,variables);
   }
-  return {checkShop,createOrder,readProductsForPolicy,readGrantedScopesForLab,readLabOrderForAmendment};
+  return {checkShop,createOrder,readProductsForPolicy,readGrantedScopesForLab,readLabOrderForAmendment,previewLabApnaOnionUncommitted};
 }
 module.exports={createDevCredentialsShopifyClient};
