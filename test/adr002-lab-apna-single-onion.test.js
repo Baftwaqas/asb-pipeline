@@ -11,7 +11,7 @@ function verdict(q=quote()){
   return verifyLabApnaOnionOnlyInTransaction({
     db:{query:async()=>({rows:[]})},quote:q,shopDomain:SHOP,
     identity:{serverAuthenticated:true,phoneVerified:true,
-      householdKey:q.customerReference},
+      householdKey:quote().customerReference},
     cycle:{code:q.cycleCode,status:"open",delivery_day:q.deliveryDate},
     dbNow:new Date("2026-11-12T05:35:00.000Z")
   });
