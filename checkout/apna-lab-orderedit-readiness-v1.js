@@ -5,7 +5,7 @@
 const SHOP="asb-checkout-lab.myshopify.com";
 const SCOPE_QUERY="query AsbCurrentInstallationScopes { currentAppInstallation { accessScopes { handle } } }";
 const REQUIRED_TAGS=["ASB-LAB-ONLY","NEVER-FULFILL","ASB-ADR002"];
-const REQUIRED_SCOPES=["read_orders","write_order_edits"];
+const REQUIRED_SCOPES=["write_orders","write_order_edits"];
 const ORDER_GID=/^gid:\/\/shopify\/Order\/[1-9][0-9]*$/;
 
 function iso(t){const n=Date.parse(t);return Number.isFinite(n)?n:NaN;}
