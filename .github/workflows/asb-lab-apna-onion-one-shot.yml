@@ -33,4 +33,4 @@ jobs:
           node --check scripts/lab-apna-order-readonly-v1.js
           node --check checkout/lab-bridge-server.js
       - name: Validate Apna-only Onion synthetic order and old auth safeguards
-        run: node --test test/adr002-lab-apna-single-onion.test.js test/adr002-bridge-granted-scopes-readonly.test.js test/adr002-dev-credentials.test.js
+        run: node --test test/adr002-lab-apna-single-onion.test.js test/adr002-lab-apna-order-readonly.test.js test/adr002-bridge-granted-scopes-readonly.test.js test/adr002-dev-credentials.test.js
