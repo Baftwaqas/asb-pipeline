@@ -14,7 +14,7 @@ const cycle={code:"THU-2026-11-12",status:"open",verifiedFromDb:true,
   deliveryDate:"2026-11-12"};
 const full={shopDomain:shop,order,cycle,nowIso:"2026-11-10T06:30:00Z",
   sourceVerified:true,dbClockVerified:true,
-  accessScopes:["read_products","read_orders","write_order_edits"],
+  accessScopes:["read_products","write_orders","write_order_edits"],
   scopesVerifiedByTargetApp:true,originalBillVerified:true,
   customerConsentVerified:true,signedAmendmentVerified:true};
 function inspect(over={}){return evaluateLabOrderEditReadiness({...full,...over});}
