@@ -312,10 +312,98 @@ function createDevCredentialsShopifyClient({
     });
   }
 
+  // Strict, server-private independent order read for real lab reconciliation.
+  // No phone, email, address, tokens or customer records are requested.
+  async function readLabOrderForCommitReconcile({orderGid}={}){
+    const target="gid://shopify/Order/19011998580770";
+    if(shopDomain!=="asb-checkout-lab.myshopify.com"||orderGid!==target)
+      throw new QuoteError("LAB_REAL_COMMIT_WRONG_ORDER_OR_SHOP");
+    const grant=await readGrantedScopesForLab();
+    if(!grant.ready)throw new QuoteError("LAB_REAL_COMMIT_SCOPES_NOT_GRANTED");
+    const token=await getToken();
+    const query=[
+      "query ASBLabCommitReadback($id:ID!){order(id:$id){",
+      "id test edited tags currencyCode displayFinancialStatus displayFulfillmentStatus",
+      "currentTotalPriceSet{shopMoney{amount currencyCode}}",
+      "totalOutstandingSet{shopMoney{amount currencyCode}}",
+      "currentSubtotalPriceSet{shopMoney{amount currencyCode}}",
+      "currentTotalTaxSet{shopMoney{amount currencyCode}}",
+      "currentTotalDiscountsSet{shopMoney{amount currencyCode}}",
+      "currentShippingPriceSet{shopMoney{amount currencyCode}}",
+      "totalReceivedSet{shopMoney{amount currencyCode}}",
+      "lineItems(first:100){nodes{id quantity unfulfilledQuantity",
+      "variant{id sku} customAttributes{key value}}",
+      "pageInfo{hasNextPage}}}}"
+    ].join(" ");
+    const response=await fetchImpl(
+      "https://"+shopDomain+"/admin/api/2026-10/graphql.json",{
+        method:"POST",redirect:"error",
+        headers:{"Content-Type":"application/json",
+          "X-Shopify-Access-Token":token},
+        body:JSON.stringify({query,variables:{id:target}})
+      });
+    if(!response?.ok)throw new QuoteError("LAB_REAL_COMMIT_READBACK_HTTP_FAILED");
+    const parsed=await response.json();
+    if(parsed?.errors?.length||parsed?.data?.order?.id!==target||
+       !Array.isArray(parsed.data.order.lineItems?.nodes)||
+       parsed.data.order.lineItems.pageInfo?.hasNextPage!==false)
+      throw new QuoteError("LAB_REAL_COMMIT_READBACK_INCOMPLETE");
+    return parsed.data.order;
+  }
+
+  // FINALIZER is not exposed by any HTTP route, Render startup script, or UI.
+  // A reviewed lab-only operator entrypoint must explicitly configure BOTH
+  // flags and provide the DB-committed one-shot intent before calling it.
+  // This method executes EXACTLY ONE GraphQL request; NO retries.
+  async function commitLabStagedOrderEdit({
+    shopifyOrderGid,calculatedOrderGid,
+    durableIntentRecorded=false,operatorGate
+  }={}){
+    if(shopDomain!=="asb-checkout-lab.myshopify.com"||
+       shopifyOrderGid!=="gid://shopify/Order/19011998580770"||
+       !/^gid:\/\/shopify\/CalculatedOrder\/[1-9][0-9]*$/.test(calculatedOrderGid||"")||
+       durableIntentRecorded!==true||
+       operatorGate!=="DURABLE_LAB_COMMIT_INTENT_VERIFIED"||
+       process.env.ASB_LAB_REAL_COMMIT!=="REVIEWED_ONE_SHOT_ONLY"||
+       process.env.ASB_LAB_WRITE_MODE!=="lab-commit-single-attempt")
+      throw new QuoteError("LAB_REAL_COMMIT_NOT_AUTHORIZED");
+    const grant=await readGrantedScopesForLab();
+    if(!grant.ready)throw new QuoteError("LAB_REAL_COMMIT_SCOPES_NOT_GRANTED");
+    const token=await getToken();
+    const query=[
+      "mutation ASBLabCommitOnce($id:ID!){",
+      "orderEditCommit(id:$id,notifyCustomer:false,",
+      'staffNote:"ASB LAB synthetic Onion amendment, verified one-shot; DO NOT FULFILL"){',
+      "order{id} successMessages userErrors{field message}}}"
+    ].join(" ");
+    let response,body;
+    try{
+      response=await fetchImpl(
+        "https://"+shopDomain+"/admin/api/2026-10/graphql.json",{
+          method:"POST",redirect:"error",
+          headers:{"Content-Type":"application/json",
+            "X-Shopify-Access-Token":token},
+          body:JSON.stringify({query,variables:{id:calculatedOrderGid}})
+        });
+      if(!response?.ok)throw new Error("HTTP_NOT_OK");
+      body=await response.json();
+    }catch{
+      throw new QuoteError("LAB_REAL_COMMIT_OUTCOME_UNCERTAIN");
+    }
+    const r=body?.data?.orderEditCommit;
+    if(body?.errors?.length||!r||!Array.isArray(r.userErrors)||
+      r.userErrors.length||r.order?.id!==shopifyOrderGid)
+      throw new QuoteError("LAB_REAL_COMMIT_OUTCOME_UNCERTAIN");
+    // Mutation acknowledgment is NOT confirmation; independent order read is mandatory.
+    return {state:"mutation_acknowledged_needs_readback",
+      shopifyOrderGid,notified:false,reconciled:false};
+  }
+
   async function createOrder({query,variables}={}){
     await checkShop();  // fail closed BEFORE an irreversible orderCreate.
     return graphql(query,variables);
   }
-  return {checkShop,createOrder,readProductsForPolicy,readGrantedScopesForLab,readLabOrderForAmendment,previewLabApnaOnionUncommitted};
+  return {checkShop,createOrder,readProductsForPolicy,readGrantedScopesForLab,readLabOrderForAmendment,previewLabApnaOnionUncommitted,
+    readLabOrderForCommitReconcile,commitLabStagedOrderEdit};
 }
 module.exports={createDevCredentialsShopifyClient};
