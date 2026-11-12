@@ -106,6 +106,18 @@ if(process.env.ASB_LAB_AMENDMENT_READONLY==="VERIFY_SIGNED_LAB_PROPOSAL"){
     console.error("[checkout-lab] signed amendment audit refused: unsafe DB");
   }
 }
+// Read-only verification that Shopify 2026-10 exposes all financial and
+// line-item fields necessary for an eventual real commit read-back.
+if(process.env.ASB_LAB_COMMIT_READONLY==="VERIFY_FULL_ORDER_FIELDS"){
+  try{
+    assertExactLabDatabase();
+    const probe=pathModule.join(__dirname,
+      "../scripts/lab-apna-commit-readiness-readonly-v1.js");
+    launch([probe],{},()=>{});
+  }catch{
+    console.error("[checkout-lab] commit readback audit refused: unsafe DB");
+  }
+}
 // Operator-only, one idempotent synthetic 500g Apna Onion order. The entrypoint
 // validates exact lab shop, exact DB, signed quote and product-catalog price.
 // No public HTTP route or customer-facing checkout is enabled.
