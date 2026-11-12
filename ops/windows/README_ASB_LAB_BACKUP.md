@@ -23,7 +23,7 @@ Go to Render dashboard → the lab database → Networking / Access Control. Tem
 Expected external hostname: dpg-dbm8v3qjnfac738pc31g-a.singapore-postgres.render.com. If Render displays another hostname, STOP and verify identity instead of weakening this guard.
 
 ## Run the script
-Open PowerShell inside your local cloned Baftwaqas/asb-pipeline repository, and replace the sample encrypted drive with your real private encrypted folder:
+Either open PowerShell inside your local cloned Baftwaqas/asb-pipeline repository, or download Backup-ASBCheckoutLab.ps1 from GitHub (click **Raw → Save As**) and open PowerShell in the downloaded file's folder. Replace the sample encrypted drive with your real private encrypted folder.
 
 ~~~powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\ops\windows\Backup-ASBCheckoutLab.ps1" -BackupDirectory "E:\ASB_Private_Encrypted_Backups" -RunRestoreTest
@@ -55,3 +55,5 @@ RENDER_IP_ALLOWLIST_REMOVED=YES/NO
 After a restore-tested backup is secured and access re-closed, evaluate a *separate reviewed* migration installation specifically for 029 and 030. Migrations 026–028 remain simulation-only and must stay on HOLD. No real Shopify commit, customer bill send or production changes are included.
 
 Tracking issue: https://github.com/Baftwaqas/asb-pipeline/issues/29
+
+If you downloaded just the script (without cloning the repository), run the same command with the script location instead: `-File ".\Backup-ASBCheckoutLab.ps1"`.

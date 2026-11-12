@@ -41,9 +41,15 @@ function Assert-AllowedBackupLocation([string]$path) {
   $repoRoot = [System.IO.Path]::GetFullPath(
     (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
   ).TrimEnd('\')
+  # Standalone downloads have no repository root; do not infer one by
+  # walking above Downloads. Only enforce repo containment for a REAL repo.
+  $realRepository = (Test-Path -LiteralPath (Join-Path $repoRoot ".git")) -or
+    (Test-Path -LiteralPath (Join-Path $repoRoot "package.json"))
   $insideRepo = $normalized.Equals($repoRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
     $normalized.StartsWith(($repoRoot + '\'), [System.StringComparison]::OrdinalIgnoreCase)
-  if ($insideRepo) { throw "NEVER_STORE_DATABASE_BACKUP_INSIDE_SOURCE_REPOSITORY" }
+  if ($realRepository -and $insideRepo) {
+    throw "NEVER_STORE_DATABASE_BACKUP_INSIDE_SOURCE_REPOSITORY"
+  }
   if ($normalized -match '(?i)(^|\\)(Desktop|Downloads|Public|\.git)(\\|$)') {
     throw "BACKUP_PATH_MUST_BE_PRIVATE_NOT_DESKTOP_DOWNLOADS_PUBLIC_OR_GIT"
   }
