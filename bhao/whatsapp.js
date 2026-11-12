@@ -49,9 +49,14 @@ const U = require("./understand");
 //   waits 1-2 minutes, not 3-7 - long enough to read as "Seth Ji is
 //   annoyed", short enough that she does not think he has gone.
 const POLICY = Object.freeze({
-  version: "BHAO-DRAFT-2", lowballRatio: 0.35, refuseRounds: 2, maxRounds: 10, stepPlan: [0.35, 0.25, 0.2, 0.15],
+  version: "BHAO-DRAFT-3", lowballRatio: 0.35, refuseRounds: 2, maxRounds: 10, stepPlan: [0.35, 0.25, 0.2, 0.15],
   stepJitter: 0.2, settleBand: 0.25, settleAfterRounds: 4, roundToPaisa: 1000,
-  delaySeconds: { normal: [20, 90], lowball: [60, 120], settle: [10, 40] }, offerTtlMinutes: 120, settleAtLastRound: true,
+  delaySeconds: { normal: [20, 90], lowball: [60, 120], settle: [10, 40] }, offerTtlMinutes: 120,
+  // Founder, 12 Nov: closing is not a must. No automatic deal on the last
+  // round, and ~3 in 10 bargains (regulars too) are stubborn: Seth Ji stops
+  // half-way between his price and the floor, holds, and lets her walk -
+  // so "Seth Ji does not bend if the rate is not fair" is real.
+  settleAtLastRound: false, stubbornRate: 0.3, stubbornStopAt: 0.5,
 });
 const RESTART_MEMORY_DAYS = 7;
 const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
@@ -284,7 +289,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           : await P.floorLiftFor(db, { itemId: code, phone, seed, now, standingKey });
         if (lift.probeAlert) console.warn(`[bhao] PROBE ALERT ${code}: ${lift.probeAlert.newNumbers} new numbers bargaining within ${lift.probeAlert.windowHours} h - new numbers' floor raised for ${P.PROTECT.probe.holdHours} h (team: check for one person on many SIMs)`);
         const item = P.applyPerks(itemFor(itemRow), perks, { liftPct: lift.pct });
-        const opened = B.open({ conversationId: `${phone}:${code}:${now.getTime()}`, item, qty: 1, policy: POLICY, seed });
+        // BHAO_STUBBORN=off (tests, or the founder's switch) never draws a stubborn bargain
+        const openPolicy = String(env.BHAO_STUBBORN || "").toLowerCase() === "off" ? { ...POLICY, stubbornRate: 0 } : POLICY;
+        const opened = B.open({ conversationId: `${phone}:${code}:${now.getTime()}`, item, qty: 1, policy: openPolicy, seed });
         state = { ...opened.state, perks, perksVersion: P.PERKS.version, ...(fair.advanceOnly ? { advanceRequired: true } : {}),
                   floorLift: { pct: lift.pct, ...lift.parts, version: lift.version } };
         action = opened.action;
@@ -294,6 +301,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
           `SELECT state FROM bhao_conversations WHERE phone = $1 AND item_id = $2 AND started_at > $3
               AND state ? 'askPaisa'
             ORDER BY started_at DESC LIMIT 1`, [phone, code, new Date(now - RESTART_MEMORY_DAYS * 864e5)])).rows[0];
+        // ...and a stubborn bargain stays stubborn: walking out and coming
+        // back never buys a softer Seth Ji
+        if (prev && Number(prev.state.stubbornRatio) > (Number(state.stubbornRatio) || 0)) state.stubbornRatio = Number(prev.state.stubbornRatio);
         if (prev && Number(prev.state.askPaisa) < state.askPaisa) {
           state.askPaisa = Math.max(Number(prev.state.askPaisa), item.floorPaisa);
           action = { ...action, askPaisa: state.askPaisa, resumed: true };
@@ -441,6 +451,13 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         action = { kind: "talk", askPaisa: state.askPaisa, addressSet: true };
         console.log(`[bhao] ${phone} wants to be called "${state.address}"`);
       }
+    } else if (!action && (ears.kind === "walk_away" || (ears.source !== "ai" && CANCEL.test(body) && readOffer(body) == null))) {
+      // "nahi chahiye", "interest nahi" BEFORE any sauda pakka: not a cancel,
+      // no penalty - a bargain that simply did not happen (founder, 12 Nov).
+      // He lets her go graciously; the 7-day memory keeps where it stopped.
+      state = { ...conv.state, status: "closed", walkedAway: true };
+      action = { kind: "closed", walkedAway: true };
+      console.log(`[bhao] ${phone} walked away from ${conv.item_id} (not a cancel)`);
     } else if (!action) {
       state = conv.state;
       // her bid - read from the sentence, not from its first number ("sirf

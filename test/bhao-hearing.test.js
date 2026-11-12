@@ -278,3 +278,54 @@ test("the rule is told honestly: a daily-limit or abuse pause covers every item,
   assert.match(V.template({ kind: "cancel", cancelCount: 1 }, {}), /ek aur sauda cancel/);
   assert.match(V.template({ kind: "cancel", cancelCount: 2 }, {}), /advance payment ke saath/);
 });
+
+test("founder 12 Nov: about 3 in 10 bargains are stubborn - regulars too - decided privately as she walks in", () => {
+  const B = require("../bhao/engine");
+  const item = { itemId: "KARAHI", variantGid: "gid://shopify/ProductVariant/1", bhaoTaoEnabled: true, isGrocery: false,
+                 anchorPaisa: 250000, floorPaisa: 150000, costPaisa: 60000, maxQty: 20, approvedBy: "test", groupTiers: [] };
+  let n = 0;
+  for (let i = 0; i < 1000; i++) if (B.open({ conversationId: "c" + i, item, qty: 1, policy: BW.POLICY, seed: "s" + i }).state.stubbornRatio) n++;
+  assert.ok(n > 250 && n < 350, "about 30%: " + n);
+  assert.equal(BW.POLICY.settleAtLastRound, false, "closing is not a must");
+});
+
+test("a stubborn Seth Ji stops half-way, holds, and lets her walk - no deal at the last round", () => {
+  const B = require("../bhao/engine");
+  const item = { itemId: "KARAHI", variantGid: "gid://shopify/ProductVariant/1", bhaoTaoEnabled: true, isGrocery: false,
+                 anchorPaisa: 250000, floorPaisa: 150000, costPaisa: 60000, maxQty: 20, approvedBy: "test", groupTiers: [] };
+  let seed = 0, o;
+  do o = B.open({ conversationId: "st", item, qty: 1, policy: BW.POLICY, seed: "st" + ++seed }); while (!o.state.stubbornRatio);
+  let state = o.state, a;
+  const NOW = new Date("2026-11-12T06:00:00Z");
+  for (let i = 0; i < 12 && state.status === "open"; i++) {
+    const r = B.offer(state, { item, policy: BW.POLICY, pricePaisa: 160000 + i * 2000, now: NOW });
+    state = r.state; a = r.action;
+  }
+  assert.notEqual(state.status, "accepted", "she climbed to Rs 1,820 - still below his half-way line");
+  assert.ok(state.askPaisa >= 200000, "never below half-way (Rs 2,000): " + state.askPaisa);
+  assert.equal(a.kind, "closed");
+  assert.match(V.buildPrompt({ decision: a, itemName: "Karahi", qty: 1, customerText: "1820" }).user, /without giving in/);
+});
+
+test("'nahi chahiye, rehne do' before any deal is a walk-away, not a cancel - no penalty, graceful goodbye", async () => {
+  const p = phone();
+  await say(p, "BHAO KARAHI", 0);
+  await say(p, "1500", 60);
+  const r = await hear(p, "Rehne do bhai, nahi chahiye", 200, R({ kind: "walk_away" }));
+  assert.equal(r.kind, "closed");
+  assert.equal(spoken.at(-1).decision.walkedAway, true);
+  const c = await conv(p);
+  assert.equal(c.status, "closed");
+  assert.notEqual(c.status, "cancelled");
+  assert.equal(await require("../bhao/guard").cancelsOf(db, p, at(300)), 0, "never counted as a cancel");
+  assert.match(V.template({ kind: "closed", walkedAway: true }, {}), /jab dil kare/);
+  const back = await hear(p, "Bhai 1000 mein do", 400, R({ kind: "offer", offer: 1000 }));
+  assert.equal(back.handled, false, "the bargain is over until she writes BHAO again");
+});
+
+test("'itne mein nahi, 2000 mein do' is still bargaining, not a walk-away", async () => {
+  const p = phone();
+  await say(p, "BHAO KARAHI", 0);
+  const r = await hear(p, "Itne mein nahi chahiye, 2000 mein do", 60, R({ kind: "offer", offer: 2000 }));
+  assert.notEqual(r.kind, "closed");
+});

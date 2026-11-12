@@ -121,6 +121,13 @@ function validatePolicy(p) {
   }
   pos(p.offerTtlMinutes, "offerTtlMinutes");
   if (typeof p.settleAtLastRound !== "boolean") throw new BhaoError("INVALID_POLICY", "settleAtLastRound");
+  // Stubborn bargains (founder, 12 Nov): in about stubbornRate of bargains
+  // Seth Ji stops part-way - stubbornStopAt of the way from the floor up to
+  // the anchor - holds there and lets her walk. Optional; 0 = never.
+  if (p.stubbornRate !== undefined) {
+    if (typeof p.stubbornRate !== "number" || p.stubbornRate < 0 || p.stubbornRate >= 1) throw new BhaoError("INVALID_POLICY", "stubbornRate");
+    if (p.stubbornRate > 0) frac(p.stubbornStopAt, "stubbornStopAt");
+  }
   return p;
 }
 
@@ -129,6 +136,17 @@ function floorFor(item, qty) {
   let f = item.floorPaisa;
   for (const t of item.groupTiers || []) if (qty >= t.minQty) f = t.floorPaisa;
   return f;
+}
+
+/**
+ * The lowest he will go in THIS bargain: the floor, or - in a stubborn
+ * bargain - a point part-way up from it, which he holds and lets her walk.
+ */
+function floorOf(item, qty, state, policy) {
+  const f = floorFor(item, qty);
+  const ratio = Number(state.stubbornRatio) || 0;
+  if (!(ratio > 0)) return f;
+  return Math.min(item.anchorPaisa, Math.max(f, roundUp(f + ratio * (item.anchorPaisa - f), policy.roundToPaisa)));
 }
 
 const roundDown = (x, step) => Math.floor(x / step) * step;
@@ -147,6 +165,9 @@ function open({ conversationId, item, qty, policy, seed }) {
     qty, round: 0, askPaisa: item.anchorPaisa, bestOfferPaisa: 0, status: "open",
     lastAngle: null, events: [],
   };
+  // Decided once, privately, as she walks in - she cannot see or game it.
+  const rate = Number(policy.stubbornRate) || 0;
+  if (rate > 0 && rng(seed + ":stubborn")() < rate) state.stubbornRatio = policy.stubbornStopAt;
   const r = rng(seed + ":open");
   const action = { kind: "open", askPaisa: item.anchorPaisa, angle: "quality_vs_market",
                    delaySeconds: between(r, policy.delaySeconds.normal) };
@@ -176,7 +197,7 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
 
   const state = { ...prev, events: [...prev.events], round: prev.round + 1, qty };
   const r = rng(`${state.seed}:${state.round}`);
-  const floor = floorFor(item, qty);
+  const floor = floorOf(item, qty, state, policy);
   // The ask never rises for the same quantity. If she drops to fewer pieces
   // than a group rate was given for, that group rate no longer applies: the
   // ask returns to this quantity's floor, and the action says why.
@@ -310,4 +331,4 @@ function toQuoteLine(accepted, { now, lineId = "B1" }) {
   };
 }
 
-module.exports = { BhaoError, ANGLES, validateItem, validatePolicy, floorFor, open, offer, toQuoteLine };
+module.exports = { BhaoError, ANGLES, validateItem, validatePolicy, floorFor, floorOf, open, offer, toQuoteLine };

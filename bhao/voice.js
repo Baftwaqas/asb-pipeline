@@ -66,7 +66,9 @@ function briefFor(d) {
       if (d.held) return { brief: "She repeated her number without moving up. HOLD your price: say it is still the PRICE - you already came down, she has not moved at all; ask her to come up a little (or mention advance / buying together). Warm, firm, not 'final'.", mustSayPrice: true };
       return { brief: "Counter at exactly the PRICE." + angle, mustSayPrice: true };
     case "final_offer": return { brief: "State the PRICE as your absolute last price. Firm." , mustSayPrice: true };
-    case "closed": return { brief: "No deal today. Close warmly and invite her back. No price, no number.", mustSayPrice: false };
+    case "closed":
+      if (d.walkedAway) return { brief: "She says she is not interested any more - before any deal. Let her go graciously AT ONCE: no push, no new price, no guilt, no 'last chance'. Say she is welcome any time, and that if she comes back this week the talk continues from where it stopped. No number.", mustSayPrice: false };
+      return { brief: "No deal today - you held your price and she did not meet it. Close warmly and with dignity, without giving in: your price was fair for this maal; invite her back. No price, no number.", mustSayPrice: false };
     case "talk":
       if (d.addressSet) return { brief: "The customer just told you how to be addressed. Thank them warmly using that word once (e.g. 'Ji bhai!'), then ask what they would like to pay. No number.", mustSayPrice: false };
       if (d.addressOther) return { brief: "The customer wants to be called something other than baji or bhai. Ask them kindly to type what you should call them. No number.", mustSayPrice: false };
@@ -404,7 +406,9 @@ function templateLine(decision, { offerPaisa, pick = (a) => a[0] }) {
       if (decision.held) return `Baji, main toh ${rs(p)} tak aa gaya - aap ek rupaya nahi hile! Thoda aap bhi barhiye.`;
       return pick([`Chalein baji, aap ke liye ${rs(p)}.`, `Kharche bohat hain, phir bhi ${rs(p)}.`]);
     case "final_offer": return pick([`Bas baji, ${rs(p)}. Is se neeche nahi hoga.`]);
-    case "closed": return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
+    case "closed":
+      if (decision.walkedAway) return "Koi baat nahi baji, jab dil kare aaiye ga - baat yahin se aage chalegi. 🙏";
+      return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
     case "talk":
       if (decision.askedAI) return "Ji, main Apna Sasta Bazaar ka AI bhao assistant hoon - daam ASB khud tay karta hai, aur hamari team bhi haazir hai. Aap boliye, kitne mein lengi?";
       if (decision.perksGained && decision.perksGained.length)

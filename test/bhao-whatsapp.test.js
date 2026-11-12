@@ -133,15 +133,17 @@ test("a bargain silent for 24 hours lapses; her next plain message goes to the i
 
 test("'5 lein' then a price uses the group floor", async () => {
   const p = phone();
-  // floor protection off: this test is about the group tier itself
-  await say(p, "BHAO ASB-NG-POT-5L", 0, { env: { BHAO_FLOOR_PROTECT: "off" } });
+  // floor protection and stubbornness off: this test is about the group tier itself
+  await say(p, "BHAO ASB-NG-POT-5L", 0, { env: { BHAO_FLOOR_PROTECT: "off", BHAO_STUBBORN: "off" } });
   assert.equal((await say(p, "5 lein toh?", 10)).kind, "talk");
   let r;
-  for (let i = 0; i < 12; i++) { r = await say(p, "760", 20 + i * 10); if (r.kind === "accept" || r.kind === "closed") break; }
+  // she moves up a little each round (repeating a number never wins - founder, 12 Nov)
+  const bids = [700, 740, 770, 790, 800, 810, 820, 830, 840];
+  for (let i = 0; i < bids.length; i++) { r = await say(p, String(bids[i]), 20 + i * 10); if (r.kind === "accept" || r.kind === "closed") break; }
   const c = await conv(p);
   assert.equal(c.status, "accepted");
   assert.equal(c.accepted_offer.qty, 5);
-  assert.equal(c.accepted_offer.unitPaisa, 76000); // above the Rs 750 group floor; never allowed for one pot
+  assert.ok(c.accepted_offer.unitPaisa >= 75000 && c.accepted_offer.unitPaisa < 85000, "at the group rate (>= Rs 750), never allowed for one pot: " + c.accepted_offer.unitPaisa);
 });
 
 test("competitor facts reach the voice only when fresh and higher than the ask", async () => {
