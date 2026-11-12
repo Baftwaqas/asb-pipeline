@@ -173,10 +173,59 @@ function createDevCredentialsShopifyClient({
     });
   }
 
+
+  // Server-private, READ-ONLY Shopify order metadata for a single explicitly
+  // named LAB order. No arbitrary GraphQL, customer contact data or writes.
+  async function readLabOrderForAmendment({orderGid}={}){
+    if(!/^gid:\/\/shopify\/Order\/[1-9][0-9]*$/.test(orderGid||""))
+      throw new QuoteError("LAB_ORDER_EDIT_INVALID_ORDER_GID");
+    await checkShop();
+    const token=await getToken();
+    if(!currentScopes.has("write_orders")||!currentScopes.has("write_order_edits"))
+      throw new QuoteError("LAB_ORDER_EDIT_SCOPE_NOT_GRANTED");
+    const query=[
+      "query ASBReadLabOrderForAmendment($id: ID!) {",
+      " order(id:$id) { id test tags createdAt currencyCode",
+      " displayFinancialStatus displayFulfillmentStatus",
+      " currentTotalPriceSet { shopMoney { amount currencyCode } }",
+      " totalOutstandingSet { shopMoney { amount currencyCode } }",
+      " lineItems(first:100) { nodes { id quantity unfulfilledQuantity",
+      " variant { id sku } customAttributes { key value } }",
+      " pageInfo { hasNextPage } } } }"
+    ].join(" ");
+    const response=await fetchImpl(
+      "https://"+shopDomain+"/admin/api/2026-10/graphql.json",{
+        method:"POST",redirect:"error",
+        headers:{"Content-Type":"application/json","X-Shopify-Access-Token":token},
+        body:JSON.stringify({query,variables:{id:orderGid}})
+      });
+    if(!response?.ok)throw new QuoteError("LAB_ORDER_EDIT_READ_HTTP_FAILED");
+    const data=await response.json();
+    const order=data?.data?.order;
+    if(data?.errors?.length||!order||order.id!==orderGid||
+      !Array.isArray(order.tags)||!Array.isArray(order.lineItems?.nodes)||
+      order.lineItems.pageInfo?.hasNextPage!==false)
+      throw new QuoteError("LAB_ORDER_EDIT_READ_INVALID_RESPONSE");
+    if(order.test!==true||!order.tags.includes("ASB-LAB-ONLY")||
+      !order.tags.includes("NEVER-FULFILL"))
+      throw new QuoteError("LAB_ORDER_EDIT_NOT_SYNTHETIC_TEST_ORDER");
+    if(order.currencyCode!=="PKR"||
+      order.displayFinancialStatus!=="PENDING"||
+      order.displayFulfillmentStatus!=="UNFULFILLED")
+      throw new QuoteError("LAB_ORDER_EDIT_NOT_PENDING_UNFULFILLED");
+    if(!Array.isArray(order.lineItems.nodes)||order.lineItems.nodes.some(x=>
+      typeof x?.id!=="string"||
+      !Number.isSafeInteger(x.quantity)||x.quantity<1||
+      !Number.isSafeInteger(x.unfulfilledQuantity)||
+      x.unfulfilledQuantity!==x.quantity))
+      throw new QuoteError("LAB_ORDER_EDIT_NONEDITABLE_LINE");
+    return order;
+  }
+
   async function createOrder({query,variables}={}){
     await checkShop();  // fail closed BEFORE an irreversible orderCreate.
     return graphql(query,variables);
   }
-  return {checkShop,createOrder,readProductsForPolicy,readGrantedScopesForLab};
+  return {checkShop,createOrder,readProductsForPolicy,readGrantedScopesForLab,readLabOrderForAmendment};
 }
 module.exports={createDevCredentialsShopifyClient};
