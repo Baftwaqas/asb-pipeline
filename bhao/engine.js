@@ -209,10 +209,15 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
   if (offerPaisa > state.askPaisa) return settle(state.askPaisa, "offer_above_ask_extra_refused");
   if (offerPaisa === state.askPaisa) return settle(state.askPaisa, "offer_meets_ask");
 
-  // 2. Fair offer after enough rounds: let her win.
+  // She did not move: the same number again (or lower), after he has
+  // started countering. Founder, 12 Nov: "just repeat the same number"
+  // must never win - concessions go both ways, so he holds his price too.
+  const noMove = prev.round > policy.refuseRounds && prev.qty === qty && offerPaisa <= prev.bestOfferPaisa;
+
+  // 2. Fair offer after enough rounds: let her win - if she moved up to it.
   //    (offerPaisa >= floor is checked explicitly: the band is above the floor.)
   const settleLine = floor + Math.ceil(policy.settleBand * (state.askPaisa - floor));
-  if (state.round > policy.settleAfterRounds && offerPaisa >= settleLine && offerPaisa >= floor)
+  if (!noMove && state.round > policy.settleAfterRounds && offerPaisa >= settleLine && offerPaisa >= floor)
     return settle(offerPaisa, "fair_offer_after_rounds");
 
   // 2b. Last round: a deal at or above the floor beats no deal, if the
@@ -233,6 +238,15 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
     state.lastAngle = angle;
     state.events.push({ round: state.round, kind: "refuse", offerPaisa, qty });
     return maybeClose(state, policy, r, { kind: "refuse", askPaisa: null, angle,
+                                           delaySeconds: between(r, policy.delaySeconds.normal) });
+  }
+
+  // 4b. She did not move: he holds his last price (no step toward her).
+  if (noMove && state.askPaisa > floor) {
+    const angle = pickAngle(r, state, ["already_tight", "running_costs", "belonging", "disappointment"]);
+    state.lastAngle = angle;
+    state.events.push({ round: state.round, kind: "counter", offerPaisa, askPaisa: state.askPaisa, qty, held: true });
+    return maybeClose(state, policy, r, { kind: "counter", askPaisa: state.askPaisa, angle, held: true,
                                            delaySeconds: between(r, policy.delaySeconds.normal) });
   }
 

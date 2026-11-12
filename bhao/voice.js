@@ -62,7 +62,9 @@ function briefFor(d) {
     case "lowball_check":
       if (d.lowballCount >= 2) return { brief: `This is her offer number ${d.lowballCount} far too low to consider. Do NOT repeat any earlier excuse (no 'nuqsan' again). Calmly remind her the price is the PRICE and her number is far away from it; ask for a serious number. Light, friendly, never rude.`, mustSayPrice: false };
       return { brief: "Her offer is insultingly low. One short, curt, slightly offended line. No price, no number.", mustSayPrice: false };
-    case "counter": return { brief: "Counter at exactly the PRICE." + angle, mustSayPrice: true };
+    case "counter":
+      if (d.held) return { brief: "She repeated her number without moving up. HOLD your price: say it is still the PRICE - you already came down, she has not moved at all; ask her to come up a little (or mention advance / buying together). Warm, firm, not 'final'.", mustSayPrice: true };
+      return { brief: "Counter at exactly the PRICE." + angle, mustSayPrice: true };
     case "final_offer": return { brief: "State the PRICE as your absolute last price. Firm." , mustSayPrice: true };
     case "closed": return { brief: "No deal today. Close warmly and invite her back. No price, no number.", mustSayPrice: false };
     case "talk":
@@ -380,7 +382,9 @@ function templateLine(decision, { offerPaisa, pick = (a) => a[0] }) {
     case "lowball_check":
       if (decision.lowballCount >= 2 && p != null) return pick([`Baji, daam ${rs(p)} hai - aap ki baat us se bohat door hai. Koi sanjeeda daam boliye.`]);
       return pick(["Kya baji, mazaaq kar rahi hain? 😐", "Itne mein toh dhakkan bhi nahi aata baji."]);
-    case "counter": return pick([`Chalein baji, aap ke liye ${rs(p)}.`, `Kharche bohat hain, phir bhi ${rs(p)}.`]);
+    case "counter":
+      if (decision.held) return `Baji, main toh ${rs(p)} tak aa gaya - aap ek rupaya nahi hile! Thoda aap bhi barhiye.`;
+      return pick([`Chalein baji, aap ke liye ${rs(p)}.`, `Kharche bohat hain, phir bhi ${rs(p)}.`]);
     case "final_offer": return pick([`Bas baji, ${rs(p)}. Is se neeche nahi hoga.`]);
     case "closed": return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
     case "talk":

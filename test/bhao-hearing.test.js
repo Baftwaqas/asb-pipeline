@@ -232,3 +232,20 @@ test("live test 10 Nov: the greeting goes out within seconds, and asking again d
   const again = (await db.query(`SELECT send_status FROM bhao_messages WHERE id = $1`, [greet.id])).rows[0];
   assert.equal(again.send_status, "pending", "still going out");
 });
+
+test("founder 12 Nov: repeating the same number never wins - he holds his price until she moves up", () => {
+  const B = require("../bhao/engine");
+  const item = { itemId: "KARAHI", variantGid: "gid://shopify/ProductVariant/1", bhaoTaoEnabled: true, isGrocery: false,
+                 anchorPaisa: 250000, floorPaisa: 150000, costPaisa: 60000, maxQty: 20, approvedBy: "test", groupTiers: [] };
+  const NOW = new Date("2026-11-12T06:00:00Z");
+  let { state } = B.open({ conversationId: "S1", item, qty: 1, policy: BW.POLICY, seed: "stubborn" });
+  const go = (p) => { const r = B.offer(state, { item, policy: BW.POLICY, pricePaisa: p, now: NOW }); state = r.state; return r.action; };
+  go(150000); go(180000); go(187000);           // her live-test sequence
+  const firstCounter = state.askPaisa;
+  const asks = [];
+  for (let i = 0; i < 4; i++) { const a = go(187000); asks.push(a.kind + ":" + (a.askPaisa || "")); if (state.status !== "open") break; }
+  assert.ok(asks.every((x) => x === `counter:${firstCounter}`), "held at " + firstCounter + ": " + asks.join(", "));
+  assert.equal(state.status, "open", "no deal for standing still");
+  const moved = go(195000);
+  assert.ok(["counter", "accept", "final_offer"].includes(moved.kind), "moving up gets him moving again");
+});
