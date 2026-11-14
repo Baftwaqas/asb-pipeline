@@ -1,0 +1,835 @@
+// ============================================================================
+// ASB PIPELINE — bhao/whatsapp.js
+// Bhao Tao over WhatsApp: a customer bargains with Seth Ji on ASB's number.
+//
+//   onInbound()  called for each NEW inbound text (after it is saved to the
+//                inbox, so staff always see it). Starts a bargain on
+//                "BHAO <ITEM-CODE>" (the storefront button pre-fills it),
+//                otherwise continues the phone's open bargain, otherwise
+//                leaves the message to the normal inbox.
+//   sendDue()    sends Seth Ji's replies whose pause has passed. Seth Ji does
+//                not answer instantly; the engine sets each pause.
+//
+// The engine (bhao/engine.js) decides every price. The voice (bhao/voice.js)
+// only words it, checked against that decision. A new message from her
+// supersedes a reply not yet sent, so she never gets an answer to something
+// she has already moved past - and the new reply answers EVERYTHING she has
+// written since Seth Ji last spoke (two questions, or a price then a
+// complaint), in one human-sounding line. A price he had not yet answered is
+// never dropped because she kept talking.
+//
+// Off unless BHAO_TAO_WHATSAPP=on (server.js). Nothing here creates an order:
+// an accepted bargain is recorded and handed to the team to confirm.
+//
+// BHAO CARD (bhao/perks.js): why her price differs from someone else's,
+// shown to her when the bargain opens - her standing with ASB, the time of
+// day (bohni, closing time), and what would give her more room (advance
+// payment, self-pickup, neighbours together). Perks lower the opening price
+// and the floor a little (capped, never below cost); the haggle does the rest.
+//
+// AFTERCARE (migration 026): for a day after a deal, Seth Ji still answers
+// her. "Cancel kar do / nahi chahiye" cancels the accepted deal (kept as
+// evidence, status 'cancelled', logged for the team); anything else is
+// answered without moving the agreed price. Claims of a cheaper price
+// elsewhere ("dost ne 800 mein li") are answered kindly, never matched.
+// ============================================================================
+"use strict";
+
+const B = require("./engine");
+const V = require("./voice");
+const PW = require("./price-watch");
+const P = require("./perks");
+const G = require("./guard");
+const K = require("./cards");
+const U = require("./understand");
+const Q = require("./quiz");
+// Seth Ji's game messages: fixed wording, never the AI (the game is the rules)
+const GAME_KINDS = new Set(["game_offer", "game_question", "game_lost", "game_declined", "game_remind"]);
+
+// DRAFT policy (test values from docs/bhao-tao-engine-v1.md). Founder decision
+// pending; the version is stamped on every conversation.
+//   DRAFT-2 (7 Nov, founder after the first live WhatsApp test): a lowball
+//   waits 1-2 minutes, not 3-7 - long enough to read as "Seth Ji is
+//   annoyed", short enough that she does not think he has gone.
+const POLICY = Object.freeze({
+  version: "BHAO-DRAFT-3", lowballRatio: 0.35, refuseRounds: 2, maxRounds: 10, stepPlan: [0.35, 0.25, 0.2, 0.15],
+  stepJitter: 0.2, settleBand: 0.25, settleAfterRounds: 4, roundToPaisa: 1000,
+  delaySeconds: { normal: [20, 90], lowball: [60, 120], settle: [10, 40] }, offerTtlMinutes: 120,
+  // Founder, 12 Nov: closing is not a must. No automatic deal on the last
+  // round, and ~3 in 10 bargains (regulars too) are stubborn: Seth Ji stops
+  // half-way between his price and the floor, holds, and lets her walk -
+  // so "Seth Ji does not bend if the rate is not fair" is real.
+  settleAtLastRound: false, stubbornRate: 0.3, stubbornStopAt: 0.5,
+  // no step smaller than 2% of the listed price (Rs 50 on Rs 2,500)
+  minStepRatio: 0.02,
+});
+const RESTART_MEMORY_DAYS = 7;
+const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
+const START = /^\s*bhao\s+([a-z0-9][a-z0-9-]{2,40})\b/i;
+// "BHAO" alone: show her the items she can bargain on (a tap menu)
+const BARE = /^\s*bhao\s*[.!?]*\s*$/i;
+const rsText = (paisa) => "Rs " + Math.round(paisa / 100).toLocaleString("en-US");
+
+// ---------------------------------------------------------------------------
+// Tap buttons (migration 027). Founder, 9 Nov: the opening price is the
+// listed price, and SHE names the bargaining number - so the buttons only
+// ever ASK her ("🙋 Apna daam") or answer what she would want to know
+// (advance, neighbours). There is no "✅ Rs X manzoor" button: Seth Ji never
+// puts a price in her mouth (live test, 9 Nov: "why have you given 910
+// manzoor? we should just ask at what rate they are willing to buy").
+// ---------------------------------------------------------------------------
+function priceButtons(convId, askPaisa, state, item) {
+  const buttons = [{ id: `bhao:mine:${convId}`, title: "🙋 Apna daam" }];
+  const held = new Set((state.perks || []).map((p) => p.key));
+  const tier = (item.groupTiers || []).find((t) => (state.qty || 1) < t.minQty);
+  if (P.offered("advance") && !held.has("advance")) buttons.push({ id: `bhao:adv:${convId}`, title: "💵 Advance pe kitna?" });
+  if (tier) buttons.push({ id: `bhao:group:${convId}:${tier.minQty}`, title: `👥 ${tier.minQty} lein toh?` });
+  return buttons;
+}
+const addressButtons = (convId) => [
+  { id: `bhao:addr:${convId}:baji`, title: "Baji" },
+  { id: `bhao:addr:${convId}:bhai`, title: "Bhai" },
+  { id: `bhao:addr:${convId}:other`, title: "Kuch aur" },
+];
+const BUTTON_KINDS = new Set(["open", "refuse", "counter", "final_offer", "talk"]);
+
+/** What a tap means, as if she had typed it. Null for taps that are not Seth Ji's. */
+function fromButton(id) {
+  // "Bhao ka Khel": an answer tap (question index, option index)
+  const qa = /^bhao:qa:([^:]+):(\d):(\d)$/.exec(String(id || ""));
+  if (qa) return { text: `Jawab ${Number(qa[3]) + 1}`, intent: `game_ans:${qa[2]}:${qa[3]}` };
+  const m = /^bhao:(ok|mine|adv|group|item|addr|cxl|game):([^:]+)(?::(\w+))?$/.exec(String(id || ""));
+  if (!m) return null;
+  const [, kind, a, b] = m;
+  switch (kind) {
+    // older messages may still carry a "manzoor" button: read it as typed
+    case "ok": return Number.isSafeInteger(Number(b)) ? { text: rsText(Number(b)), intent: "accept_tap" } : null;
+    case "mine": return { text: "Main apna daam lagana chahta/chahti hoon", intent: "mine" };
+    case "adv": return { text: "Advance pe kitna hoga?", intent: "advance_question" };
+    case "group": return { text: `${b} lein toh kitna?`, intent: "group_question" };
+    case "item": return { text: `BHAO ${a}`, intent: "start" };
+    // "Aap ko kya keh ke bulaun?" - baji / bhai / kuch aur
+    // "Pakka cancel karna hai?" after she gave a reason (live test, 12 Nov)
+    case "game": return b === "yes" ? { text: "Haan, khelenge!", intent: "game_yes" }
+      : b === "no" ? { text: "Nahi, bhao karte hain", intent: "game_no" } : null;
+    case "cxl": return b === "yes" ? { text: "Haan, cancel kar dein", intent: "cancel_yes" }
+      : b === "no" ? { text: "Nahi, sauda rakhein", intent: "cancel_no" } : null;
+    case "addr": return ["baji", "bhai", "other"].includes(b)
+      ? { text: b === "other" ? "Kuch aur" : `Mujhe ${b} kahiye`, intent: "address:" + b } : null;
+    default: return null;
+  }
+}
+
+/** Seth Ji's words for the game - fixed, so the game is the same for everyone. */
+function gameText(action, state) {
+  const g = action.game || (state && state.game) || {};
+  switch (action.kind) {
+    case "game_offer": return Q.texts.offer(action.pricePaisa);
+    case "game_question": return (action.rightBefore ? Q.texts.right(g) + "\n\n" : "") + Q.texts.question(g);
+    case "game_lost": return Q.texts.lost(action.judged, action.askPaisa);
+    case "game_declined": return Q.texts.declined(action.askPaisa);
+    case "game_remind": return "⏳ Pehle sawal ka jawab - neeche ek button dabayein!\n\n" + Q.texts.question(g);
+    default: return Q.texts.won(action.offer.unitPaisa); // accept, won by the game
+  }
+}
+
+/** "BHAO" alone: the items she can bargain on, as a tap menu (max 10). */
+async function menu(db, { phone = null, now = new Date() } = {}) {
+  // items she already made a deal on this week are left out: tapping one
+  // only to hear "sauda ho chuka" is a dead end (live test, 10 Nov)
+  const rows = (await db.query(
+    `SELECT i.item_id, i.name, i.anchor_paisa FROM bhao_items i
+      WHERE i.active AND NOT EXISTS (
+        SELECT 1 FROM bhao_conversations c WHERE c.phone = $1 AND c.item_id = i.item_id AND c.status = 'accepted' AND c.ended_at > $2)
+      ORDER BY i.name LIMIT 10`, [phone, new Date(now.getTime() - G.LIMITS.DEAL_COOLDOWN_DAYS * 864e5)])).rows;
+  return rows.map((r) => ({ id: `bhao:item:${r.item_id}`, title: r.name.slice(0, 24), description: `Seth Ji ka daam ${rsText(Number(r.anchor_paisa))}` }));
+}
+// "Meri dost ne / padosan ko ... mein mili": she says someone else paid less.
+// Live test, 9 Nov: "meri behan nay bataya hae kay aap nay usay yeh 800 rupay
+// mae di hae" was missed ("behan", "di hae"), and Seth Ji then CONFIRMED a
+// sale at Rs 800 that never happened. Spellings vary; cast the net wide.
+// "aik hi cheez ke alag alag bhao?", "usko kam mein kyun?", "mujhe mehnga kyun?"
+const FAIR = /\balag\s+alag\s+(?:bhao|daam|rate|price|keemat|qeemat)|\b(?:kyun|kyu|kiun|ku+|kio)\b[^.?!]{0,40}\b(?:mehng|zyada|ziada|ziyada|alag)|\b(?:us|usay|unko|usko|usse)\b[^.?!]{0,30}\b(?:kam|sasta|sasti)\b[^.?!]{0,30}\b(?:mujhe|mughay|mujhay|mughe)\b|\bmehng[aie]\s+(?:de|dae|day)\s+rah/i;
+const CLAIM = /\b(?:dost|friend|saheli|sahel[iy]|padosan|padosi|parosi|parosan|neighbou?r|beh[ae]?n|bahen|behn|sister|didi|bhabh?i|bhai|brother|ammi|amma|khala|phuppo|phupho|mami|chachi|saas|colleague|kisi\s+(?:ne|nay|ko)|us\s*(?:ne|nay|ko)|usay|unhon\s*(?:ne|nay)|unko|mil[ia]|li\s+(?:hai|hae|thi)|di\s+(?:hai|hae|thi)|dia\s+(?:hai|hae|tha)|diya|liya|lia)\b/i;
+// After a bargain ends with a deal, Seth Ji keeps answering her for this
+// long (migration 026): a question about the deal, or "cancel kar do".
+const AFTERCARE_HOURS = 24;
+// She is backing out: "cancel karo", "nahi chahiye", "nhi laina", "mat bhejo", "rehne do".
+const CANCEL = /\bcanc?[ae]?l+\w*|\bn(?:a|aa)?h?i\s+(?:chah?i?y?e+|chaiye|chay+e+|chahye|chahiye|l[ae]i?na|lena|bhejo|bhejna)\b|\bmat\s+bhej\w*|\brehn[ae]y?\s+d[oe]\b/i;
+
+function itemFor(row) {
+  return {
+    itemId: row.item_id, variantGid: row.variant_gid, bhaoTaoEnabled: row.active === true, isGrocery: false,
+    anchorPaisa: Number(row.anchor_paisa), floorPaisa: Number(row.floor_paisa),
+    costPaisa: row.cost_paisa == null ? null : Number(row.cost_paisa), maxQty: row.max_qty, approvedBy: row.approved_by,
+    groupTiers: (row.group_tiers || []).map((t) => ({ minQty: Number(t.minQty), floorPaisa: Number(t.floorPaisa) })),
+  };
+}
+
+/** Her amount (paisa), from "900", "Rs 1,200", "1.2k", "2 lakh"; null if she is just talking. */
+function readOffer(text) {
+  const n = V.numbersIn(String(text).replace(/\b\d{1,2}\s*(?:pcs|pieces?|adad|degchi\w*|lein|le lo|lunga|lungi|chahiye)\b/gi, ""))
+    .find((x) => x >= 50);
+  return n == null ? null : Math.round(n * 100);
+}
+/** "5 lein", "paanch chahiye" -> 5; null if she named no quantity. */
+function readQty(text) {
+  const m = /\b(\d{1,2})\s*(?:pcs|pieces?|adad|degchi\w*|lein|le lo|lunga|lungi|chahiye)\b/i.exec(text);
+  if (m) return Number(m[1]);
+  const W = { do: 2, teen: 3, chaar: 4, char: 4, paanch: 5, panch: 5, chhe: 6, saat: 7, aath: 8, nau: 9, das: 10 };
+  const w = /\b(do|teen|chaar|char|paanch|panch|chhe|saat|aath|nau|das)\s+(?:pcs|pieces?|adad|degchi\w*|lein|le lo|lunga|lungi|chahiye)\b/i.exec(text);
+  return w ? W[w[1].toLowerCase()] : null;
+}
+
+/** This conversation's floor lift (0 for conversations opened before PROTECT). */
+const liftOf = (state) => Number((state && state.floorLift && state.floorLift.pct) || 0);
+
+const seconds = (action) => (Number.isSafeInteger(action.delaySeconds) ? action.delaySeconds : 30);
+
+async function tx(db, fn) {
+  await db.query("BEGIN");
+  try { const r = await fn(); await db.query("COMMIT"); return r; }
+  catch (e) { await db.query("ROLLBACK").catch(() => {}); throw e; }
+}
+
+/**
+ * One new inbound text. `db` is a single client (transactions run on it).
+ * Returns { handled, conversationId?, duplicate?, reason? }.
+ */
+async function onInbound(db, { phone, text, wamid, now = new Date(), env = process.env, fetchImpl = fetch, speak = V.speak, intent = null,
+                                understand = U.understand }) {
+  const body = String(text || "").slice(0, 1000);
+  if (BARE.test(body)) {
+    const rows = await menu(db, { phone, now });
+    return rows.length ? { handled: true, menu: rows, menuText: "Kis cheez pe bhao lagana hai? Neeche se chunein 👇" }
+      : { handled: false, reason: "no items" };
+  }
+  const start = START.exec(body);
+
+  // Seth Ji HEARS her first (bhao/understand.js): what her latest message
+  // means, read the way a person reads it - outside the transaction, since
+  // a model call takes seconds. Taps mean exactly what they say; no model.
+  let heard = null, heardFor = null;
+  if (!start && !(intent && intent !== "accept_tap")) {
+    const pre = (await db.query(
+      `SELECT c.id, c.state, c.status, c.accepted_offer, i.name FROM bhao_conversations c JOIN bhao_items i ON i.item_id = c.item_id
+        WHERE c.phone = $1 AND (c.status = 'open'
+           OR (c.status IN ('accepted', 'cancelled') AND COALESCE(c.cancelled_at, c.ended_at) > $2))
+        ORDER BY c.id DESC LIMIT 1`, [phone, new Date(now - AFTERCARE_HOURS * 3600e3)])).rows[0];
+    if (pre) {
+      const lastOut = (await db.query(
+        `SELECT id, body FROM bhao_messages WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'sent'
+          ORDER BY id DESC LIMIT 1`, [pre.id])).rows[0];
+      const earlier = (await db.query(
+        `SELECT body FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2 ORDER BY id`,
+        [pre.id, lastOut ? lastOut.id : 0])).rows.map((r) => r.body);
+      heard = await understand({
+        latest: body, earlier, lastSeth: lastOut && lastOut.body, itemName: pre.name,
+        askPaisa: (pre.accepted_offer ? Number(pre.accepted_offer.unitPaisa) : Number(pre.state.askPaisa)) || null,
+        addressAsked: !!pre.state.addressAsked && !pre.state.address, held: pre.state.perks || [], readOffer, readQty, env, fetchImpl,
+      }).catch(() => null);
+      heardFor = pre.id;
+      if (heard && heard.source === "ai")
+        console.log(`[bhao] ${phone} heard: ${heard.kind || "?"}${heard.offerPaisa ? " offer " + heard.offerPaisa / 100 : ""}${heard.accept ? " ACCEPT" : ""}` +
+          `${heard.advance ? " advance:" + heard.advance : ""}${heard.address ? " address:" + heard.address : ""}${heard.dropped && heard.dropped.length ? " (ignored: " + heard.dropped.join(", ") + ")" : ""}`);
+      else if (heard && heard.aiError) console.warn(`[bhao] ${phone} understanding fell back to rules (${heard.aiError})`);
+    }
+  }
+
+  const step = await tx(db, async () => {
+    let conv = (await db.query(`SELECT * FROM bhao_conversations WHERE phone = $1 AND status = 'open' FOR UPDATE`, [phone])).rows[0];
+
+    // her open bargain has gone quiet past the free-reply window: let it lapse
+    if (conv && now - new Date(conv.last_inbound_at) > IDLE_EXPIRE_HOURS * 3600e3) {
+      await db.query(`UPDATE bhao_conversations SET status = 'expired', ended_at = $2 WHERE id = $1`, [conv.id, now]);
+      conv = null;
+    }
+
+    // A bargain opened under an older policy version cannot continue under
+    // this one (the engine refuses a mid-conversation policy change). Close
+    // it and carry on in a new conversation on the same item: the 7-day
+    // memory below keeps her last ask, and her message is then read as usual.
+    let carryCode = null;
+    if (conv && conv.policy_version !== POLICY.version) {
+      await db.query(`UPDATE bhao_conversations SET status = 'closed', ended_at = $2 WHERE id = $1`, [conv.id, now]);
+      if (!start) carryCode = conv.item_id;
+      conv = null;
+    }
+
+    let itemRow, state, action, card = null, continuing = false;
+    if (start || carryCode) {
+      const code = start ? start[1].toUpperCase() : carryCode;
+      itemRow = (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1 AND active`, [code])).rows[0];
+      if (!itemRow) return { handled: false, reason: "unknown item " + code }; // the inbox sees it
+      // Another item: her open bargain is closed only once the new one may
+      // really start (live test, 10 Nov: tapping a refused item silently
+      // ended the karahi bargain she was in the middle of).
+      let other = null;
+      if (conv && conv.item_id !== code) { other = conv; conv = null; }
+      // "BHAO <same item>" while that bargain is still open: she is coming
+      // back to it. Say so, with where it stood (live test, 9 Nov: picking
+      // the item again silently resumed at Rs 910, and the listed Rs 1,800
+      // suddenly looked fake).
+      if (conv) continuing = true;
+      if (!conv) {
+        // Fair play first: daily limit, one deal per item per week, pauses.
+        let fair = { ok: true };
+        if (!carryCode) {
+          const ok = fair = await G.canStart(db, { phone, itemId: code, itemName: itemRow.name, now });
+          if (!ok.ok) {
+            ok.text = U.addressify(ok.text, await U.addressOf(db, phone));
+            const g = (await db.query(
+              `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at, ended_at)
+               VALUES ($1, $2, 'closed', $3, $4, $5, $5, $5) RETURNING id`,
+              [phone, code, { closedFor: ok.reason, policyVersion: POLICY.version, until: ok.until || null, everything: !!ok.everything }, POLICY.version, now])).rows[0];
+            const saved = await db.query(
+              `INSERT INTO bhao_messages (conversation_id, direction, inbound_wamid, body) VALUES ($1, 'in', $2, $3)
+               ON CONFLICT (inbound_wamid) DO NOTHING RETURNING id`, [g.id, wamid, body]);
+            if (!saved.rowCount) return { handled: true, duplicate: true, conversationId: g.id };
+            await db.query(
+              `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
+               VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
+              [g.id, ok.text, { kind: "guard", reason: ok.reason }, new Date(now.getTime() + 8000)]);
+            console.log(`[bhao] ${phone} -> not started (${ok.reason})${other ? " - her open bargain on " + other.item_id + " stays open" : ""}`);
+            return { handled: true, guarded: ok.reason, conversationId: g.id, kind: "guard" };
+          }
+        }
+        if (other) await db.query(`UPDATE bhao_conversations SET status = 'closed', ended_at = $2 WHERE id = $1`, [other.id, now]);
+        // Her Bhao Card: standing with ASB and the time of day, as she walks in.
+        const perks = [...await P.perksAtOpen(db, { phone, now })];
+        perks.push(...P.perksFromText(body, perks));
+        // cancelled twice this month: this deal is pakka only with advance
+        // payment - a condition, and like anyone paying advance she gets
+        // its room on the price too
+        if (fair.advanceOnly && P.offered("advance") && !perks.some((p) => p.key === "advance"))
+          perks.push({ key: "advance", pct: P.PERKS.advance.pct, conditional: true, required: true, label: P.PERKS.advance.label + " (is saude ke liye zaroori)" });
+        // Probing protection: this conversation's own floor (weekly drift,
+        // a private cushion, new numbers higher, probe guard). Audit only.
+        const seed = `${phone}:${code}:${now.toISOString()}`;
+        const standingKey = (perks.find((x) => x.key.startsWith("standing:")) || { key: "standing:new" }).key.split(":")[1];
+        const lift = String(env.BHAO_FLOOR_PROTECT || "").toLowerCase() === "off"
+          ? { pct: 0, parts: {}, version: "off", probeAlert: null }
+          : await P.floorLiftFor(db, { itemId: code, phone, seed, now, standingKey });
+        if (lift.probeAlert) console.warn(`[bhao] PROBE ALERT ${code}: ${lift.probeAlert.newNumbers} new numbers bargaining within ${lift.probeAlert.windowHours} h - new numbers' floor raised for ${P.PROTECT.probe.holdHours} h (team: check for one person on many SIMs)`);
+        const item = P.applyPerks(itemFor(itemRow), perks, { liftPct: lift.pct });
+        // BHAO_STUBBORN=off (tests, or the founder's switch) never draws a stubborn bargain
+        const openPolicy = String(env.BHAO_STUBBORN || "").toLowerCase() === "off" ? { ...POLICY, stubbornRate: 0 } : POLICY;
+        const opened = B.open({ conversationId: `${phone}:${code}:${now.getTime()}`, item, qty: 1, policy: openPolicy, seed });
+        state = { ...opened.state, perks, perksVersion: P.PERKS.version, ...(fair.advanceOnly ? { advanceRequired: true } : {}),
+                  floorLift: { pct: lift.pct, ...lift.parts, version: lift.version } };
+        action = opened.action;
+        // Restarting never resets the bargain: within 7 days she continues at
+        // her last ask on this item (never lower, never back up to the anchor).
+        const prev = (await db.query(
+          `SELECT state FROM bhao_conversations WHERE phone = $1 AND item_id = $2 AND started_at > $3
+              AND state ? 'askPaisa' AND (policy_version = $4 OR $5)
+            ORDER BY started_at DESC LIMIT 1`, [phone, code, new Date(now - RESTART_MEMORY_DAYS * 864e5), POLICY.version, !!carryCode])).rows[0];
+        // (A bargain still OPEN when the policy changed is carried over at its
+        // own last ask - she was in the middle of it.)
+        // Live test, 12 Nov: a Degchi bargain resumed at Rs 950 - an ask left
+        // over from an OLDER policy's test days - below today's stubborn line,
+        // and "950 hi hai mera" closed it at 47% off at once. Memory now comes
+        // only from bargains under the same policy, and never goes below the
+        // lowest he will go in THIS bargain (stubbornness included).
+        // ...and a stubborn bargain stays stubborn: walking out and coming
+        // back never buys a softer Seth Ji
+        if (prev && Number(prev.state.stubbornRatio) > (Number(state.stubbornRatio) || 0)) state.stubbornRatio = Number(prev.state.stubbornRatio);
+        if (prev && Number(prev.state.askPaisa) < state.askPaisa) {
+          state.askPaisa = Math.max(Number(prev.state.askPaisa), B.floorOf(item, state.qty || 1, state, POLICY));
+          // the victory card measures from where THIS bargain opened, not the list price
+          state.events = state.events.map((e) => (e.kind === "open" ? { ...e, askPaisa: state.askPaisa, resumed: true } : e));
+          action = { ...action, askPaisa: state.askPaisa, resumed: true };
+        }
+        // Founder, 10 Nov: never assume "baji" - ask how to address them, once.
+        if (!carryCode && !(await U.addressOf(db, phone)).known) {
+          state = { ...state, addressAsked: true };
+          action = { ...action, askAddress: true };
+        }
+        conv = (await db.query(
+          `INSERT INTO bhao_conversations (phone, item_id, status, state, policy_version, started_at, last_inbound_at)
+           VALUES ($1, $2, 'open', $3, $4, $5, $5) RETURNING *`, [phone, code, state, POLICY.version, now])).rows[0];
+        if (carryCode) action = undefined; // not a greeting: answer what she just wrote
+        else card = P.cardText(perks, { groupSizes: item.groupTiers.map((t) => t.minQty), title: (await G.titleOf(db, phone)).label });
+      }
+    }
+    // No open bargain: if she made a deal (or cancelled one) in the last
+    // day, Seth Ji still answers her - a seller does not go silent after
+    // "Sauda pakka". Needs migration 026; without it, the inbox only.
+    let aftercare = false;
+    if (!conv && !start) {
+      const ready = (await db.query(`SELECT to_regprocedure('asb026_aftercare_ready()') IS NOT NULL AS ok`)).rows[0].ok;
+      if (ready) {
+        // ...and if Seth Ji just told her a bargain could not start (sauda ho
+        // chuka, daily limit, pause), whatever she says next is still
+        // answered - live test, 10 Nov: "mera tu koi sauda nhi hua" and "?"
+        // met silence. The most recent of these is the one she is answering.
+        conv = (await db.query(
+          `SELECT * FROM bhao_conversations WHERE phone = $1 AND (
+                (status IN ('accepted', 'cancelled') AND COALESCE(cancelled_at, ended_at) > $2)
+             OR (status = 'closed' AND state->>'closedFor' IN ('deal_cooldown', 'daily_limit', 'paused_cancellations') AND ended_at > $2))
+            ORDER BY id DESC LIMIT 1 FOR UPDATE`, [phone, new Date(now - AFTERCARE_HOURS * 3600e3)])).rows[0];
+        aftercare = !!conv;
+        if (conv && conv.status === "closed") conv.guarded = conv.state.closedFor;
+      }
+    }
+    if (!conv) return { handled: false, reason: "no open bargain" };
+
+    const saved = await db.query(
+      `INSERT INTO bhao_messages (conversation_id, direction, inbound_wamid, body, created_at) VALUES ($1, 'in', $2, $3, $4)
+       ON CONFLICT (inbound_wamid) DO NOTHING RETURNING id`, [conv.id, wamid, body, now]);
+    if (!saved.rowCount) return { handled: true, duplicate: true, conversationId: conv.id };
+    const inboundId = saved.rows[0].id;
+
+    // A burst of messages: the reply already queued will answer them
+    // together (it reads everything unanswered when it is composed next).
+    if (!aftercare && !action && await G.flooding(db, { conversationId: conv.id, now })) {
+      await db.query(`UPDATE bhao_conversations SET last_inbound_at = $2 WHERE id = $1`, [conv.id, now]);
+      return { handled: true, throttled: true, conversationId: conv.id };
+    }
+
+    // Anything Seth Ji had not said yet is now out of date - but what it
+    // ANSWERED is not. A real seller hears "200" and "fazool baat mat karo"
+    // as one turn and answers both, so the decision that reply carried is
+    // kept (see `carried` below) and every message she has sent since he
+    // last spoke is handed to the voice together.
+    const waiting = (await db.query(
+      `SELECT decision, send_after FROM bhao_messages
+        WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'pending'
+          AND decision->>'kind' NOT IN ('accept_followup', 'bhao_card', 'victory', 'open')
+        ORDER BY id DESC LIMIT 1`, [conv.id])).rows[0] || null;
+    await db.query(
+      `UPDATE bhao_messages SET send_status = 'superseded' WHERE conversation_id = $1 AND send_status = 'pending'
+          AND COALESCE(decision->>'kind', '') NOT IN ('accept_followup', 'bhao_card', 'victory', 'open')`, [conv.id]);
+
+    itemRow = itemRow || (await db.query(`SELECT * FROM bhao_items WHERE item_id = $1`, [conv.item_id])).rows[0];
+    // What she meant: the model's reading when it is for THIS bargain, else the rules'.
+    const ears = heard && heardFor === conv.id ? heard
+      : U.byRules(body, { readOffer, readQty, held: conv.state.perks || [], addressAsked: !!conv.state.addressAsked && !conv.state.address });
+    let gained = [], perkQuotes = [];
+    if (!aftercare && !action) {
+      const held = conv.state.perks || [];
+      const ask = Number(conv.state.askPaisa);
+      // "advance de dungi": she COMMITTED - a real seller drops the ask too,
+      // by the extra room (capped), rounded to Rs 10, never below the new floor
+      const ADV = { key: "advance", pct: P.PERKS.advance.pct, label: P.PERKS.advance.label, conditional: true };
+      const hasAdv = held.some((p) => p.key === "advance");
+      gained = ears.source === "ai"
+        ? (ears.advance === "commit" && !hasAdv && P.offered("advance") ? [ADV] : [])
+        : P.perksFromText(body, held);
+      if (gained.length)
+        conv.state = { ...conv.state, perks: [...held, ...gained], askPaisa: P.askWith(itemFor(itemRow), held, gained, ask, liftOf(conv.state)) };
+      // "agar advance karun toh kya milega?": she only ASKED - answer with the
+      // real number, change nothing until she commits
+      const askedAdv = !gained.length && !hasAdv && P.offered("advance") &&
+        (intent === "advance_question" || ears.advance === "ask" || (ears.source !== "ai" && P.perksAskedAbout(body, held).length > 0));
+      perkQuotes = (askedAdv ? [ADV] : P.perksAskedAbout(body, held).filter((g) => g.key !== "advance"))
+        .map((g) => ({ key: g.key, label: g.label, askPaisa: P.askWith(itemFor(itemRow), held, [g], ask, liftOf(conv.state)) }))
+        .filter((q) => q.askPaisa < ask);
+    }
+    const item = P.applyPerks(itemFor(itemRow), (state || conv.state).perks || [], { liftPct: liftOf(state || conv.state) });
+    let offerPaisa = null;
+    const hardship = G.isHardship(body);
+    if (G.isAbuse(body) && !action) {
+      // Gaali: never answered in kind, never a price move. First time a calm
+      // warning; second time the bargain ends politely and pauses a week.
+      state = conv.state;
+      const strikes = Number(state.abuseStrikes || 0) + 1;
+      state = { ...state, abuseStrikes: strikes };
+      if (!aftercare && strikes >= G.LIMITS.ABUSE_STRIKES_TO_CLOSE) {
+        state = { ...state, closedFor: "abuse", status: "closed" };
+        action = { kind: "abuse_close" };
+        console.log(`[bhao] ${phone} bargain CLOSED for abuse (paused ${G.LIMITS.PAUSE_DAYS} days)`);
+      } else {
+        action = { kind: "abuse_warning" };
+      }
+      if (aftercare) await db.query(`UPDATE bhao_conversations SET state = $2 WHERE id = $1`, [conv.id, state]);
+    } else if (aftercare) {
+      // The deal is done (or was cancelled): no price moves any more.
+      state = conv.state;
+      offerPaisa = readOffer(body); // she may quote someone else's price; he may repeat it, never match it
+      // "kya cancel ho sakta hai?" is a question, not a cancellation: he answers it
+      const asking = /\?|^\s*(?:kya|kia)\b/i.test(body);
+      if (conv.guarded) {
+        action = { kind: "guarded", reason: conv.guarded, until: conv.state.until || null, everything: !!conv.state.everything, itemName: itemRow && itemRow.name };
+        console.log(`[bhao] TEAM CHECK: ${phone} answered "${conv.guarded}" on ${conv.item_id}: ${JSON.stringify(body.slice(0, 120))}`);
+      } else if (conv.status === "accepted" && intent !== "cancel_no" && (intent === "cancel_yes" || (CANCEL.test(body) && !asking))
+                 && !state.cancelPending && (ears.kind === "claim" || ears.kind === "fairness" || ears.kind === "complaint" || ears.claimPaisa != null || FAIR.test(body) || CLAIM.test(body) && readOffer(body) != null)
+                 && intent !== "cancel_yes") {
+        // "cancel karo, meri behan ne 1200 mein liya" - a reason, not just a
+        // goodbye: answer the reason first, then ask once (live test, 12 Nov:
+        // he cancelled at once and never answered why prices differ)
+        state = { ...state, cancelPending: true };
+        action = { kind: "aftercare", status: "accepted", offer: conv.accepted_offer, itemCode: conv.item_id, confirmCancel: true };
+      } else if (conv.status === "accepted" && intent !== "cancel_no" && (intent === "cancel_yes" || (CANCEL.test(body) && !asking))) {
+        await db.query(`UPDATE bhao_conversations SET status = 'cancelled', cancelled_at = $2 WHERE id = $1`, [conv.id, now]);
+        action = { kind: "cancel", offer: conv.accepted_offer, itemCode: conv.item_id, cancelCount: await G.cancelsOf(db, phone, now) };
+        console.log(`[bhao] ${phone} CANCELLED the deal on ${conv.item_id} (team: do not confirm this order)`);
+      } else {
+        if (intent === "cancel_no") state = { ...state, cancelPending: false };
+        action = { kind: "aftercare", status: conv.status, offer: conv.accepted_offer, itemCode: conv.item_id,
+                   ...(intent === "cancel_no" ? { kept: true } : {}) };
+      }
+    } else if (!action && conv.state.game && (
+        (conv.state.game.status === "offered" && (intent === "game_yes" || intent === "game_no")) ||
+        conv.state.game.status === "playing")) {
+      // "Bhao ka Khel" (founder, 14 Nov): 3 questions, 30 s each, all right = her price
+      state = conv.state;
+      let game = { ...state.game };
+      if (game.status === "offered") {
+        if (intent === "game_no") {
+          game.status = "declined";
+          action = { kind: "game_declined", askPaisa: state.askPaisa };
+        } else {
+          const questions = Q.pickGame(`${conv.id}:${now.getTime()}`, env);
+          game = { ...game, status: "playing", idx: 0, questions, results: [] };
+          action = { kind: "game_question", game };
+        }
+      } else {
+        const m = /^game_ans:(\d):(\d)$/.exec(intent || "");
+        const opt = m && Number(m[1]) === game.idx ? Number(m[2]) : (m ? null : Q.typedAnswer(body, game.questions[game.idx].options));
+        if (opt == null) {
+          action = { kind: "game_remind", game };
+        } else {
+          const asked = (await db.query(
+            `SELECT COALESCE(sent_at, send_after) AS at FROM bhao_messages WHERE conversation_id = $1 AND direction = 'out'
+                AND decision->>'kind' = 'game_question' ORDER BY id DESC LIMIT 1`, [conv.id])).rows[0];
+          const j = Q.judge(game, opt, { askedAt: asked && asked.at, now });
+          game.results = [...(game.results || []), { id: game.questions[game.idx].id, cat: game.questions[game.idx].cat, right: j.right, late: j.late }];
+          if (!j.right) {
+            game.status = "lost";
+            action = { kind: "game_lost", judged: j, askPaisa: state.askPaisa };
+          } else if (game.idx + 1 >= Q.QUIZ.questions) {
+            game.status = "won";
+            const w = B.winGame(state, { item, policy: POLICY, pricePaisa: game.pricePaisa, now });
+            state = w.state;
+            const conditions = (state.perks || []).filter((p) => p.conditional).map((p) => p.key);
+            state.accepted = { ...state.accepted, conditions, perks: (state.perks || []).map((p) => p.key) };
+            action = { ...w.action, offer: state.accepted };
+          } else {
+            game.idx += 1;
+            action = { kind: "game_question", game, rightBefore: true };
+          }
+          if (game.status !== "playing")
+            console.log(`[bhao] GAME ${game.status.toUpperCase()} ${phone} ${conv.item_id} at ${game.pricePaisa / 100}: ` +
+              game.results.map((x) => `${x.cat}:${x.right ? "right" : x.late ? "late" : "wrong"}`).join(", "));
+        }
+      }
+      state = { ...state, game };
+    } else if (!action && continuing) {
+      state = conv.state;
+      action = { kind: "talk", askPaisa: Number(state.askPaisa), continuing: true };
+    } else if (!action && (intent && intent.startsWith("address:") || ears.address)) {
+      // her answer to "aap ko kya keh ke bulaun?"
+      state = conv.state;
+      const choice = intent && intent.startsWith("address:") ? intent.slice(8) : ears.address;
+      if (choice === "other") action = { kind: "talk", askPaisa: state.askPaisa, addressOther: true };
+      else {
+        const info = U.addressInfo(choice);
+        state = { ...state, address: info.word || "aap", addressAsked: false };
+        action = { kind: "talk", askPaisa: state.askPaisa, addressSet: true };
+        console.log(`[bhao] ${phone} wants to be called "${state.address}"`);
+      }
+    } else if (!action && (ears.kind === "walk_away" || (ears.source !== "ai" && CANCEL.test(body) && readOffer(body) == null))) {
+      // "nahi chahiye", "interest nahi" BEFORE any sauda pakka: not a cancel,
+      // no penalty - a bargain that simply did not happen (founder, 12 Nov).
+      // He lets her go graciously; the 7-day memory keeps where it stopped.
+      state = { ...conv.state, status: "closed", walkedAway: true };
+      action = { kind: "closed", walkedAway: true };
+      console.log(`[bhao] ${phone} walked away from ${conv.item_id} (not a cancel)`);
+    } else if (!action) {
+      state = conv.state;
+      // her bid - read from the sentence, not from its first number ("sirf
+      // 70 rupay ka discount?" is a complaint, live test 10 Nov); "theek hai,
+      // de do" agrees to his current price
+      const amount = ears.accept && Number.isSafeInteger(Number(state.askPaisa)) ? Number(state.askPaisa)
+        : ears.source === "ai" ? ears.offerPaisa : readOffer(body);
+      const q = ears.qty ?? readQty(body);
+      const named = q && q >= 1 && q <= item.maxQty ? q : null;
+      if (amount == null) {
+        // talking, or naming a quantity: no price moves; the quantity is
+        // remembered for her next offer ("5 lein" ... "1200"). Seth Ji may
+        // repeat his CURRENT ask if she asks for it - never a lower one.
+        action = { kind: "talk", askPaisa: state.askPaisa, ...(gained.length ? { perksGained: gained.map((g) => g.label) } : {}),
+                   ...(intent === "mine" ? { herPriceInvited: true } : {}),
+                   ...(perkQuotes.length ? { perkQuotes } : {}) };
+        if (named) state = { ...state, pendingQty: named };
+      } else {
+        offerPaisa = amount;
+        const qty = named ?? state.pendingQty ?? state.qty;
+        const r = B.offer(state, { item, policy: POLICY, pricePaisa: amount, qty, now });
+        state = { ...r.state, pendingQty: undefined };
+        action = r.action;
+        // a second, third... joke-low number: remind her of the real price
+        // instead of the same "nuqsan ho jayega" (live test, 10 Nov: 7 times)
+        if (action.kind === "lowball_check") {
+          const n = (state.events || []).filter((e) => e.kind === "lowball_check").length;
+          action = { ...action, lowballCount: n, ...(n >= 2 ? { askPaisa: state.askPaisa } : {}) };
+        }
+        // She is locked on a price he can give, and will not move: "Bhao ka
+        // Khel" - 3 questions, all right and that price is hers (founder, 14 Nov)
+        if (action.kind === "counter" && action.held && amount >= B.floorOf(item, state.qty || 1, state, POLICY)
+            && Q.playable(env).length >= Q.QUIZ.questions && await Q.mayOffer(db, { phone, itemId: conv.item_id, state, now })) {
+          state = { ...state, game: { status: "offered", pricePaisa: amount, offeredAt: now.toISOString() } };
+          action = { kind: "game_offer", pricePaisa: amount, askPaisa: state.askPaisa };
+          console.log(`[bhao] ${phone} offered the game at ${amount / 100} on ${conv.item_id}`);
+        }
+        if (state.accepted) {
+          // advance / pickup are CONDITIONS of this price: the team checks them
+          const conditions = (state.perks || []).filter((p) => p.conditional).map((p) => p.key);
+          state.accepted = { ...state.accepted, conditions, perks: (state.perks || []).map((p) => p.key) };
+          action = { ...action, offer: state.accepted };
+        }
+        if (gained.length) action = { ...action, perksGained: gained.map((g) => g.label) };
+      }
+    }
+    // She only chatted after a price he had not answered yet: that price
+    // decision still needs saying (the engine already applied it), so the
+    // reply carries it, at its original pause - chatting never resets it.
+    let carried = null;
+    if (!aftercare && action.kind === "talk" && waiting && waiting.decision && !["talk", "open"].includes(waiting.decision.kind)) {
+      action = waiting.decision;
+      carried = new Date(waiting.send_after);
+    }
+    if (aftercare) {
+      await db.query(`UPDATE bhao_conversations SET last_inbound_at = $2, state = $3 WHERE id = $1`, [conv.id, now, state || conv.state]);
+    } else {
+      const status = action.kind === "abuse_close" ? "closed"
+        : state.status === "accepted" ? "accepted" : state.status === "closed" ? "closed" : "open";
+      await db.query(
+        `UPDATE bhao_conversations SET state = $2, status = $3, last_inbound_at = $4,
+                accepted_offer = $5, ended_at = CASE WHEN $3 = 'open' THEN NULL ELSE $4::timestamptz END
+          WHERE id = $1`, [conv.id, state, status, now, status === "accepted" ? state.accepted : null]);
+    }
+
+    // Everything she has written since Seth Ji last actually spoke: answered
+    // together, in one reply, the way a person behind a counter would.
+    const lastSaid = (await db.query(
+      `SELECT COALESCE(MAX(id), 0) AS id FROM bhao_messages
+        WHERE conversation_id = $1 AND direction = 'out' AND send_status = 'sent'`, [conv.id])).rows[0].id;
+    const unanswered = (await db.query(
+      `SELECT body FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2 ORDER BY id`,
+      [conv.id, lastSaid])).rows.map((r) => r.body);
+    if (offerPaisa == null && carried) {
+      // the carried decision answered an earlier amount: the voice may repeat it
+      for (const t of unanswered) { const a = readOffer(t); if (a != null) offerPaisa = a; }
+    }
+    // She says someone else paid less: check it against OUR records - never
+    // revealing who, or what anyone actually paid.
+    let claim = null;
+    const claimed = ears.source === "ai" ? (ears.claimWhere === "elsewhere" ? null : ears.claimPaisa) : offerPaisa ?? readOffer(body);
+    if (claimed != null && (ears.source === "ai" || CLAIM.test(body))) {
+      const low = (await db.query(
+        `SELECT min((accepted_offer->>'unitPaisa')::bigint) AS low FROM bhao_conversations
+          WHERE item_id = $1 AND status = 'accepted'`, [item.itemId])).rows[0].low;
+      claim = { claimedPaisa: claimed, neverSoldThatLow: low == null || claimed < Number(low) };
+    }
+    // "Why two prices? My behan got it for less - why should I pay more?"
+    // (founder, 12 Nov: "we don't have a strong reply"). The strong reply is
+    // the truth: the same rules for everyone, and what moves a price is on
+    // her Bhao Card - so we tell her exactly which of those she can still
+    // use, with the real number. Never "luck", never "alag ho sakta hai".
+    let fairness = null;
+    if (ears.kind === "fairness" || ears.kind === "claim" || claim || FAIR.test(body) || (action && action.confirmCancel)) {
+      const held = (state && state.perks) || [];
+      const has = (k) => held.some((p) => p.key === k || p.key.startsWith(k + ":"));
+      const levers = [];
+      const ask = Number(state && state.askPaisa);
+      if (P.offered("advance") && !has("advance"))
+        levers.push(!aftercare && Number.isSafeInteger(ask)
+          ? { key: "advance", text: `advance payment - is sauda pe daam ${rsText(P.askWith(itemFor(itemRow), held, [{ key: "advance", pct: P.PERKS.advance.pct, label: P.PERKS.advance.label, conditional: true }], ask, liftOf(state)))} ho jayega`, askPaisa: P.askWith(itemFor(itemRow), held, [{ key: "advance", pct: P.PERKS.advance.pct }], ask, liftOf(state)) }
+          : { key: "advance", text: "advance payment (pehle payment)" });
+      const tier = (item.groupTiers || [])[0];
+      if (tier) levers.push({ key: "group", text: `${tier.minQty} ya zyada milke lena (padosi / ghar wale saath)` });
+      if (!has("bohni")) levers.push({ key: "bohni", text: `subah ${P.PERKS.bohni.beforeHour} baje se pehle aana - Seth Ji ki bohni` });
+      levers.push({ key: "standing", text: "har sauda poora hone pe aap ka darja barhta hai - purane gahak ko zyada gunjaish" });
+      fairness = { held: held.map((p) => p.label), levers };
+    }
+    const latest = (await db.query(`SELECT * FROM competitor_price_latest WHERE item_id = $1`, [item.itemId])).rows;
+    const uiReady = (await db.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = 'bhao_messages' AND column_name = 'ui'`)).rowCount > 0;
+    const address = state && state.address ? U.addressInfo(state.address) : await U.addressOf(db, phone);
+    return { handled: true, conversationId: conv.id, inboundId, item, itemRow, state, action, offerPaisa, latest, carried, card, claim, hardship, uiReady,
+             ears, address, fairness,
+             unanswered: unanswered.length ? unanswered : [body],
+             history: (await db.query(
+               `SELECT direction, body FROM bhao_messages WHERE conversation_id = $1 AND id <= $2
+                   AND (direction = 'in' OR send_status = 'sent')
+                 ORDER BY id DESC LIMIT 16`, [conv.id, lastSaid])).rows.reverse() };
+  });
+  if (!step.handled || step.duplicate || step.guarded || step.throttled) return step;
+
+  // Words, outside the transaction (a model call takes seconds).
+  const voiced = V.priceOf(step.action) ?? step.state.askPaisa;
+  const competitorFacts = PW.competitorFacts({ latest: step.latest, ourUnitPaisa: voiced, now }).facts;
+  const said = GAME_KINDS.has(step.action.kind) || step.action.gameWon
+    ? { text: gameText(step.action, step.state), source: "template", provider: null, rejected: [] }
+    : step.action.kind === "abuse_close"
+    ? { text: V.template(step.action, {}), source: "template", provider: null, rejected: [] }
+    : await speak({
+    decision: step.action, itemName: step.itemRow.name, qty: step.state.qty, offerPaisa: step.offerPaisa,
+    customerText: step.unanswered.join("\n"), customerMessages: step.unanswered, history: step.history.map((h) => ({ from: h.direction === "in" ? "baji" : "seth", text: h.body })),
+    groupSizes: step.item.groupTiers.map((t) => t.minQty), itemFacts: step.itemRow.facts || [],
+    competitorFacts, stockLeft: step.itemRow.stock_left, env, fetchImpl,
+    perks: (step.state.perks || []).map((p) => p.label.replace(/\s*\(.*\)$/, "")),
+    morePerks: ["advance", "pickup"].filter((k) => P.offered(k) && !(step.state.perks || []).some((p) => p.key === k))
+      .map((k) => P.PERKS[k].label),
+    claim: step.claim, hardship: step.hardship, pickupOffered: P.offered("pickup"),
+    address: step.address, understood: step.ears && step.ears.source === "ai" ? step.ears : null, fairness: step.fairness,
+    advanceRequired: !!(step.state && step.state.advanceRequired),
+    extraPrices: [step.item.anchorPaisa, Number(step.state.askPaisa), ...((step.fairness && step.fairness.levers) || []).map((l) => l.askPaisa)]
+      .filter((x) => Number.isSafeInteger(x)),
+  });
+  said.text = U.addressify(said.text, step.address);
+  if (said.rejected && said.rejected.length)
+    console.warn(`[bhao] ${phone} voice ${said.source === "ai" ? "rewrote" : "FELL BACK to stock line"} after: ${said.rejected.map((x) => String(x).slice(0, 160)).join(" | ")}`);
+
+  // Queue the reply - unless she has written again meanwhile (that message
+  // gets its own, newer reply).
+  return tx(db, async () => {
+    await db.query(`SELECT id FROM bhao_conversations WHERE id = $1 FOR UPDATE`, [step.conversationId]);
+    const newer = (await db.query(
+      `SELECT 1 FROM bhao_messages WHERE conversation_id = $1 AND direction = 'in' AND id > $2`, [step.conversationId, step.inboundId])).rowCount;
+    if (newer) return { handled: true, conversationId: step.conversationId, superseded: true };
+    // A greeting comes at once - a shopkeeper does not make a new customer
+    // wait (live test, 10 Nov: a 30 s pause, she asked again, and the
+    // waiting greeting was lost). The thinking pause is for prices only.
+    // the game runs on a clock: its messages go at once
+    const due = GAME_KINDS.has(step.action.kind) || step.action.gameWon
+      ? new Date(now.getTime() + 2000)
+      : step.action.kind === "open" && !step.carried
+      ? new Date(now.getTime() + 3000)
+      : ["cancel", "aftercare", "guarded"].includes(step.action.kind)
+      ? new Date(now.getTime() + (10 + Math.floor(Math.random() * 21)) * 1000) // 10-30 s: no haggling pause now
+      : step.carried
+      ? new Date(Math.max(step.carried.getTime(), now.getTime() + 5000))
+      : new Date(now.getTime() + seconds(step.action) * 1000);
+    // Tap buttons under his reply (not under the greeting - the card carries them)
+    const ask = Number(step.state.askPaisa);
+    const buttons = step.uiReady && step.state.status === "open" && Number.isSafeInteger(ask)
+      ? priceButtons(step.conversationId, ask, step.state, step.item) : null;
+    const g = step.action.game;
+    const replyUi = step.uiReady && step.action.kind === "game_offer"
+      ? { type: "buttons", text: said.text, buttons: [
+          { id: `bhao:game:${step.conversationId}:yes`, title: "🎯 Haan, khelenge!" },
+          { id: `bhao:game:${step.conversationId}:no`, title: "Nahi, bhao karein" }] }
+      : step.uiReady && g && ["game_question", "game_remind"].includes(step.action.kind)
+      ? { type: "buttons", text: said.text, buttons: g.questions[g.idx].options.map((o, i) => ({ id: `bhao:qa:${step.conversationId}:${g.idx}:${i}`, title: o })) }
+      : step.uiReady && step.action.askAddress
+      ? { type: "buttons", text: said.text, buttons: addressButtons(step.conversationId) }
+      : step.uiReady && step.action.confirmCancel
+      ? { type: "buttons", text: said.text, buttons: [
+          { id: `bhao:cxl:${step.conversationId}:no`, title: "Nahi, sauda rakhein" },
+          { id: `bhao:cxl:${step.conversationId}:yes`, title: "Haan, cancel karein" }] }
+      : buttons && (BUTTON_KINDS.has(step.action.kind) || ["game_lost", "game_declined"].includes(step.action.kind)) && step.action.kind !== "open"
+      ? { type: "buttons", text: said.text, buttons } : null;
+    await db.query(
+      `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status${replyUi ? ", ui" : ""})
+       VALUES ($1, 'out', $2, $3, $4, $5, $6, $7, 'pending'${replyUi ? ", $8" : ""})`,
+      [step.conversationId, said.text, step.action, said.source, said.provider, JSON.stringify(said.rejected || []), due, ...(replyUi ? [replyUi] : [])]);
+    if (step.card) {
+      const perkLabels = (step.state.perks || []).map((p) => p.label);
+      const more = [...(P.offered("advance") && !(step.state.perks || []).some((p) => p.key === "advance") ? [P.PERKS.advance.label] : []),
+                    ...(step.item.groupTiers || []).slice(0, 1).map((t) => `👥 ${t.minQty} milke lein`)];
+      const title = (await G.titleOf(db, (await db.query(`SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label;
+      const ui = step.uiReady && buttons ? {
+        type: "buttons",
+        text: U.addressify(`Ye raha aap ka Bhao Card, baji 👆\nSeth Ji ka daam ${rsText(ask)}. Ab aap bataiye - aap kitne mein lengi? Apna daam number mein likh dein.`, step.address),
+        image: { kind: "bhao_card", itemName: step.itemRow.name, askPaisa: ask, perks: perkLabels, more, title },
+        buttons,
+      } : null;
+      await db.query(
+        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status${ui ? ", ui" : ""})
+         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending'${ui ? ", $5" : ""})`,
+        [step.conversationId, step.card, { kind: "bhao_card", perks: (step.state.perks || []).map((p) => p.key) }, new Date(due.getTime() + 4000), ...(ui ? [ui] : [])]);
+    }
+    if (step.action.kind === "accept" && step.state.accepted) {
+      await db.query(
+        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status)
+         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending')`,
+        [step.conversationId,
+         `✅ Sauda pakka: ${step.itemRow.name}, ${step.state.accepted.qty} × Rs ${(step.state.accepted.unitPaisa / 100).toLocaleString("en-US")}.` +
+           ((step.state.accepted.conditions || []).length
+             ? ` Shart: ${step.state.accepted.conditions.map((k) => P.PERKS[k].label).join(", ")} - is ke baghair yeh daam nahi.`
+             : "") +
+           ` Hamari team aap ko order confirm karne ke liye abhi message karegi.`,
+         { kind: "accept_followup", offerId: step.state.accepted.offerId }, new Date(due.getTime() + 5000)]);
+      const open = (step.state.events || []).find((e) => e.kind === "open");
+      const victory = G.victoryText({
+        openPaisa: open && open.askPaisa, unitPaisa: step.state.accepted.unitPaisa, qty: step.state.accepted.qty,
+        itemCode: step.itemRow.item_id, title: (await G.titleOf(db, (await db.query(
+          `SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label,
+        shareNumber: (env.BHAO_SHARE_NUMBER || "").replace(/\D/g, "") || null, gameWon: !!step.action.gameWon,
+      });
+      const vui = step.uiReady && victory ? { type: "image", image: {
+        kind: "victory", itemName: step.itemRow.name, openPaisa: open && open.askPaisa, unitPaisa: step.state.accepted.unitPaisa,
+        qty: step.state.accepted.qty, itemCode: step.itemRow.item_id, gameWon: !!step.action.gameWon,
+        title: (await G.titleOf(db, (await db.query(`SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label } } : null;
+      if (victory) await db.query(
+        `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status${vui ? ", ui" : ""})
+         VALUES ($1, 'out', $2, $3, 'template', $4, 'pending'${vui ? ", $5" : ""})`,
+        [step.conversationId, victory, { kind: "victory" }, new Date(due.getTime() + 9000), ...(vui ? [vui] : [])]);
+    }
+    return { handled: true, conversationId: step.conversationId, kind: step.action.kind, source: said.source, due };
+  });
+}
+
+/**
+ * Send replies whose pause has passed. `sendText(phone, body)` is
+ * whatsapp.js's sendText (returns {ok, wamid}); `logOutbound` records the
+ * line in the inbox so staff see Seth Ji's side too.
+ */
+/** Draw a card and put it on Meta's servers; null if either step fails. */
+async function cardMediaId(image, uploadMedia, render) {
+  if (!image || !uploadMedia) return null;
+  const jpg = await render(image);
+  if (!jpg) return null;
+  const up = await uploadMedia(jpg, "image/jpeg", `${image.kind}.jpg`).catch(() => null);
+  return up && up.ok ? up.id : null;
+}
+const renderCard = (image) => (image.kind === "victory" ? K.victoryCard(image) : image.kind === "bhao_card" ? K.bhaoCard(image) : null);
+
+/**
+ * One line with its UI: buttons (with the card on top, if any) or a picture.
+ * Anything that cannot be sent rich falls back to the plain text, so she
+ * always gets Seth Ji's words.
+ */
+async function sendRich(r, { sendText, sendButtons, sendImage, uploadMedia, render = renderCard }) {
+  const ui = r.ui;
+  try {
+    if (ui && ui.type === "buttons" && sendButtons) {
+      const headerImageId = ui.image ? await cardMediaId(ui.image, uploadMedia, render) : null;
+      const res = await sendButtons(r.phone, { body: ui.text || r.body, buttons: ui.buttons, headerImageId });
+      if (res && res.ok) return res;
+    } else if (ui && ui.type === "image" && sendImage) {
+      const id = await cardMediaId(ui.image, uploadMedia, render);
+      if (id) { const res = await sendImage(r.phone, id, r.body); if (res && res.ok) return res; }
+    }
+  } catch (e) { console.error("[bhao] rich send failed, sending text:", e.message); }
+  return sendText(r.phone, r.body);
+}
+
+async function sendDue(db, { sendText, sendButtons = null, sendImage = null, uploadMedia = null, render = renderCard,
+                             logOutbound = async () => {}, now = new Date(), limit = 20 }) {
+  let sent = 0, failed = 0;
+  const uiCol = (await db.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'bhao_messages' AND column_name = 'ui'`)).rowCount > 0;
+  const rows = (await db.query(
+    `SELECT m.id, m.body, ${uiCol ? "m.ui" : "NULL::jsonb AS ui"}, c.phone FROM bhao_messages m JOIN bhao_conversations c ON c.id = m.conversation_id
+      WHERE m.send_status = 'pending' AND m.send_after <= $1 ORDER BY m.send_after, m.id LIMIT $2`, [now, limit])).rows;
+  for (const r of rows) {
+    await tx(db, async () => {
+      const still = (await db.query(
+        `SELECT 1 FROM bhao_messages WHERE id = $1 AND send_status = 'pending' FOR UPDATE SKIP LOCKED`, [r.id])).rowCount;
+      if (!still) return; // superseded meanwhile, or another sender has it
+      let res;
+      try { res = await sendRich(r, { sendText, sendButtons, sendImage, uploadMedia, render }); } catch (e) { res = { ok: false }; }
+      await db.query(`UPDATE bhao_messages SET send_status = $2, sent_wamid = $3, sent_at = $4 WHERE id = $1`,
+        [r.id, res && res.ok ? "sent" : "failed", res && res.wamid ? res.wamid : null, now]);
+      if (res && res.ok) sent++; else failed++;
+      await logOutbound({ phone: r.phone, body: r.body, agent: "seth-ji", wamid: res && res.wamid, ok: !!(res && res.ok), payload: { bhao_message_id: r.id } });
+    });
+  }
+  return { sent, failed };
+}
+
+module.exports = { POLICY, onInbound, sendDue, sendRich, readOffer, readQty, itemFor, CANCEL, fromButton, priceButtons, menu };

@@ -77,12 +77,12 @@ test("a reply with a price the engine did not give is rejected, retried once wit
   assert.match(f.calls[1].body.messages[1].content, /PREVIOUS REPLY WAS REJECTED: number not allowed: 1200/);
 });
 
-test("two bad replies fall back to the template; the customer never sees a wrong price", async () => {
-  const f = fake(["Rs 999 le lo baji", "Rs 1,000 final"]);
+test("three bad replies fall back to the template; the customer never sees a wrong price", async () => {
+  const f = fake(["Rs 999 le lo baji", "Rs 1,000 final", "Rs 1,001 le lo"]);
   const r = await V.speak({ ...base, decision: counter(154000), env: XAI, fetchImpl: f.fn });
   assert.equal(r.source, "template");
   assert.match(r.text, /Rs 1,540/);
-  assert.equal(r.rejected.length, 2);
+  assert.equal(r.rejected.length, 3);
 });
 
 test("waqas case 1: Rs 2,000 against Rs 1,800 - the extra is refused, honestly", async () => {
@@ -112,9 +112,9 @@ test("waqas case 2: 'Rs 200,000' is an amount, and any figure the reply makes up
   assert.equal(V.checkReply("Baji 100 degchiyan de doon? Degchi Rs 1,800 ki hai.", { decision: d, qty: 1, offerPaisa: 20000000 }).ok, false);
 });
 
-test("'aakhri daam' on a counter is bazaar custom and allowed; invented scarcity is not (founder's call, 7 Nov)", () => {
-  assert.equal(V.checkReply("Baji, aakhri daam Rs 1,540, is se neeche nahi.", { decision: counter(154000), qty: 1 }).ok, true);
-  assert.equal(V.checkReply("Baji last price Rs 1,540!", { decision: counter(154000), qty: 1 }).ok, true);
+test("'aakhri daam' on a counter was allowed on 7 Nov and withdrawn on 9 Nov (B); invented scarcity never", () => {
+  assert.equal(V.checkReply("Baji, aakhri daam Rs 1,540, is se neeche nahi.", { decision: counter(154000), qty: 1 }).ok, false);
+  assert.equal(V.checkReply("Baji last price Rs 1,540!", { decision: counter(154000), qty: 1 }).ok, false);
   assert.equal(V.checkReply("Baji last piece hai, Rs 1,540 le lo", { decision: counter(154000), qty: 1 }).ok, false);
   const p = V.buildPrompt({ decision: counter(154000), itemName: "Degchi", qty: 1, itemFacts: ["mota steel"] });
   assert.match(p.user, /ITEM FACTS \(the only claims you may make\): mota steel/);
@@ -136,6 +136,52 @@ test("refuse, lowball, closed and talk may not name any number at all", () => {
     assert.equal(V.checkReply("Baji is pe Rs 1,500 kar deta hoon", { decision: d, qty: 1, offerPaisa: 90000 }).ok, false, kind);
     assert.equal(V.checkReply("Na baji, is pe nahi hoga. Thora barhayen.", { decision: d, qty: 1, offerPaisa: 90000 }).ok, true, kind);
   }
+});
+
+test("chatting: Seth Ji may repeat his CURRENT ask when she asks the price - never a lower one", () => {
+  const d = { kind: "talk", askPaisa: 180000 };
+  assert.equal(V.checkReply("Baji, abhi Rs 1,800 ki hai. Aap bolo, kitne mein lena hai?", { decision: d, qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Baji, aap ke liye Rs 1,700.", { decision: d, qty: 1 }).ok, false);
+  assert.equal(V.checkReply("Ji baji, boliye kitne mein chahiye?", { decision: d, qty: 1 }).ok, true, "saying no price is fine too");
+  assert.equal(V.checkReply("Baji Rs 1,800.", { decision: { kind: "talk" }, qty: 1 }).ok, false, "no ask passed in: no number");
+});
+
+test("several things asked at once: the prompt lists every message, and the reply gets more room", () => {
+  const msgs = ["200", "Fazool baat mat kiya karo", "aur yeh steel kaunsa hai? dhakkan bhi hai?"];
+  const { user, system } = V.buildPrompt({ decision: { kind: "lowball_check" }, itemName: "Degchi", qty: 1,
+    customerMessages: msgs, history: [], itemFacts: ["mota steel", "dhakkan ke saath"] });
+  for (const m of msgs) assert.ok(user.includes(JSON.stringify(m)), m);
+  assert.match(user, /answer all of them together/);
+  assert.match(system, /answer EVERY question/);
+  assert.match(system, /haath garam/, "the confusing idiom from the first live test is named and banned");
+  assert.equal(V.maxLengthFor(["kitne ki hai? aur kitne litre?"]), 320);
+  assert.equal(V.maxLengthFor(["900"]), 220);
+  const long = "Baji, " + "mota steel hai aur dhakkan bhi saath hai, ".repeat(6).trim();
+  assert.ok(long.length > 220 && long.length <= 320);
+  assert.equal(V.checkReply(long, { decision: { kind: "talk" }, qty: 1, maxLength: 320 }).ok, true);
+  assert.equal(V.checkReply(long, { decision: { kind: "talk" }, qty: 1 }).ok, false);
+});
+
+test("aftercare: a cancel names no price of his own; after a deal only the agreed price may be said", () => {
+  const cancel = { kind: "cancel", offer: { unitPaisa: 120000 }, itemCode: "DEGCHI" };
+  assert.equal(V.checkReply("Koi baat nahi baji, sauda cancel. 800 wali aur maal hogi. 🙏", { decision: cancel, qty: 1, offerPaisa: 80000 }).ok, true);
+  assert.equal(V.checkReply("Chalein baji, aap ke liye Rs 1,000 kar deta hoon.", { decision: cancel, qty: 1, offerPaisa: 80000 }).ok, false);
+  const done = { kind: "aftercare", status: "accepted", offer: { unitPaisa: 120000 } };
+  assert.equal(V.checkReply("Ji baji, sauda Rs 1,200 pe pakka hai, team message karegi.", { decision: done, qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Ji baji, Rs 1,100 kar deta hoon.", { decision: done, qty: 1 }).ok, false);
+  assert.match(V.template(cancel, {}), /cancel/);
+  assert.match(V.template({ kind: "aftercare", status: "cancelled", itemCode: "DEGCHI" }, {}), /BHAO DEGCHI/);
+  assert.match(V.template(done, {}), /Rs 1,200/);
+  assert.match(V.buildPrompt({ decision: cancel, itemName: "Degchi", qty: 1, customerText: "dost ne 800 mein li", history: [] }).system, /never call her a liar/);
+});
+
+test("founder 9 Nov (B): 'aakhri / final / is se neeche nahi' only when it truly is his last price", () => {
+  const counter = { kind: "counter", askPaisa: 139000 };
+  for (const t of ["Baji, aakhri daam Rs 1,390.", "Arre baji, Rs 1,390 final daam!", "Rs 1,390, is se neeche nahi hoga baji.", "Rs 1,390 last price baji"])
+    assert.equal(V.checkReply(t, { decision: counter, qty: 1 }).ok, false, t);
+  assert.equal(V.checkReply("Chalein baji, aap ke liye Rs 1,390. Kharche bohat hain.", { decision: counter, qty: 1 }).ok, true);
+  assert.equal(V.checkReply("Bas baji, Rs 850 aakhri daam. Is se neeche nahi hoga.", { decision: { kind: "final_offer", askPaisa: 85000 }, qty: 1 }).ok, true);
+  assert.match(V.buildPrompt({ decision: counter, itemName: "x", qty: 1, customerText: "", history: [] }).system, /ONLY when the INSTRUCTION says this is his absolute last price/);
 });
 
 test("no invented scarcity, competitors, links, phone numbers, labels or long essays", () => {

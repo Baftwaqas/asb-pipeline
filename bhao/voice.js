@@ -54,13 +54,46 @@ const ANGLE_TEXT = Object.freeze({
 function briefFor(d) {
   const angle = d.angle && ANGLE_TEXT[d.angle] ? " Angle: " + ANGLE_TEXT[d.angle] + "." : "";
   switch (d.kind) {
-    case "open": return { brief: "Greet her and present the item at the PRICE, no discount." + angle, mustSayPrice: true };
+    case "open":
+      if (d.askAddress) return { brief: "Greet the customer (Assalam-o-Alaikum), present the item at the PRICE, no discount, and POLITELY ask how they would like to be addressed - baji, bhai, or something else. Use no address word yourself yet. Do not mention advance payment or a Bhao Card.", mustSayPrice: true };
+      if (d.resumed) return { brief: "Welcome her BACK: she bargained on this item recently, and the bargain continues from where it stopped - the PRICE, not the listed price. Say plainly that this is where you two left it, then ask what she will pay. Do not mention advance payment or her Bhao Card.", mustSayPrice: true };
+      return { brief: "Greet her and present the item at the PRICE, no discount. Do not mention advance payment, conditions or her Bhao Card - a separate card message explains those." + angle, mustSayPrice: true };
     case "refuse": return { brief: "Refuse her offer without naming ANY price or number. Push her to offer more." + angle, mustSayPrice: false };
-    case "lowball_check": return { brief: "Her offer is insultingly low. One short, curt, slightly offended line. No price, no number.", mustSayPrice: false };
-    case "counter": return { brief: "Counter at exactly the PRICE." + angle, mustSayPrice: true };
+    case "lowball_check":
+      if (d.lowballCount >= 2) return { brief: `This is her offer number ${d.lowballCount} far too low to consider. Do NOT repeat any earlier excuse (no 'nuqsan' again). Calmly remind her the price is the PRICE and her number is far away from it; ask for a serious number. Light, friendly, never rude.`, mustSayPrice: false };
+      return { brief: "Her offer is insultingly low. One short, curt, slightly offended line. No price, no number.", mustSayPrice: false };
+    case "counter":
+      if (d.held) return { brief: "She repeated her number without moving up. HOLD your price: say it is still the PRICE - you already came down, she has not moved at all; ask her to come up a little (or mention advance / buying together). Warm, firm, not 'final'.", mustSayPrice: true };
+      return { brief: "Counter at exactly the PRICE." + angle, mustSayPrice: true };
     case "final_offer": return { brief: "State the PRICE as your absolute last price. Firm." , mustSayPrice: true };
-    case "closed": return { brief: "No deal today. Close warmly and invite her back. No price, no number.", mustSayPrice: false };
-    case "talk": return { brief: "She is chatting, not offering. Answer what she said in one or two lines, stay on the item, nudge her to name her price. No price, no number.", mustSayPrice: false };
+    case "closed":
+      if (d.walkedAway) return { brief: "She says she is not interested any more - before any deal. Let her go graciously AT ONCE: no push, no new price, no guilt, no 'last chance'. Say she is welcome any time, and that if she comes back this week the talk continues from where it stopped. No number.", mustSayPrice: false };
+      return { brief: "No deal today - you held your price and she did not meet it. Close warmly and with dignity, without giving in: your price was fair for this maal; invite her back. No price, no number.", mustSayPrice: false };
+    case "talk":
+      if (d.addressSet) return { brief: "The customer just told you how to be addressed. Thank them warmly using that word once (e.g. 'Ji bhai!'), then ask what they would like to pay. No number.", mustSayPrice: false };
+      if (d.addressOther) return { brief: "The customer wants to be called something other than baji or bhai. Ask them kindly to type what you should call them. No number.", mustSayPrice: false };
+      return { brief: "She is chatting, not offering. Answer what she said - every question in it - stay on the item, and nudge her to name her price. Only if she asks what it costs, tell her the PRICE.", mustSayPrice: false };
+    case "abuse_warning": return { brief: "She used insulting language. Do NOT insult back, do not lecture, do not mock. One calm, dignified line: Seth Ji does business with izzat, and if she speaks respectfully the bargain continues. No price, no number.", mustSayPrice: false };
+    case "abuse_close": return { brief: "End the bargain politely because of repeated insults.", mustSayPrice: false };
+    case "cancel": return { brief: "She has just CANCELLED the deal she agreed. Accept it at once and graciously: say the order is cancelled, no pressure, no guilt, no sarcasm, and that she is welcome back anytime." +
+      (d.cancelCount === 1 ? " Also tell her plainly and kindly, as a fair heads-up: if one more deal is cancelled within a month, her next deals will be pakka only with advance payment." : "") +
+      (d.cancelCount >= 2 ? " Also tell her plainly and kindly: since this is her second cancelled deal this month, her next deals will be pakka only with advance payment - she can still bargain on everything." : "") + " If she says she got it cheaper somewhere or from someone, do not argue, do not call her a liar and do not match it - at most say kindly that your price was for this quality. No price of your own.", mustSayPrice: false };
+    case "guarded": {
+      const why = { deal_cooldown: `she already made a deal on ${d.itemName || "this item"} this week (rule: one deal per item per week)`,
+                    daily_limit: "she has started 3 bargains today (rule: 3 a day)", paused_abuse: "the last bargain ended over insulting language (rule: 7-day pause)",
+                    paused_cancellations: "an older rule paused her after cancellations - it has been REPLACED: she can bargain again now; her deals just need advance payment" }[d.reason] || "a fair-play rule";
+      const until = d.until ? ` It ends on ${new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Karachi", day: "numeric", month: "short" }).format(new Date(d.until))}.` : "";
+      const what = d.reason === "paused_cancellations" ? " Tell her to write BHAO to start again."
+        : d.everything ? " This applies to every item, so do NOT suggest another item - say when she can come back."
+        : " Other items are open to her right now (she can write BHAO to see them).";
+      return { brief: `Seth Ji could not start a new bargain: ${why}.${until}${what} Answer exactly what she wrote, in plain words: the rule, WHY it exists (fairness - so prices cannot be gamed) and when it ends. If she says it is unfair or that she has the right to cancel, agree she has that right, and explain the rule honestly. If she says the facts are wrong (e.g. she never made that deal), say this chat is read by ASB's team - never promise they will check or fix it. Never argue, never name a price.`, mustSayPrice: false };
+    }
+    case "aftercare":
+      if (d.confirmCancel) return { brief: "She wants to CANCEL because of a reason (another price, a relative paid less, it feels expensive). The deal still stands. First answer her reason (see the WHY PRICES DIFFER section), then ask her kindly, once, if she still wants to cancel - she can tap the buttons below. No pressure, no guilt.", mustSayPrice: false };
+      if (d.kept) return { brief: "She decided to KEEP the deal. Thank her warmly; the deal stands at the PRICE and our team will message her to confirm the order.", mustSayPrice: false };
+      if (d.status === "cancelled")
+        return { brief: `She cancelled this deal earlier. Answer what she says kindly. If she wants the item after all, tell her to write "BHAO ${d.itemCode || ""}" to start again. Never revive the old price.`, mustSayPrice: false };
+      return { brief: "The deal is ALREADY DONE at the PRICE. Answer every question she asks; the price cannot change any more (not up, not down); our team will message her to confirm the order and delivery. Never invent delivery times or promises.", mustSayPrice: false };
     case "accept": {
       const why = d.offer && d.offer.why;
       if (why === "offer_above_ask_extra_refused")
@@ -75,8 +108,14 @@ function briefFor(d) {
 
 /** The single price this decision lets the voice say (paisa), or null. */
 function priceOf(d) {
+  if (d.herPriceInvited) return null; // her turn to name a number
+  if (d.kind === "lowball_check" && d.lowballCount >= 2 && Number.isSafeInteger(d.askPaisa)) return d.askPaisa; // a reminder, never a new price
   if (d.kind === "accept") return d.offer ? d.offer.unitPaisa : d.askPaisa;
   if (["open", "counter", "final_offer"].includes(d.kind)) return d.askPaisa;
+  // after a deal: he may repeat the agreed price (a cancelled deal has none)
+  if (d.kind === "aftercare" && d.status === "accepted" && d.offer) return d.offer.unitPaisa;
+  // chatting: he may repeat his CURRENT ask if she asks (never a new one)
+  if (d.kind === "talk" && Number.isSafeInteger(d.askPaisa)) return d.askPaisa;
   return null;
 }
 
@@ -85,20 +124,42 @@ function priceOf(d) {
 // ---------------------------------------------------------------------------
 const PERSONA = [
   "You are Seth Ji, a warm, sharp, funny old shopkeeper in a Karachi household-goods bazaar, selling on WhatsApp for Apna Sasta Bazaar.",
-  "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters. Call her 'baji'. At most one emoji.",
+  "Write ONLY Seth Ji's next message, in Roman Urdu the way a Karachi bazaar shopkeeper talks: desi, playful, a little dramatic, never corporate. One or two SHORT lines, at most 160 characters (up to 260 when she asked several things). Address the customer ONLY as the ADDRESS line says. At most one emoji.",
+  "Be a real person, not a script: answer EVERY question and point in her messages, in order, in ONE reply - if she asks two things, answer both - and only then do the INSTRUCTION. Never ignore what she said.",
+  "Never confirm, guess or explain what ANY other customer paid - not even to agree with her. Refer to the person exactly as she did (her 'behan' is her sister, never 'bhai').",
+  "If she says someone else got it cheaper from US, be honest: every sauda is different - her BHAO CARD (being a regular or gold customer, the morning bohni, advance payment, self-pickup, neighbours buying together, and how hard she bargained) decides her price. Never deny prices differ, never say everyone pays the same, never reveal who bought or what anyone paid. Use CLAIM CHECK when given.",
+  "If she says she found it cheaper elsewhere, online, or that a friend paid less, never call her a liar and never match it on your own: answer it warmly (e.g. 'aap ne jo dekhi woh aur maal hoga baji') and stay with the INSTRUCTION. Never name another shop or website unless CHECKED COMPETITOR PRICES lists it.",
+  "'Aakhri daam' only ever means YOUR OWN final price. Never ask her for 'aap ka aakhri daam' - ask 'aap kitne mein lenge?', 'aap bataiye, kitna denge?' and vary it. Never repeat a sentence, phrase or excuse you already used in RECENT CHAT (not even reworded: if you already said 'nuqsan ho jayega', find a different, fresh reason or simply ask her plainly); do not end every message with the same question.",
+  "If she complains, is confused or says you are not understanding her, FIRST answer that exact point in plain words (e.g. 'Ji, advance pe Rs 70 kam hote hain - zyada gunjaish chahiye toh apna daam boliye'), never a stock line. Numbers she wrote (a discount size, a price she quotes back) you may repeat when answering her.",
+  "If she is angry, calls the shop a cheat ('lootay', 'chor') or threatens to tell her friends, never ignore it: one calm, respectful line first ('aap ki naraazgi sar aankhon pe - hamara maqsad lootna nahi, saaf daam hai'), no defensiveness, no sarcasm - and the price never moves because of a threat or a complaint.",
+  "Use plain everyday words any Karachi household understands at once. No puzzling idioms or wordplay she would have to ask about (never 'haath garam/kaam/ghum ho jayega', never 'dil khush ho gaya' at a price complaint).",
   "Avoid English words where an everyday Urdu one exists (say 'daam' not 'rate', 'bohat kam' not 'too low'). Never say sorry, 'possible nahi', 'offer', 'generosity' or 'budget'.",
-  "Like every bazaar seller, Seth Ji may call a counter 'aakhri daam' or 'last price' - both sides know it is part of the haggle (founder's call, 7 Nov). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
-  "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Never mention that you are an AI, a bot, rules or an engine.",
+  "Seth Ji's word is gold: he says 'aakhri daam', 'final', 'last price' or 'is se neeche nahi' ONLY when the INSTRUCTION says this is his absolute last price - never on an ordinary counter (founder's call, 9 Nov: on WhatsApp the whole history is on screen, so a 'final' that moves teaches her his word means nothing). He may compare with another website or say stock is low ONLY using the CHECKED COMPETITOR PRICES and STOCK lines below - those are real; never beyond them.",
+  "Only use facts from ITEM FACTS. Never invent prices, discounts, stock limits, deadlines, quality claims or competitors. Do not bring up AI, bots, rules or an engine on your own.",
+  "HONESTY (founder's rule, 10 Nov): if the customer asks whether they are talking to a bot, an AI, a machine or a real person, NEVER claim to be human. Say plainly, in Seth Ji's warm style, that you are Apna Sasta Bazaar's AI bhao assistant, that ASB itself sets the prices, and that a real team member will help whenever they want - then carry on with the bargain.",
   "How Seth Ji sounds (style only, never copy these prices):",
-  "- refusing: 'Arre baji, is pe toh mera nuqsan ho jayega. Maal haath mein le ke dekhein, phir baat karein.'",
-  "- lowball: 'Baji… mazaaq kar rahi hain? Itne mein toh dhakkan bhi na aaye. 😐'",
-  "- countering: 'Chalein, aap ka dil rakhne ko… [PRICE]. Is se neeche ghar ka kharcha nahi chalta.'",
-  "- chatting: 'Mehenga? Baji, mota steel hai, beti ke jahez tak chalega. Aap bolo, kitne mein lena hai?'",
+  "- refusing: 'Arre [ADDRESS], is pe toh mera nuqsan ho jayega. Maal haath mein le ke dekhein, phir baat karein.'",
+  "- lowball: '[ADDRESS]… mazaaq kar rahe hain? Itne mein toh dhakkan bhi na aaye. 😐'",
+  "- countering: 'Chalein, aap ka dil rakhne ko… [PRICE]. Kharche bohat hain [ADDRESS].'",
+  "- chatting: 'Mehenga? Mota steel hai, beti ke jahez tak chalega. Aap bolo, kitne mein lena hai?'",
+  "([ADDRESS] = the word from the ADDRESS line; when there is none, leave it out.)",
 ].join("\n");
 
-function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts = [], competitorFacts = [], stockLeft = null }) {
+/** How Seth Ji addresses this customer - only as they asked (founder, 10 Nov). */
+function addressLine(address) {
+  if (address && address.word)
+    return `ADDRESS: the customer asked to be called "${address.word}". Use exactly that word (never 'baji' or 'bhai' otherwise)` +
+      (address.gender === "f" ? "; feminine verb forms are right (lengi, chahti hain)." : "; use respectful plural verb forms (lenge, chahte hain, kar rahe hain).");
+  if (address && address.known) return "ADDRESS: the customer prefers just 'aap'. Use no address word (no baji, no bhai); respectful plural verbs (lenge, chahte hain).";
+  return "ADDRESS: not known yet. Use NO address word at all - never 'baji', never 'bhai' - only 'aap', with respectful plural verbs (lenge, chahte hain, kar rahe hain).";
+}
+
+function buildPrompt({ decision, itemName, qty, customerText, customerMessages = null, history, itemFacts = [], competitorFacts = [], stockLeft = null,
+                       perks = [], morePerks = [], claim = null, hardship = false, pickupOffered = false, address = null, understood = null, fairness = null, advanceRequired = false }) {
   const { brief } = briefFor(decision);
   const price = priceOf(decision);
+  const msgs = (customerMessages && customerMessages.length ? customerMessages : [customerText || ""])
+    .map((m) => String(m).slice(0, 300));
   const lines = [
     "ITEM: " + itemName + (qty > 1 ? ` (she wants ${qty})` : ""),
     "ITEM FACTS (the only claims you may make): " + (itemFacts.length ? itemFacts.join("; ") : "none - talk about the deal, not the product"),
@@ -109,15 +170,76 @@ function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts
     Number.isSafeInteger(stockLeft) && stockLeft > 0 && stockLeft <= STOCK_CLAIM_MAX
       ? `STOCK: only ${stockLeft} left - you MAY say so (e.g. 'bas ${stockLeft} bachi hain').`
       : "STOCK: not low - never claim it is the last piece or running out.",
+    SHOP_FACTS(pickupOffered),
+    perks.length ? "HER BHAO CARD (true; you may mention one naturally, e.g. 'aap toh purani customer hain'): " + perks.join("; ") : "HER BHAO CARD: nothing special yet.",
+    morePerks.length ? "WHAT WOULD GIVE HER MORE ROOM (true; you may suggest one when she pushes): " + morePerks.join("; ") : "",
+    decision.perksGained && decision.perksGained.length
+      ? "SHE JUST COMMITTED TO: " + decision.perksGained.join("; ") + ". Thank her and tell her the price comes down for it" +
+        (decision.kind === "talk" && decision.askPaisa ? ` - with it, her price is now ${rs(decision.askPaisa)}` : "") +
+        ", as a condition of the deal ('advance ke saath')." : "",
+    decision.continuing
+      ? "SHE IS COMING BACK TO HER OPEN BARGAIN on this item. Welcome her back and remind her plainly where it stood: your last price to her was the PRICE (say it). Then ask what she will pay. Never present it as a new offer." : "",
+    decision.herPriceInvited
+      ? "SHE TAPPED 'APNA DAAM': she wants to name her own price. Invite her warmly to type it as a number. Do not name any price yourself or give an example amount." : "",
+    decision.perkQuotes && decision.perkQuotes.length
+      ? "SHE ASKED WHAT ADVANCE PAYMENT WOULD GET HER - answer straight in your first words, with the real number. Advance means she pays BEFORE delivery; without advance she pays cash on delivery (COD) at the normal price - never say both are COD. It is optional: " +
+        decision.perkQuotes.map((q) => `${q.label.replace(/\s*\p{Extended_Pictographic}/gu, "")}: price becomes ${rs(q.askPaisa)} instead of ${rs(decision.askPaisa)}`).join("; ") +
+        ". Nothing changes until she agrees." : "",
+    claim
+      ? claim.neverSoldThatLow
+        ? `CLAIM CHECK: our records show this item has NEVER been sold by us at ${rs(claim.claimedPaisa)} or less. You may say so kindly ('yeh hamari dukaan se itne mein kabhi nahi gayi, shayad koi aur maal tha') - never call her a liar.`
+        : "CLAIM CHECK: some customers did get it lower, through their own Bhao Card and bargaining. Admit prices differ and explain why in general terms; never reveal who or what they paid; offer her the ways to more room."
+      : "",
+    hardship
+      ? "SHE MENTIONED A HARDSHIP (illness, money trouble, a family need). Be genuinely kind and respectful - never doubt or mock it, never use it for drama. The price does NOT change because of it (only the INSTRUCTION decides prices). You may say our team can talk to her personally ('hamari team aap se zaroor baat karegi')." : "",
+    addressLine(address),
+    understood && understood.note ? "WHAT SHE WANTS ANSWERED (read from her message): " + understood.note : "",
+    understood && understood.claimWhere === "elsewhere" && understood.claimPaisa
+      ? `SHE SAYS she/someone got it for Rs ${understood.claimPaisa / 100} somewhere else. Take it seriously and respectfully (never 'dil khush ho gaya'): that may be thinner or different maal; your price is for this quality. Do not match it.` : "",
+    fairness ? [
+      "SHE ASKS WHY PRICES DIFFER / WHY SHE SHOULD PAY MORE THAN SOMEONE ELSE. Answer this FIRST, firmly and warmly - it is the heart of Bhao Tao:",
+      "  1. EARN YOUR BHAO (founder, 14 Nov): Bhao Tao means no two customers get the same price - each one EARNS their own: how well they bargain, their Bhao Card (advance, buying together, morning bohni, being a regular) and Seth Ji's game. That is the fun and the fairness of it - never luck, never knowing someone. Say it with pride, never as an apology.",
+      claim && claim.neverSoldThatLow
+        ? `  2. TRUTH FROM OUR RECORDS: this item has never been sold by us at ${rs(claim.claimedPaisa)} or less - say so plainly and kindly ('hamare record mein yeh kabhi ${rs(claim.claimedPaisa)} mein nahi gayi'), maybe it was other maal or another shop. Never call her or her relative a liar.`
+        : claim ? "  2. Some customers did pay less - because of those reasons (advance, buying together, morning bohni, being a regular). Never reveal who or how much." : "",
+      "  3. Then give HER the way to a lower price, concretely - pick the one or two best of: " + fairness.levers.map((l) => l.text).join("; ") + ".",
+      fairness.held.length ? "  (Her Bhao Card today: " + fairness.held.join(", ") + ".)" : "",
+      "  Never say vaguely 'aap ka daam alag ho sakta hai' or 'har sauda alag hota hai' without the reasons.",
+    ].filter(Boolean).join("\n") : "",
+    advanceRequired
+      ? "THIS DEAL CAN BE PAKKA ONLY WITH ADVANCE PAYMENT, because 2 of her deals were cancelled this month - the same rule for everyone, so nobody can find our lowest price by agreeing and cancelling. She pays BEFORE delivery; the price already has the advance discount (never call it 'included', 'shamil' or paid). " +
+        ((history || []).some((h) => h.from === "seth" && /advance/i.test(h.text))
+          ? "You have ALREADY told her this - do NOT repeat it, unless she raises advance or COD. If she refuses advance or asks for COD: explain WHY, once, plainly and kindly (the 2 cancellations, the same rule for all) - she can still bargain, but this month a deal needs advance."
+          : "Tell her once, plainly, the first time it matters (when she names a price or asks about payment). Never as a punishment.")
+      : "",
+    decision.askedAI ? "SHE ASKED WHETHER YOU ARE A BOT / AI / REAL PERSON: answer that honestly first (see HONESTY), then the INSTRUCTION." : "",
     "INSTRUCTION: " + brief,
     price != null
-      ? `PRICE: ${rs(price)}${qty > 1 ? " per piece" : ""}. This is the ONLY amount you may write, exactly as "${rs(price)}".`
+      ? decision.kind === "talk"
+        ? `PRICE (say it only if she asks what it costs): ${rs(price)}${qty > 1 ? " per piece" : ""}. The ONLY amount you may write, exactly as "${rs(price)}"` +
+          ((decision.perkQuotes || []).length ? ` (and the advance price given above)` : "") + ` - never any other lower amount, never a discount.`
+        : `PRICE: ${rs(price)}${qty > 1 ? " per piece" : ""}. This is the ONLY amount you may write, exactly as "${rs(price)}".`
       : "PRICE: none. Do not write any amount or number.",
     "RECENT CHAT (oldest first):",
-    ...(history || []).slice(-6).map((h) => (h.from === "seth" ? "Seth Ji: " : "Baji: ") + String(h.text).slice(0, 200)),
-    "HER LATEST MESSAGE: " + JSON.stringify(String(customerText || "").slice(0, 300)),
+    ...(history || []).slice(-14).map((h) => (h.from === "seth" ? "Seth Ji: " : "Customer: ") + String(h.text).slice(0, 200)),
+    msgs.length > 1
+      ? "HER MESSAGES SINCE YOUR LAST REPLY (answer all of them together, in one reply):\n" + msgs.map((m, i) => `${i + 1}. ${JSON.stringify(m)}`).join("\n")
+      : "HER LATEST MESSAGE: " + JSON.stringify(msgs[0]),
   ];
-  return { system: PERSONA, user: lines.join("\n") };
+  return { system: PERSONA, user: lines.filter(Boolean).join("\n") };
+}
+
+/** What ASB really offers - the voice may not promise anything else. */
+// Founder, 9 Nov: "aap ki delivery tu wasay bhi free hae".
+const SHOP = Object.freeze({ deliveryFree: true });
+function SHOP_FACTS(pickupOffered) {
+  return "SHOP FACTS (the only services you may mention): cash on delivery is available on every order; advance payment is OPTIONAL and only gives a little more room on the price; ASB delivers to her door" +
+    (SHOP.deliveryFree ? ", and delivery is FREE for everyone, always - so never offer free delivery as a reward or condition" : "") +
+    (pickupOffered ? "; she may also collect it herself (self-pickup)" : "; there is NO self-pickup") +
+    "; the delivery day is confirmed by our team after the deal - if she asks when, say the team will confirm the day, never promise a day or time" +
+    ". Never invent services or benefits - no 'priority packing', no faster delivery, no 'line ka wait nahi'. Do not repeat these facts unless she asks.\n" +
+    "BHAO TAO RULES (true and the same for everyone - explain them plainly whenever she asks why): at most 3 new bargains a day; one deal per item per week (no buying the same thing again lower); she may cancel a deal any time - after 2 cancelled deals in 30 days her next deals are pakka only with advance payment, so nobody can find our lowest price by agreeing and cancelling; insulting language pauses Bhao Tao for 7 days. " +
+    "ASB's team reads this WhatsApp chat and messages her after a deal to confirm the order and delivery day. Never promise that the team will 'check', 'fix' or call about anything else.";
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +248,15 @@ function buildPrompt({ decision, itemName, qty, customerText, history, itemFacts
 // Always banned: fake deadlines, and anything that breaks Seth Ji's character.
 // "sab se sasta" / "cheapest" is a claim about EVERY seller, which no check
 // of a few listings can prove: never, in either direction.
+// Seth Ji never insults, shames or belittles her (her dignity is not part of the haggle).
+const INSULT = /\b(bewaqoof|bewakoof|be\s*waqoof|pagal|paagal|jahil|jaahil|ghatiya|aukat|aukaat|sharam\s+kar\w*|besharam|kanjoos\s+aurat|ghareeb|faqeer|bhikari|bhikaari|kambakht|stupid|idiot)\b/i;
 const BANNED = /\b(sirf aaj|aaj hi|offer khatam|chatbot|bot|artificial intelligence|language model|algorithm|sab se sast[ai]|sabse sast[ai]|cheapest|lowest price)\b/i;
+const BANNED_ANSWERING_AI = /\b(sirf aaj|aaj hi|offer khatam|algorithm|sab se sast[ai]|sabse sast[ai]|cheapest|lowest price)\b/i;
+// She asks if Seth Ji is a bot / AI / real person ("tum kia bot hu?", live test 10 Nov)
+const ASKS_AI_WORDS = /\b(?:bot|robot|chat\s*bot|artificial|machine|computer|chatgpt|gpt|insa+n|real\s+person|asli\s+(?:banda|insaan|aadmi|bande)|zinda\s+(?:banda|insaan)|ai\s+(?:ho|hai|hain|hu|hoon))\b/i;
+const ASKS_AI = { test: (t) => ASKS_AI_WORDS.test(t) || /\bA\.?I\b/.test(t) };
+// claiming to be human when asked - never
+const CLAIMS_HUMAN = /\b(?:(?:main|mein|hum)\s+(?:toh\s+|to\s+|bhi\s+)?(?:asli\s+)?(?:insaan|insan|aadmi|banda)\s+(?:hoon|hun|hu|hain)|bot\s+nahi|ai\s+nahi|robot\s+nahi|machine\s+nahi)\b/i;
 // Allowed ONLY when backed by data passed in (competitorFacts / stockLeft).
 const MARKETPLACES = /\b(daraz|olx|amazon|alibaba|aliexpress|shophive|telemart|priceoye|temu|competitor)\b/gi;
 const SCARCITY = /\b(last piece|aakhri piece|akhri piece|stock khatam|khatam ho raha|bas \d+ (?:bach|reh)|sirf \d+ (?:bach|reh)|\d+ hi (?:bach|reh))/i;
@@ -151,14 +281,91 @@ function numbersIn(text) {
   return out;
 }
 
-function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null }) {
-  const why = [];
+/** Room for the reply: more when she asked several things at once. */
+function maxLengthFor(customerMessages = []) {
+  const all = customerMessages.join("\n");
+  return customerMessages.length > 1 || (all.match(/\?/g) || []).length > 1 ? 320 : 220;
+}
+
+// Invented services (live test, 9 Nov: "priority packing", "line ka wait nahi",
+// "pickup se delivery charge bacha jaata hai" - none of it real).
+// "padosi le aayenge to delivery free" - delivery is free for everyone anyway
+const FREE_DELIVERY_AS_REWARD = /\b(?:agar|to|toh|tab)\b[^.?!\n]{0,50}\bdelivery\s+(?:bhi\s+)?(?:free|muft)|\b(?:free|muft)\s+delivery\b[^.?!\n]{0,40}\b(?:agar|to|toh)\b/i;
+const INVENTED = /\bpriority\b|\bline\s+(?:ka|ki|mein)\s+(?:wait|intezar)|\bfree\s+delivery\b|\bdelivery\s+(?:charge|kharcha|fee)\w*\s+(?:bach|maaf|nahi)|\bjaldi\s+(?:deliver|pohanch|mil\s+jaye)|\bexpress\b|\bpehle\s+bhej/i;
+const PICKUP_TALK = /\bpick\s*-?\s*up\b|\bkhud\s+(?:le|utha|aa)\w*/i;
+// Founder, 9 Nov (option B): "aakhri / final / last price / is se neeche nahi"
+// only when it truly is his last price (the engine's final_offer).
+const FINAL_WORD = /\b(?:aakhri|aakhari|akhri|akhiri|final|last\s+price|is\s+se\s+neeche\s+nahi|is\s+se\s+kam\s+nahi|isse\s+(?:neeche|kam)\s+nahi)\b/i;
+// "aap ka aakhri daam kya hai?" - his own final price is the only aakhri daam
+const HER_LAST_PRICE = /\baap\s*k[ae]\s+aakhri\s+daam|\baapk[ae]\s+aakhri\s+daam|\baakhri\s+daam\s+kya\s+rakh/i;
+const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competitorFacts = [], stockLeft = null, maxLength = 220,
+                            pickupOffered = false, lastSaid = null, claim = null, address = null, herNumbers = [], extraPrices = [], askedAI = false, fairness = null, advanceRequired = false }) {
+  // HARD rules (money, promises, honesty, dignity) always hold. SOFT ones
+  // (style: repeats, idioms, which reasons to give) are advice: they get one
+  // rewrite, then the AI's own words go out - founder, 12 Nov: "are we
+  // restricting the AI too much?" A stock line is for emergencies only.
+  const why = [], soft = [];
   const t = String(text || "").trim();
+  // Only the address the customer chose (founder, 10 Nov: a man was called
+  // "baji" all through his bargain).
+  const word = address && address.word;
+  if (address && word !== "baji" && /\bbaji\b/i.test(t)) why.push(word ? `call them "${word}", not baji` : "address not known: no 'baji' - use only 'aap'");
+  if (address && word !== "bhai" && !(word && /bhai/.test(word)) && /\bbhai\b/i.test(t)) why.push(word ? `call them "${word}", not bhai` : "address not known: no 'bhai' - use only 'aap'");
+  if (/\bhaath\s+(?:garam|kaam|ghum|kat|tang)\b/i.test(t)) soft.push("puzzling idiom - say it plainly");
+  // "why two prices?" needs the reasons and her way to a lower price (founder, 12 Nov)
+  if (fairness && !/advance|milke|mil\s*ke|saath\s+l|bohni|subah|purane|regular|darja/i.test(t))
+    soft.push("she asked why prices differ: give the real reasons and her way to a lower price (advance, milke lena, subah ki bohni)");
+  if (fairness && claim && claim.neverSoldThatLow && /\bho\s+sakta\s+hai\b/i.test(t) && !/kabhi\s+nahi/i.test(t))
+    soft.push("our records say it was never sold that low - say so plainly, do not say it may be so");
   if (!t) why.push("empty");
-  if (t.length > 220) why.push("too long");
+  if (t.length > Math.max(maxLength * 2, 480)) why.push("far too long");
+  else if (t.length > maxLength) soft.push("too long - shorter please");
   if (/https?:|www\.|\+?92\d{9,}|0\d{10}/i.test(t)) why.push("link or phone number");
   if (/^\s*(seth ji|assistant|bot)\s*:/i.test(t)) why.push("role label");
-  if (BANNED.test(t)) why.push("invented claim or forbidden word");
+  if ((askedAI ? BANNED_ANSWERING_AI : BANNED).test(t)) why.push("invented claim or forbidden word");
+  if (askedAI && CLAIMS_HUMAN.test(t)) why.push("never claim to be human - say honestly you are ASB's AI bhao assistant");
+  if (askedAI && !/\bAI\b|\bA\.I\.?|\bbot\b/i.test(t)) why.push("she asked if you are a bot/AI: answer honestly that you are ASB's AI bhao assistant");
+  if (INSULT.test(t)) why.push("insulting her - never");
+  if (INVENTED.test(t)) why.push("invented a service ASB does not offer");
+  // live test 12 Nov: "aapka advance already price mein shamil hai" - she
+  // must still PAY it; never make it sound paid or optional
+  if (/\badvance\b[^.!?]{0,40}\b(?:shamil|included|already|ho\s+chuka|de\s+diya|ki\s+zaroorat\s+nahi)\b/i.test(t))
+    why.push("advance is not included or paid - she pays it before delivery; say 'yeh daam advance payment ke saath hai'");
+  if (!pickupOffered && PICKUP_TALK.test(t)) why.push("self-pickup is not offered");
+  if (FINAL_WORD.test(t) && !["final_offer", "accept", "closed", "abuse_close"].includes(decision.kind))
+    why.push("'aakhri/final' only when it truly is your last price - this is not");
+  if (HER_LAST_PRICE.test(t)) soft.push("'aakhri daam' is only your own final price - ask 'aap kitne mein lengi?'");
+  if (FREE_DELIVERY_AS_REWARD.test(t)) why.push("delivery is free for everyone - never a reward or condition");
+  // No parroting: any run of 5 words he already used in his recent messages
+  // (live test, 9 Nov: "cash on delivery se aapke darwaze tak" three times).
+  // Live test, 10 Nov: "nuqsan ho jayega" seven times, each spelt a little
+  // differently - the same excuse twice is a repeat, however it is spelt.
+  if (lastSaid) {
+    const STOCK = [[/nu(?:q|k)saa?n/i, "nuqsan"], [/mazaa?q/i, "mazaaq"], [/dhakk?an/i, "dhakkan"], [/kharch[ae]/i, "kharche"]];
+    const before = (Array.isArray(lastSaid) ? lastSaid : [lastSaid]).join(" ");
+    for (const [re, name] of STOCK) if (re.test(t) && re.test(before)) { soft.push(`you already used the '${name}' line - say something new`); break; }
+  }
+  if (lastSaid) {
+    const said = (Array.isArray(lastSaid) ? lastSaid : [lastSaid]).map(norm).join(" | ");
+    const w = norm(t).split(" ");
+    for (let i = 0; i + 5 <= w.length; i++) {
+      const g = w.slice(i, i + 5).join(" ");
+      if (said.includes(g)) { soft.push("repeats what you already said: " + JSON.stringify(g)); break; }
+    }
+    // a whole sentence said again word for word (live test, 14 Nov: the
+    // advance line three times) is never fine; a short echo is only style
+    for (let i = 0; i + 8 <= w.length; i++) {
+      const g = w.slice(i, i + 8).join(" ");
+      if (said.includes(g)) { why.push("repeats a whole sentence you already said: " + JSON.stringify(g)); break; }
+    }
+  }
+  // Her claim about someone else's price: never confirmed, never detailed.
+  if (claim && claim.claimedPaisa != null && numbersIn(t).includes(claim.claimedPaisa / 100)) {
+    const denies = /\bkabhi\s+nahi\b|\bnahi\s+(?:gayi|gaya|di|diya|bik\w*|mili)\b/i.test(t);
+    if (!claim.neverSoldThatLow || !denies) why.push("never confirm or repeat what someone else paid");
+  }
   const backed = new Set(competitorFacts.map((f) => String(f.marketplace).toLowerCase()));
   let named = false;
   for (const m of t.matchAll(MARKETPLACES)) { named = true; if (!backed.has(m[1].toLowerCase())) why.push("unbacked competitor: " + m[1]); }
@@ -170,30 +377,87 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
   if (stockClaimOk) for (const m of t.matchAll(/(\d+)\s*(?:hi\s*)?(?:bach|reh)/gi))
     if (Number(m[1]) !== stockLeft) why.push("wrong stock count: " + m[1]);
   const price = priceOf(decision);
-  const allowed = new Set([1, qty, ...groupSizes]);
+  const allowed = new Set([1, qty, ...groupSizes, ...herNumbers]);
+  // differences between real prices ("advance pe Rs 70 kam") are true too
+  const real = [price, offerPaisa, ...extraPrices, ...(decision.perkQuotes || []).map((q) => q.askPaisa)].filter((x) => Number.isSafeInteger(x));
+  for (const a of real) for (const b of real) if (a > b) allowed.add((a - b) / 100);
+  for (const x of extraPrices) if (Number.isSafeInteger(x)) allowed.add(x / 100);
   if (price != null) allowed.add(price / 100);
   if (offerPaisa != null) allowed.add(offerPaisa / 100);
   for (const f of competitorFacts) allowed.add(f.pricePaisa / 100);
+  for (const q of decision.perkQuotes || []) allowed.add(q.askPaisa / 100);
   if (stockClaimOk) allowed.add(stockLeft);
   for (const n of numbersIn(t)) if (!allowed.has(n)) why.push("number not allowed: " + n);
+  // He may repeat her number, never agree to it in words - only the engine
+  // accepts a price.
+  const herLower = numbersIn(t).filter((n) => herNumbers.includes(n) && (price == null || n * 100 < price));
+  if (herLower.length && decision.kind !== "accept" && /\b(?:de\s*dun?g[aie]|de\s*deta|de\s*det[ie]|theek\s+hai|manzoor|pakka|chalo|chalein|done|bhej\s*dun?g[aie])\b/i.test(t))
+    why.push("never agree to her number " + herLower[0] + " - only the INSTRUCTION decides a price");
   if (briefFor(decision).mustSayPrice && !numbersIn(t).includes(price / 100)) why.push("price not stated");
-  return { ok: why.length === 0, why };
+  return { ok: why.length === 0 && soft.length === 0, hardOk: why.length === 0, why: [...why, ...soft], hard: why, soft };
 }
 
 // ---------------------------------------------------------------------------
 // Templates: always correct, used whenever the model is off or fails.
 // ---------------------------------------------------------------------------
-function template(decision, { offerPaisa, pick = (a) => a[0] }) {
+// Said first whenever she asks why prices differ and the model could not answer.
+const FAIRNESS_LINE = "Yahan daam kamaya jata hai - jitni achhi bhao-tao, utna achha daam! Advance payment, milke lena aur subah ki bohni se bhi daam kam hota hai.";
+function template(decision, opts) {
+  const line = templateLine(decision, opts);
+  return decision.fairnessAsked ? FAIRNESS_LINE + " " + line : line;
+}
+function templateLine(decision, { offerPaisa, pick = (a) => a[0] }) {
   const p = priceOf(decision);
   switch (decision.kind) {
-    case "open": return pick([`Assalam-o-Alaikum baji! Mota steel, nasal chalegi. ${rs(p)} ki hai.`]);
+    case "open":
+      if (decision.askAddress) return `Assalam-o-Alaikum! Yeh ${rs(p)} ki hai. Aap ko kya keh ke bulaun - baji, bhai, ya kuch aur? 🙂`;
+      if (decision.resumed) return `Aaiye baji, phir se! Pichli dafa baat ${rs(p)} tak aayi thi - wahin se aage chalte hain.`;
+      return pick([`Assalam-o-Alaikum baji! Mota steel, nasal chalegi. ${rs(p)} ki hai.`]);
     case "refuse": return pick(["Arre baji, is pe nahi hoga. Maal dekhein pehle, phir bhao lagayen.",
       "Na na baji, itne mein yeh wala nahi aata. Thora aur barhayen."]);
-    case "lowball_check": return pick(["Kya baji, mazaaq kar rahi hain? 😐", "Itne mein toh dhakkan bhi nahi aata baji."]);
-    case "counter": return pick([`Chalein baji, aap ke liye ${rs(p)}.`, `Kharche bohat hain, phir bhi ${rs(p)}.`]);
+    case "lowball_check":
+      if (decision.lowballCount >= 2 && p != null) return pick([`Baji, daam ${rs(p)} hai - aap ki baat us se bohat door hai. Koi sanjeeda daam boliye.`]);
+      return pick(["Kya baji, mazaaq kar rahi hain? 😐", "Itne mein toh dhakkan bhi nahi aata baji."]);
+    case "counter":
+      if (decision.held) return `Baji, main toh ${rs(p)} tak aa gaya - aap ek rupaya nahi hile! Thoda aap bhi barhiye.`;
+      return pick([`Chalein baji, aap ke liye ${rs(p)}.`, `Kharche bohat hain, phir bhi ${rs(p)}.`]);
     case "final_offer": return pick([`Bas baji, ${rs(p)}. Is se neeche nahi hoga.`]);
-    case "closed": return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
-    case "talk": return pick(["Ji baji, boliye, kitne mein chahiye?"]);
+    case "closed":
+      if (decision.walkedAway) return "Koi baat nahi baji, jab dil kare aaiye ga - baat yahin se aage chalegi. 🙏";
+      return pick(["Chalein baji, aaj sauda nahi bana. Phir aaiye ga, chai pe baat karenge."]);
+    case "talk":
+      if (decision.askedAI) return "Ji, main Apna Sasta Bazaar ka AI bhao assistant hoon - daam ASB khud tay karta hai, aur hamari team bhi haazir hai. Aap boliye, kitne mein lengi?";
+      if (decision.perksGained && decision.perksGained.length)
+        return decision.askPaisa
+          ? `Shukriya baji! Advance ke saath ab ${rs(decision.askPaisa)}. Boliye, kitne mein lengi?`
+          : "Shukriya baji, advance ke saath thori aur gunjaish ban jati hai. Boliye, kitne mein lengi?";
+      if (decision.continuing && p != null) return `Aaiye baji, phir se! Hamari pichli baat ${rs(p)} pe ruki thi. Aap bataiye, kitne mein lengi?`;
+      if (decision.addressSet) return "Ji baji, bohat shukriya! Ab bataiye, kitne mein lengi?";
+      if (decision.addressOther) return "Zaroor! Likh dein aap ko kya keh ke bulaun. 🙂";
+      if (decision.herPriceInvited) return "Zaroor baji! Apna daam number mein likh dein. 🙂";
+      if (decision.perkQuotes && decision.perkQuotes.length)
+        return `Baji, advance dein toh daam ${rs(decision.perkQuotes[0].askPaisa)}; warna cash on delivery pe ${rs(decision.askPaisa)} - marzi aap ki.`;
+      return pick(["Ji baji, boliye, kitne mein chahiye?", "Baji, aap ki baat samajh raha hoon. Aap bataiye, kitne mein lengi?", "Ji baji, aap apna daam boliye - phir baat karte hain."]);
+    case "abuse_warning": return pick(["Baji, Seth Ji izzat se karobar karte hain. Aap tameez se baat karein toh bhao zaroor hoga. 🙏"]);
+    case "abuse_close": return "Baji, is tarah baat nahi ho sakti. Aaj ka bhao yahin khatam - kuch din baad izzat se phir aaiye ga. Allah hafiz. 🙏";
+    case "cancel": return pick(["Koi baat nahi baji, sauda cancel kar diya. Jab dil chahe phir aaiye ga. 🙏"]) +
+      (decision.cancelCount === 1 ? " Bas itna bata doon: mahine mein ek aur sauda cancel hua toh agle saude advance payment ke saath pakka honge." : "") +
+      (decision.cancelCount >= 2 ? " Ab agle saude advance payment ke saath pakka honge - bhao aap har cheez pe laga sakte hain." : "");
+    case "guarded": {
+      const until = decision.until ? new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Karachi", day: "numeric", month: "short" }).format(new Date(decision.until)) : null;
+      if (decision.reason === "paused_cancellations")
+        return "Ji, yeh rule ab badal gaya hai - aap phir se bhao laga sakte hain, bas sauda advance payment ke saath pakka hoga. \"BHAO\" likh dein. 🙏";
+      if (decision.everything)
+        return pick([`Ji, yeh rule sab ke liye ek hai taa ke daam ke saath khel na ho sake.${until ? ` ${until} se aap phir bhao laga sakte hain.` : ""} 🙏`,
+                     `Aap ka sawal jaiz hai. Rule sab ke liye barabar hai${until ? ` - ${until} se phir mauqa hai` : ""}. Yeh chat hamari team bhi parhti hai. 🙏`]);
+      return pick([`Ji, ek cheez pe hafte mein ek sauda - yeh rule sab ke liye hai${until ? ` (${until} tak)` : ""}. Baqi cheezein abhi khuli hain: "BHAO" likh dein. 🙏`,
+                   "Aap ki baat samajh gaya. Yeh chat hamari team bhi parhti hai. Tab tak baqi cheezon pe bhao lagana ho toh \"BHAO\" likh dein. 🙏"]);
+    }
+    case "aftercare":
+      if (decision.confirmCancel) return "Phir bhi cancel karna hai? Neeche tap kar dein - sauda tab tak pakka hai.";
+      return decision.status === "accepted" && p != null
+        ? `Ji baji, sauda ${rs(p)} pe pakka hai. Hamari team order confirm karne ke liye aap ko message karegi.`
+        : `Ji baji, woh sauda cancel ho chuka hai. Phir lena ho toh "BHAO ${decision.itemCode || ""}" likh dein.`;
     case "accept": {
       const why = decision.offer && decision.offer.why;
       if (why === "offer_above_ask_extra_refused")
@@ -208,7 +472,7 @@ function template(decision, { offerPaisa, pick = (a) => a[0] }) {
 // ---------------------------------------------------------------------------
 // Providers
 // ---------------------------------------------------------------------------
-async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
+async function callProvider(name, { system, user, retryNote }, env, fetchImpl, { temperature = 0.8, maxTokens = 600 } = {}) {
   const p = PROVIDERS[name];
   const key = env[p.keyVar], model = env[p.modelVar];
   if (!key || !model) throw Object.assign(new Error("not configured"), { code: "not_configured" });
@@ -225,7 +489,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
         // Reasoning models (gpt-oss, qwen3) spend tokens thinking before they
         // write; 600 leaves room for a two-line reply. BHAO_VOICE_REASONING_EFFORT
         // (low | medium | high) is passed only when set, for providers that take it.
-        body: JSON.stringify({ model, temperature: 0.8, max_tokens: 600,
+        body: JSON.stringify({ model, temperature, max_tokens: maxTokens,
           ...(env.BHAO_VOICE_REASONING_EFFORT ? { reasoning_effort: env.BHAO_VOICE_REASONING_EFFORT } : {}),
           messages: [{ role: "system", content: system }, { role: "user", content }] }),
       });
@@ -236,7 +500,7 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
     res = await fetchImpl(p.url, {
       method: "POST", signal: ctl.signal,
       headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model, max_tokens: 160, temperature: 0.8, system,
+      body: JSON.stringify({ model, max_tokens: Math.min(maxTokens, 400), temperature, system,
         messages: [{ role: "user", content }] }),
     });
     body = await res.json().catch(() => ({}));
@@ -256,19 +520,34 @@ async function callProvider(name, { system, user, retryNote }, env, fetchImpl) {
  * Never throws for provider trouble; throws only for a programming error
  * (an unknown decision kind).
  */
-async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", history = [],
+async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerText = "", customerMessages = null, history = [],
                        groupSizes = [], itemFacts = [], competitorFacts = [], stockLeft = null,
+                       perks = [], morePerks = [], claim = null, hardship = false, pickupOffered = false,
+                       address = null, understood = null, extraPrices = [], fairness = null, advanceRequired = false,
                        env = process.env, fetchImpl = fetch, pick }) {
   briefFor(decision); // validates the kind first
+  // "tum kia bot ho?" - an honest answer, from the model or the template
+  const askedAI = ASKS_AI.test((customerMessages && customerMessages.length ? customerMessages : [customerText]).join("\n"));
+  if (askedAI) decision = { ...decision, askedAI: true };
+  if (fairness) decision = { ...decision, fairnessAsked: true };
   const provider = String(env.BHAO_VOICE_PROVIDER || "off").toLowerCase();
-  const fallback = (rejected, attempts) => ({ text: template(decision, { offerPaisa, pick }), source: "template",
+  // a stock line never goes out twice in a row (live test, 12 Nov: the same
+  // "team aap ki baat dekh legi" three times)
+  const said = (history || []).filter((h) => h.from === "seth").slice(-4).map((h) => String(h.text));
+  const fresh = pick || ((a) => a.find((x) => !said.some((y) => y.includes(x.slice(0, 30)))) || a[a.length - 1]);
+  const fallback = (rejected, attempts) => ({ text: template(decision, { offerPaisa, pick: fresh }), source: "template",
                                               provider: provider === "off" ? null : provider, attempts, rejected });
   if (!PROVIDERS[provider]) return fallback([], 0);
 
-  const prompt = buildPrompt({ decision, itemName, qty, customerText, history, itemFacts, competitorFacts, stockLeft });
+  const prompt = buildPrompt({ decision, itemName, qty, customerText, customerMessages, history, itemFacts, competitorFacts, stockLeft, perks, morePerks, claim, hardship, pickupOffered, address, understood, fairness, advanceRequired });
+  const herNumbers = numbersIn((customerMessages && customerMessages.length ? customerMessages : [customerText]).join("\n"));
+  const lastSaid = (history || []).filter((h) => h.from === "seth").slice(-3).map((h) => h.text);
+  const maxLength = fairness ? 360 : maxLengthFor(customerMessages && customerMessages.length ? customerMessages : [customerText]);
   const rejected = [];
   let retryNote = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  // Three tries: a stock line is the last resort, not the second one
+  // (live test, 10 Nov: two complaints got the same canned "Ji baji, boliye").
+  for (let attempt = 1; attempt <= 3; attempt++) {
     let raw;
     try {
       raw = await callProvider(provider, { ...prompt, retryNote }, env, fetchImpl);
@@ -277,12 +556,12 @@ async function speak({ decision, itemName, qty = 1, offerPaisa = null, customerT
       return fallback(rejected, attempt); // provider trouble: no second call
     }
     const text = raw.trim().replace(/^["“]|["”]$/g, "");
-    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft });
-    if (c.ok) return { text, source: "ai", provider, attempts: attempt, rejected };
+    const c = checkReply(text, { decision, qty, offerPaisa, groupSizes, competitorFacts, stockLeft, maxLength, pickupOffered, lastSaid, claim, address, herNumbers, extraPrices, askedAI, fairness, advanceRequired });
+    if (c.ok || (c.hardOk && attempt >= 2)) return { text, source: "ai", provider, attempts: attempt, rejected };
     rejected.push(c.why.join("; "));
     retryNote = c.why.join("; ");
   }
-  return fallback(rejected, 2);
+  return fallback(rejected, 3);
 }
 
-module.exports = { speak, checkReply, buildPrompt, template, numbersIn, priceOf, PROVIDERS };
+module.exports = { speak, checkReply, buildPrompt, template, numbersIn, priceOf, maxLengthFor, PROVIDERS, callProvider, addressLine };

@@ -121,6 +121,15 @@ function validatePolicy(p) {
   }
   pos(p.offerTtlMinutes, "offerTtlMinutes");
   if (typeof p.settleAtLastRound !== "boolean") throw new BhaoError("INVALID_POLICY", "settleAtLastRound");
+  // Stubborn bargains (founder, 12 Nov): in about stubbornRate of bargains
+  // Seth Ji stops part-way - stubbornStopAt of the way from the floor up to
+  // the anchor - holds there and lets her walk. Optional; 0 = never.
+  if (p.minStepRatio !== undefined && (typeof p.minStepRatio !== "number" || p.minStepRatio < 0 || p.minStepRatio >= 0.5))
+    throw new BhaoError("INVALID_POLICY", "minStepRatio");
+  if (p.stubbornRate !== undefined) {
+    if (typeof p.stubbornRate !== "number" || p.stubbornRate < 0 || p.stubbornRate >= 1) throw new BhaoError("INVALID_POLICY", "stubbornRate");
+    if (p.stubbornRate > 0) frac(p.stubbornStopAt, "stubbornStopAt");
+  }
   return p;
 }
 
@@ -129,6 +138,17 @@ function floorFor(item, qty) {
   let f = item.floorPaisa;
   for (const t of item.groupTiers || []) if (qty >= t.minQty) f = t.floorPaisa;
   return f;
+}
+
+/**
+ * The lowest he will go in THIS bargain: the floor, or - in a stubborn
+ * bargain - a point part-way up from it, which he holds and lets her walk.
+ */
+function floorOf(item, qty, state, policy) {
+  const f = floorFor(item, qty);
+  const ratio = Number(state.stubbornRatio) || 0;
+  if (!(ratio > 0)) return f;
+  return Math.min(item.anchorPaisa, Math.max(f, roundUp(f + ratio * (item.anchorPaisa - f), policy.roundToPaisa)));
 }
 
 const roundDown = (x, step) => Math.floor(x / step) * step;
@@ -147,6 +167,9 @@ function open({ conversationId, item, qty, policy, seed }) {
     qty, round: 0, askPaisa: item.anchorPaisa, bestOfferPaisa: 0, status: "open",
     lastAngle: null, events: [],
   };
+  // Decided once, privately, as she walks in - she cannot see or game it.
+  const rate = Number(policy.stubbornRate) || 0;
+  if (rate > 0 && rng(seed + ":stubborn")() < rate) state.stubbornRatio = policy.stubbornStopAt;
   const r = rng(seed + ":open");
   const action = { kind: "open", askPaisa: item.anchorPaisa, angle: "quality_vs_market",
                    delaySeconds: between(r, policy.delaySeconds.normal) };
@@ -176,7 +199,7 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
 
   const state = { ...prev, events: [...prev.events], round: prev.round + 1, qty };
   const r = rng(`${state.seed}:${state.round}`);
-  const floor = floorFor(item, qty);
+  const floor = floorOf(item, qty, state, policy);
   // The ask never rises for the same quantity. If she drops to fewer pieces
   // than a group rate was given for, that group rate no longer applies: the
   // ask returns to this quantity's floor, and the action says why.
@@ -209,10 +232,15 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
   if (offerPaisa > state.askPaisa) return settle(state.askPaisa, "offer_above_ask_extra_refused");
   if (offerPaisa === state.askPaisa) return settle(state.askPaisa, "offer_meets_ask");
 
-  // 2. Fair offer after enough rounds: let her win.
+  // She did not move: the same number again (or lower), after he has
+  // started countering. Founder, 12 Nov: "just repeat the same number"
+  // must never win - concessions go both ways, so he holds his price too.
+  const noMove = prev.round > policy.refuseRounds && prev.qty === qty && offerPaisa <= prev.bestOfferPaisa;
+
+  // 2. Fair offer after enough rounds: let her win - if she moved up to it.
   //    (offerPaisa >= floor is checked explicitly: the band is above the floor.)
   const settleLine = floor + Math.ceil(policy.settleBand * (state.askPaisa - floor));
-  if (state.round > policy.settleAfterRounds && offerPaisa >= settleLine && offerPaisa >= floor)
+  if (!noMove && state.round > policy.settleAfterRounds && offerPaisa >= settleLine && offerPaisa >= floor)
     return settle(offerPaisa, "fair_offer_after_rounds");
 
   // 2b. Last round: a deal at or above the floor beats no deal, if the
@@ -236,6 +264,15 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
                                            delaySeconds: between(r, policy.delaySeconds.normal) });
   }
 
+  // 4b. She did not move: he holds his last price (no step toward her).
+  if (noMove && state.askPaisa > floor) {
+    const angle = pickAngle(r, state, ["already_tight", "running_costs", "belonging", "disappointment"]);
+    state.lastAngle = angle;
+    state.events.push({ round: state.round, kind: "counter", offerPaisa, askPaisa: state.askPaisa, qty, held: true });
+    return maybeClose(state, policy, r, { kind: "counter", askPaisa: state.askPaisa, angle, held: true,
+                                           delaySeconds: between(r, policy.delaySeconds.normal) });
+  }
+
   // 5. Counter: a large, varied step toward her best offer, never below the floor.
   const target = Math.max(state.bestOfferPaisa, floor);
   let ask;
@@ -245,8 +282,14 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
     const gap = state.askPaisa - target; // > 0 here
     const planIdx = Math.min(state.round - policy.refuseRounds - 1, policy.stepPlan.length - 1);
     const jitter = 1 + (r() * 2 - 1) * policy.stepJitter;
-    const step = Math.max(policy.roundToPaisa, Math.floor(gap * policy.stepPlan[planIdx] * jitter));
+    // Live test, 14 Nov: 2,130 -> 2,070 -> 2,040 -> 2,020 while she moved
+    // Rs 200 a time - Rs 20 steps read as an insult and trace the floor for
+    // anyone watching. A step is at least minStepRatio of the listed price;
+    // if less than that is left, he goes straight to his line and holds.
+    const minStep = Math.max(policy.roundToPaisa, roundUp(Math.floor(item.anchorPaisa * (Number(policy.minStepRatio) || 0)), policy.roundToPaisa));
+    const step = Math.max(minStep, Math.floor(gap * policy.stepPlan[planIdx] * jitter));
     ask = roundDown(state.askPaisa - step, policy.roundToPaisa);
+    if (ask - floor < minStep) ask = floor;
     if (ask < floor) ask = floor;
     if (ask >= state.askPaisa) ask = Math.max(floor, state.askPaisa - policy.roundToPaisa);
   }
@@ -264,6 +307,31 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
   return maybeClose(state, policy, r, { kind: atFloor ? "final_offer" : "counter", askPaisa: ask, angle, askReset,
     delaySeconds: between(r, policy.delaySeconds.normal),
     groupHint: nextGroup && angle === "group_hint" ? { minQty: nextGroup.minQty } : null });
+}
+
+/**
+ * "Earn your bhao" (founder, 14 Nov): she won Seth Ji's 3-question game at
+ * her locked price. The deal is hers - but never below this bargain's own
+ * line, never above his ask, and only while the bargain is open.
+ */
+function winGame(prev, { item, policy, pricePaisa, now }) {
+  validateItem(item); validatePolicy(policy);
+  if (prev.status !== "open") throw new BhaoError("CONVERSATION_CLOSED", prev.status);
+  if (policy.version !== prev.policyVersion) throw new BhaoError("POLICY_CHANGED_MID_CONVERSATION");
+  pos(pricePaisa, "pricePaisa");
+  const qty = prev.qty;
+  const floor = floorOf(item, qty, prev, policy);
+  if (pricePaisa < floor) throw new BhaoError("GAME_PRICE_BELOW_LINE", `${pricePaisa} < ${floor}`);
+  const unitPaisa = Math.min(pricePaisa, prev.askPaisa);
+  const state = { ...prev, events: [...prev.events], status: "accepted" };
+  const offerId = "BHO-" + hash32(`${state.conversationId}:game:${unitPaisa}:${qty}`).toString(16).padStart(8, "0");
+  const linePaisa = unitPaisa * qty;
+  const accepted = { offerId, itemId: item.itemId, variantGid: item.variantGid, qty, unitPaisa, linePaisa,
+                     expiresAt: new Date(now.getTime() + policy.offerTtlMinutes * 60000).toISOString(),
+                     policyVersion: policy.version, conversationId: state.conversationId, why: "game_won" };
+  state.accepted = accepted;
+  state.events.push({ round: state.round, kind: "accept", offerPaisa: pricePaisa, unitPaisa, qty, why: "game_won" });
+  return { state, action: { kind: "accept", askPaisa: unitPaisa, angle: "belonging", gameWon: true, delaySeconds: 2, offer: accepted } };
 }
 
 function maybeClose(state, policy, r, action) {
@@ -296,4 +364,4 @@ function toQuoteLine(accepted, { now, lineId = "B1" }) {
   };
 }
 
-module.exports = { BhaoError, ANGLES, validateItem, validatePolicy, floorFor, open, offer, toQuoteLine };
+module.exports = { BhaoError, ANGLES, validateItem, validatePolicy, floorFor, floorOf, open, offer, winGame, toQuoteLine };
