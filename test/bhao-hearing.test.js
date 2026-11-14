@@ -355,3 +355,34 @@ test("live test 12 Nov: never 'aapka advance already price mein shamil hai' - sh
   assert.match(V.checkReply("Rs 950 pe pakka - aapka advance already price mein shamil hai.", { decision: d, qty: 1 }).why.join(), /advance is not included/);
   assert.equal(V.checkReply("Rs 950 pe pakka! Yeh daam advance payment ke saath hai, payment delivery se pehle hogi.", { decision: d, qty: 1 }).why.join(), "");
 });
+
+test("live test 14 Nov: no Rs 20 steps - every counter moves at least 2% of the list price, or goes straight to his line", () => {
+  const B = require("../bhao/engine");
+  const item = { itemId: "KARAHI", variantGid: "gid://shopify/ProductVariant/1", bhaoTaoEnabled: true, isGrocery: false,
+                 anchorPaisa: 250000, floorPaisa: 150000, costPaisa: 60000, maxQty: 20, approvedBy: "test", groupTiers: [] };
+  const NOW = new Date("2026-11-14T04:00:00Z");
+  for (let s = 0; s < 40; s++) {
+    let { state } = B.open({ conversationId: "m" + s, item, qty: 1, policy: BW.POLICY, seed: "m" + s });
+    let prevAsk = state.askPaisa;
+    for (const bid of [120000, 140000, 160000, 180000, 187000, 190000]) {
+      if (state.status !== "open") break;
+      const r = B.offer(state, { item, policy: BW.POLICY, pricePaisa: bid, now: NOW });
+      state = r.state;
+      if (["counter", "final_offer"].includes(r.action.kind) && !r.action.held && r.action.askPaisa < prevAsk) {
+        const floorNow = B.floorOf(item, 1, state, BW.POLICY);
+        assert.ok(prevAsk - r.action.askPaisa >= 5000 || r.action.askPaisa === floorNow, `step ${prevAsk} -> ${r.action.askPaisa}`);
+      }
+      if (r.action.askPaisa) prevAsk = r.action.askPaisa;
+    }
+  }
+});
+
+test("live test 14 Nov: the advance rule is told once and explained when she refuses - never the same sentence three times", () => {
+  const d = { kind: "counter", askPaisa: 202000 };
+  const told = [{ from: "seth", text: "Sir, yeh Rs 2,070 hai, yeh daam advance payment ke saath hai, payment delivery se pehle hogi." }];
+  const p1 = V.buildPrompt({ decision: d, itemName: "Karahi", qty: 1, customerText: "1870", history: told, advanceRequired: true }).user;
+  assert.match(p1, /ALREADY told her this - do NOT repeat it/);
+  assert.match(p1, /explain WHY, once/);
+  const again = "Sir, Rs 2,020 hai, yeh daam advance payment ke saath hai, payment delivery se pehle hogi.";
+  assert.match(V.checkReply(again, { decision: d, qty: 1, lastSaid: told.map((h) => h.text) }).hard.join(), /whole sentence/);
+});

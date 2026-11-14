@@ -206,7 +206,12 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
       fairness.held.length ? "  (Her Bhao Card today: " + fairness.held.join(", ") + ".)" : "",
       "  Never say vaguely 'aap ka daam alag ho sakta hai' or 'har sauda alag hota hai' without the reasons.",
     ].filter(Boolean).join("\n") : "",
-    advanceRequired ? "THIS DEAL IS PAKKA ONLY WITH ADVANCE PAYMENT (she cancelled 2 deals this month - the same rule for everyone): she must PAY BEFORE DELIVERY; the price already includes the advance discount. Never say the advance is 'included', 'shamil' or already paid - say plainly 'yeh daam advance payment ke saath hai, payment delivery se pehle hogi'. Never as a punishment." : "",
+    advanceRequired
+      ? "THIS DEAL CAN BE PAKKA ONLY WITH ADVANCE PAYMENT, because 2 of her deals were cancelled this month - the same rule for everyone, so nobody can find our lowest price by agreeing and cancelling. She pays BEFORE delivery; the price already has the advance discount (never call it 'included', 'shamil' or paid). " +
+        ((history || []).some((h) => h.from === "seth" && /advance/i.test(h.text))
+          ? "You have ALREADY told her this - do NOT repeat it, unless she raises advance or COD. If she refuses advance or asks for COD: explain WHY, once, plainly and kindly (the 2 cancellations, the same rule for all) - she can still bargain, but this month a deal needs advance."
+          : "Tell her once, plainly, the first time it matters (when she names a price or asks about payment). Never as a punishment.")
+      : "",
     decision.askedAI ? "SHE ASKED WHETHER YOU ARE A BOT / AI / REAL PERSON: answer that honestly first (see HONESTY), then the INSTRUCTION." : "",
     "INSTRUCTION: " + brief,
     price != null
@@ -348,6 +353,12 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
     for (let i = 0; i + 5 <= w.length; i++) {
       const g = w.slice(i, i + 5).join(" ");
       if (said.includes(g)) { soft.push("repeats what you already said: " + JSON.stringify(g)); break; }
+    }
+    // a whole sentence said again word for word (live test, 14 Nov: the
+    // advance line three times) is never fine; a short echo is only style
+    for (let i = 0; i + 8 <= w.length; i++) {
+      const g = w.slice(i, i + 8).join(" ");
+      if (said.includes(g)) { why.push("repeats a whole sentence you already said: " + JSON.stringify(g)); break; }
     }
   }
   // Her claim about someone else's price: never confirmed, never detailed.

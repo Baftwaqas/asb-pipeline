@@ -124,6 +124,8 @@ function validatePolicy(p) {
   // Stubborn bargains (founder, 12 Nov): in about stubbornRate of bargains
   // Seth Ji stops part-way - stubbornStopAt of the way from the floor up to
   // the anchor - holds there and lets her walk. Optional; 0 = never.
+  if (p.minStepRatio !== undefined && (typeof p.minStepRatio !== "number" || p.minStepRatio < 0 || p.minStepRatio >= 0.5))
+    throw new BhaoError("INVALID_POLICY", "minStepRatio");
   if (p.stubbornRate !== undefined) {
     if (typeof p.stubbornRate !== "number" || p.stubbornRate < 0 || p.stubbornRate >= 1) throw new BhaoError("INVALID_POLICY", "stubbornRate");
     if (p.stubbornRate > 0) frac(p.stubbornStopAt, "stubbornStopAt");
@@ -280,8 +282,14 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
     const gap = state.askPaisa - target; // > 0 here
     const planIdx = Math.min(state.round - policy.refuseRounds - 1, policy.stepPlan.length - 1);
     const jitter = 1 + (r() * 2 - 1) * policy.stepJitter;
-    const step = Math.max(policy.roundToPaisa, Math.floor(gap * policy.stepPlan[planIdx] * jitter));
+    // Live test, 14 Nov: 2,130 -> 2,070 -> 2,040 -> 2,020 while she moved
+    // Rs 200 a time - Rs 20 steps read as an insult and trace the floor for
+    // anyone watching. A step is at least minStepRatio of the listed price;
+    // if less than that is left, he goes straight to his line and holds.
+    const minStep = Math.max(policy.roundToPaisa, roundUp(Math.floor(item.anchorPaisa * (Number(policy.minStepRatio) || 0)), policy.roundToPaisa));
+    const step = Math.max(minStep, Math.floor(gap * policy.stepPlan[planIdx] * jitter));
     ask = roundDown(state.askPaisa - step, policy.roundToPaisa);
+    if (ask - floor < minStep) ask = floor;
     if (ask < floor) ask = floor;
     if (ask >= state.askPaisa) ask = Math.max(floor, state.askPaisa - policy.roundToPaisa);
   }

@@ -57,6 +57,8 @@ const POLICY = Object.freeze({
   // half-way between his price and the floor, holds, and lets her walk -
   // so "Seth Ji does not bend if the rate is not fair" is real.
   settleAtLastRound: false, stubbornRate: 0.3, stubbornStopAt: 0.5,
+  // no step smaller than 2% of the listed price (Rs 50 on Rs 2,500)
+  minStepRatio: 0.02,
 });
 const RESTART_MEMORY_DAYS = 7;
 const IDLE_EXPIRE_HOURS = 24; // WhatsApp's free-reply window
