@@ -309,6 +309,31 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
     groupHint: nextGroup && angle === "group_hint" ? { minQty: nextGroup.minQty } : null });
 }
 
+/**
+ * "Earn your bhao" (founder, 14 Nov): she won Seth Ji's 3-question game at
+ * her locked price. The deal is hers - but never below this bargain's own
+ * line, never above his ask, and only while the bargain is open.
+ */
+function winGame(prev, { item, policy, pricePaisa, now }) {
+  validateItem(item); validatePolicy(policy);
+  if (prev.status !== "open") throw new BhaoError("CONVERSATION_CLOSED", prev.status);
+  if (policy.version !== prev.policyVersion) throw new BhaoError("POLICY_CHANGED_MID_CONVERSATION");
+  pos(pricePaisa, "pricePaisa");
+  const qty = prev.qty;
+  const floor = floorOf(item, qty, prev, policy);
+  if (pricePaisa < floor) throw new BhaoError("GAME_PRICE_BELOW_LINE", `${pricePaisa} < ${floor}`);
+  const unitPaisa = Math.min(pricePaisa, prev.askPaisa);
+  const state = { ...prev, events: [...prev.events], status: "accepted" };
+  const offerId = "BHO-" + hash32(`${state.conversationId}:game:${unitPaisa}:${qty}`).toString(16).padStart(8, "0");
+  const linePaisa = unitPaisa * qty;
+  const accepted = { offerId, itemId: item.itemId, variantGid: item.variantGid, qty, unitPaisa, linePaisa,
+                     expiresAt: new Date(now.getTime() + policy.offerTtlMinutes * 60000).toISOString(),
+                     policyVersion: policy.version, conversationId: state.conversationId, why: "game_won" };
+  state.accepted = accepted;
+  state.events.push({ round: state.round, kind: "accept", offerPaisa: pricePaisa, unitPaisa, qty, why: "game_won" });
+  return { state, action: { kind: "accept", askPaisa: unitPaisa, angle: "belonging", gameWon: true, delaySeconds: 2, offer: accepted } };
+}
+
 function maybeClose(state, policy, r, action) {
   action = { ...action, askReset: state.askReset === true };
   if (state.round >= policy.maxRounds) {
@@ -339,4 +364,4 @@ function toQuoteLine(accepted, { now, lineId = "B1" }) {
   };
 }
 
-module.exports = { BhaoError, ANGLES, validateItem, validatePolicy, floorFor, floorOf, open, offer, toQuoteLine };
+module.exports = { BhaoError, ANGLES, validateItem, validatePolicy, floorFor, floorOf, open, offer, winGame, toQuoteLine };

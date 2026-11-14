@@ -198,7 +198,7 @@ function buildPrompt({ decision, itemName, qty, customerText, customerMessages =
       ? `SHE SAYS she/someone got it for Rs ${understood.claimPaisa / 100} somewhere else. Take it seriously and respectfully (never 'dil khush ho gaya'): that may be thinner or different maal; your price is for this quality. Do not match it.` : "",
     fairness ? [
       "SHE ASKS WHY PRICES DIFFER / WHY SHE SHOULD PAY MORE THAN SOMEONE ELSE. Answer this FIRST, firmly and warmly - it is the heart of Bhao Tao:",
-      "  1. Same rules for everyone; the price moves only for clear reasons, the same for every customer - nobody gets a cheaper price by luck or by knowing someone.",
+      "  1. EARN YOUR BHAO (founder, 14 Nov): Bhao Tao means no two customers get the same price - each one EARNS their own: how well they bargain, their Bhao Card (advance, buying together, morning bohni, being a regular) and Seth Ji's game. That is the fun and the fairness of it - never luck, never knowing someone. Say it with pride, never as an apology.",
       claim && claim.neverSoldThatLow
         ? `  2. TRUTH FROM OUR RECORDS: this item has never been sold by us at ${rs(claim.claimedPaisa)} or less - say so plainly and kindly ('hamare record mein yeh kabhi ${rs(claim.claimedPaisa)} mein nahi gayi'), maybe it was other maal or another shop. Never call her or her relative a liar.`
         : claim ? "  2. Some customers did pay less - because of those reasons (advance, buying together, morning bohni, being a regular). Never reveal who or how much." : "",
@@ -401,7 +401,7 @@ function checkReply(text, { decision, qty, offerPaisa, groupSizes = [], competit
 // Templates: always correct, used whenever the model is off or fails.
 // ---------------------------------------------------------------------------
 // Said first whenever she asks why prices differ and the model could not answer.
-const FAIRNESS_LINE = "Daam sab ke liye ek hi usool se tay hota hai - advance payment, milke lena aur subah ki bohni pe daam kam hota hai; aap bhi in se faida utha sakte hain.";
+const FAIRNESS_LINE = "Yahan daam kamaya jata hai - jitni achhi bhao-tao, utna achha daam! Advance payment, milke lena aur subah ki bohni se bhi daam kam hota hai.";
 function template(decision, opts) {
   const line = templateLine(decision, opts);
   return decision.fairnessAsked ? FAIRNESS_LINE + " " + line : line;

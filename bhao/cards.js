@@ -137,7 +137,7 @@ async function bhaoCard({ itemName, askPaisa, perks = [], more = [], title = nul
  * The victory card, 1080x1080 - made to be forwarded.
  * { itemName, openPaisa, unitPaisa, qty, title, itemCode }
  */
-async function victoryCard({ itemName, openPaisa, unitPaisa, qty = 1, title = null, itemCode }) {
+async function victoryCard({ itemName, openPaisa, unitPaisa, qty = 1, title = null, itemCode, gameWon = false }) {
   const L = canvasLib(); if (!L) return null;
   await logosReady;
   if (!(openPaisa > unitPaisa)) return null;
@@ -154,7 +154,8 @@ async function victoryCard({ itemName, openPaisa, unitPaisa, qty = 1, title = nu
   g.fillRect(522, 300, 36, 50); roundRect(g, 468, 345, 144, 34, 8); g.fill();
   mark(g, 487, 150, 0.36, BRAND.ink);
   g.textAlign = "center";
-  g.fillStyle = BRAND.white; fit(g, "Aap ne Seth Ji ko hara diya!", W - 120, "Poppins ExtraBold", 66); g.fillText("Aap ne Seth Ji ko hara diya!", W / 2, 462);
+  const headline = gameWon ? "Sawal jeete, bhao jeeta!" : "Aap ne Seth Ji ko hara diya!";
+  g.fillStyle = BRAND.white; fit(g, headline, W - 120, "Poppins ExtraBold", 66); g.fillText(headline, W / 2, 462);
   g.fillStyle = BRAND.ice; fit(g, plain(itemName), W - 160, "Poppins SemiBold", 30);
   g.fillText(plain(itemName) + (qty > 1 ? `  x ${qty}` : ""), W / 2, 514);
   // the numbers on white

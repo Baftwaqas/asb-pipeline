@@ -128,14 +128,14 @@ async function titleOf(db, phone) {
 }
 
 /** The shareable "I beat Seth Ji" card, after a deal. Null if she saved nothing. */
-function victoryText({ openPaisa, unitPaisa, qty = 1, itemCode, title, shareNumber }) {
+function victoryText({ openPaisa, unitPaisa, qty = 1, itemCode, title, shareNumber, gameWon = false }) {
   if (!(openPaisa > unitPaisa)) return null;
   const saved = (openPaisa - unitPaisa) * qty;
   const pct = Math.round(((openPaisa - unitPaisa) / openPaisa) * 100);
   const share = `Main ne Seth Ji ko hara diya! 😎 Aap bhi try karein: "BHAO ${itemCode}"`;
   const link = shareNumber ? `\nhttps://wa.me/${shareNumber}?text=${encodeURIComponent("BHAO " + itemCode)}` : "";
   return [
-    "🏆 *Aap ne Seth Ji ko hara diya!*",
+    gameWon ? "🧠🏆 *Sawal jeete, bhao jeeta!* Bhao ka Khel - teeno sahi!" : "🏆 *Aap ne Seth Ji ko hara diya!*",
     `Shuru: ${nf(openPaisa)} → Aap ka sauda: ${nf(unitPaisa)}${qty > 1 ? ` × ${qty}` : ""}`,
     `Bachat: ${nf(saved)} (${pct}%)`,
     title ? `Aap ka darja: ${title}` : null,

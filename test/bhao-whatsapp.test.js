@@ -318,14 +318,14 @@ test("founder 12 Nov: 'aik hi cheez ke alag alag bhao?' gets the reasons and her
   const fairness = { held: ["Naye mehmaan 🙏"], levers: [{ key: "advance", text: "advance payment - is sauda pe daam Rs 2,430 ho jayega", askPaisa: 243000 }, { key: "group", text: "3 ya zyada milke lena" }] };
   const decision = { kind: "talk", askPaisa: 250000 };
   const prompt = V.buildPrompt({ decision, itemName: "Karahi", qty: 1, customerText: "Kuu? aisa kuu hae bhai? aik hi cheeze kay alag alag bhao?", fairness });
-  assert.match(prompt.user, /Same rules for everyone/);
+  assert.match(prompt.user, /EARN YOUR BHAO/);
   assert.match(prompt.user, /Rs 2,430/);
   const chk = (t, extra = {}) => V.checkReply(t, { decision, qty: 1, fairness, extraPrices: [243000], groupSizes: [3], ...extra }).why.join();
   assert.match(chk("Ji, har BHAO ka apna hisaab hota hai."), /real reasons/);
   assert.equal(chk("Usool sab ke liye ek hain - advance dein toh yeh Rs 2,430 ki, ya 3 milke lein toh aur kam."), "");
   const claim = { claimedPaisa: 120000, neverSoldThatLow: true };
   assert.match(chk("Aap ki behan ko 1200 mein mili ho sakta hai, advance diya hoga.", { claim, herNumbers: [1200] }), /never sold that low/);
-  assert.match(V.template({ kind: "aftercare", status: "cancelled", fairnessAsked: true }, {}), /usool/);
+  assert.match(V.template({ kind: "aftercare", status: "cancelled", fairnessAsked: true }, {}), /daam kamaya jata hai/);
 });
 
 test("after a deal, a question is answered at the agreed price; 'kya cancel ho sakta hai?' is a question, not a cancellation", async () => {

@@ -42,6 +42,9 @@ const P = require("./perks");
 const G = require("./guard");
 const K = require("./cards");
 const U = require("./understand");
+const Q = require("./quiz");
+// Seth Ji's game messages: fixed wording, never the AI (the game is the rules)
+const GAME_KINDS = new Set(["game_offer", "game_question", "game_lost", "game_declined", "game_remind"]);
 
 // DRAFT policy (test values from docs/bhao-tao-engine-v1.md). Founder decision
 // pending; the version is stamped on every conversation.
@@ -92,7 +95,10 @@ const BUTTON_KINDS = new Set(["open", "refuse", "counter", "final_offer", "talk"
 
 /** What a tap means, as if she had typed it. Null for taps that are not Seth Ji's. */
 function fromButton(id) {
-  const m = /^bhao:(ok|mine|adv|group|item|addr|cxl):([^:]+)(?::(\w+))?$/.exec(String(id || ""));
+  // "Bhao ka Khel": an answer tap (question index, option index)
+  const qa = /^bhao:qa:([^:]+):(\d):(\d)$/.exec(String(id || ""));
+  if (qa) return { text: `Jawab ${Number(qa[3]) + 1}`, intent: `game_ans:${qa[2]}:${qa[3]}` };
+  const m = /^bhao:(ok|mine|adv|group|item|addr|cxl|game):([^:]+)(?::(\w+))?$/.exec(String(id || ""));
   if (!m) return null;
   const [, kind, a, b] = m;
   switch (kind) {
@@ -104,11 +110,26 @@ function fromButton(id) {
     case "item": return { text: `BHAO ${a}`, intent: "start" };
     // "Aap ko kya keh ke bulaun?" - baji / bhai / kuch aur
     // "Pakka cancel karna hai?" after she gave a reason (live test, 12 Nov)
+    case "game": return b === "yes" ? { text: "Haan, khelenge!", intent: "game_yes" }
+      : b === "no" ? { text: "Nahi, bhao karte hain", intent: "game_no" } : null;
     case "cxl": return b === "yes" ? { text: "Haan, cancel kar dein", intent: "cancel_yes" }
       : b === "no" ? { text: "Nahi, sauda rakhein", intent: "cancel_no" } : null;
     case "addr": return ["baji", "bhai", "other"].includes(b)
       ? { text: b === "other" ? "Kuch aur" : `Mujhe ${b} kahiye`, intent: "address:" + b } : null;
     default: return null;
+  }
+}
+
+/** Seth Ji's words for the game - fixed, so the game is the same for everyone. */
+function gameText(action, state) {
+  const g = action.game || (state && state.game) || {};
+  switch (action.kind) {
+    case "game_offer": return Q.texts.offer(action.pricePaisa);
+    case "game_question": return (action.rightBefore ? Q.texts.right(g) + "\n\n" : "") + Q.texts.question(g);
+    case "game_lost": return Q.texts.lost(action.judged, action.askPaisa);
+    case "game_declined": return Q.texts.declined(action.askPaisa);
+    case "game_remind": return "⏳ Pehle sawal ka jawab - neeche ek button dabayein!\n\n" + Q.texts.question(g);
+    default: return Q.texts.won(action.offer.unitPaisa); // accept, won by the game
   }
 }
 
@@ -448,6 +469,52 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         action = { kind: "aftercare", status: conv.status, offer: conv.accepted_offer, itemCode: conv.item_id,
                    ...(intent === "cancel_no" ? { kept: true } : {}) };
       }
+    } else if (!action && conv.state.game && (
+        (conv.state.game.status === "offered" && (intent === "game_yes" || intent === "game_no")) ||
+        conv.state.game.status === "playing")) {
+      // "Bhao ka Khel" (founder, 14 Nov): 3 questions, 30 s each, all right = her price
+      state = conv.state;
+      let game = { ...state.game };
+      if (game.status === "offered") {
+        if (intent === "game_no") {
+          game.status = "declined";
+          action = { kind: "game_declined", askPaisa: state.askPaisa };
+        } else {
+          const questions = Q.pickGame(`${conv.id}:${now.getTime()}`, env);
+          game = { ...game, status: "playing", idx: 0, questions, results: [] };
+          action = { kind: "game_question", game };
+        }
+      } else {
+        const m = /^game_ans:(\d):(\d)$/.exec(intent || "");
+        const opt = m && Number(m[1]) === game.idx ? Number(m[2]) : (m ? null : Q.typedAnswer(body, game.questions[game.idx].options));
+        if (opt == null) {
+          action = { kind: "game_remind", game };
+        } else {
+          const asked = (await db.query(
+            `SELECT COALESCE(sent_at, send_after) AS at FROM bhao_messages WHERE conversation_id = $1 AND direction = 'out'
+                AND decision->>'kind' = 'game_question' ORDER BY id DESC LIMIT 1`, [conv.id])).rows[0];
+          const j = Q.judge(game, opt, { askedAt: asked && asked.at, now });
+          game.results = [...(game.results || []), { id: game.questions[game.idx].id, cat: game.questions[game.idx].cat, right: j.right, late: j.late }];
+          if (!j.right) {
+            game.status = "lost";
+            action = { kind: "game_lost", judged: j, askPaisa: state.askPaisa };
+          } else if (game.idx + 1 >= Q.QUIZ.questions) {
+            game.status = "won";
+            const w = B.winGame(state, { item, policy: POLICY, pricePaisa: game.pricePaisa, now });
+            state = w.state;
+            const conditions = (state.perks || []).filter((p) => p.conditional).map((p) => p.key);
+            state.accepted = { ...state.accepted, conditions, perks: (state.perks || []).map((p) => p.key) };
+            action = { ...w.action, offer: state.accepted };
+          } else {
+            game.idx += 1;
+            action = { kind: "game_question", game, rightBefore: true };
+          }
+          if (game.status !== "playing")
+            console.log(`[bhao] GAME ${game.status.toUpperCase()} ${phone} ${conv.item_id} at ${game.pricePaisa / 100}: ` +
+              game.results.map((x) => `${x.cat}:${x.right ? "right" : x.late ? "late" : "wrong"}`).join(", "));
+        }
+      }
+      state = { ...state, game };
     } else if (!action && continuing) {
       state = conv.state;
       action = { kind: "talk", askPaisa: Number(state.askPaisa), continuing: true };
@@ -497,6 +564,14 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         if (action.kind === "lowball_check") {
           const n = (state.events || []).filter((e) => e.kind === "lowball_check").length;
           action = { ...action, lowballCount: n, ...(n >= 2 ? { askPaisa: state.askPaisa } : {}) };
+        }
+        // She is locked on a price he can give, and will not move: "Bhao ka
+        // Khel" - 3 questions, all right and that price is hers (founder, 14 Nov)
+        if (action.kind === "counter" && action.held && amount >= B.floorOf(item, state.qty || 1, state, POLICY)
+            && Q.playable(env).length >= Q.QUIZ.questions && await Q.mayOffer(db, { phone, itemId: conv.item_id, state, now })) {
+          state = { ...state, game: { status: "offered", pricePaisa: amount, offeredAt: now.toISOString() } };
+          action = { kind: "game_offer", pricePaisa: amount, askPaisa: state.askPaisa };
+          console.log(`[bhao] ${phone} offered the game at ${amount / 100} on ${conv.item_id}`);
         }
         if (state.accepted) {
           // advance / pickup are CONDITIONS of this price: the team checks them
@@ -586,7 +661,9 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
   // Words, outside the transaction (a model call takes seconds).
   const voiced = V.priceOf(step.action) ?? step.state.askPaisa;
   const competitorFacts = PW.competitorFacts({ latest: step.latest, ourUnitPaisa: voiced, now }).facts;
-  const said = step.action.kind === "abuse_close"
+  const said = GAME_KINDS.has(step.action.kind) || step.action.gameWon
+    ? { text: gameText(step.action, step.state), source: "template", provider: null, rejected: [] }
+    : step.action.kind === "abuse_close"
     ? { text: V.template(step.action, {}), source: "template", provider: null, rejected: [] }
     : await speak({
     decision: step.action, itemName: step.itemRow.name, qty: step.state.qty, offerPaisa: step.offerPaisa,
@@ -616,7 +693,10 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     // A greeting comes at once - a shopkeeper does not make a new customer
     // wait (live test, 10 Nov: a 30 s pause, she asked again, and the
     // waiting greeting was lost). The thinking pause is for prices only.
-    const due = step.action.kind === "open" && !step.carried
+    // the game runs on a clock: its messages go at once
+    const due = GAME_KINDS.has(step.action.kind) || step.action.gameWon
+      ? new Date(now.getTime() + 2000)
+      : step.action.kind === "open" && !step.carried
       ? new Date(now.getTime() + 3000)
       : ["cancel", "aftercare", "guarded"].includes(step.action.kind)
       ? new Date(now.getTime() + (10 + Math.floor(Math.random() * 21)) * 1000) // 10-30 s: no haggling pause now
@@ -627,13 +707,20 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const ask = Number(step.state.askPaisa);
     const buttons = step.uiReady && step.state.status === "open" && Number.isSafeInteger(ask)
       ? priceButtons(step.conversationId, ask, step.state, step.item) : null;
-    const replyUi = step.uiReady && step.action.askAddress
+    const g = step.action.game;
+    const replyUi = step.uiReady && step.action.kind === "game_offer"
+      ? { type: "buttons", text: said.text, buttons: [
+          { id: `bhao:game:${step.conversationId}:yes`, title: "🎯 Haan, khelenge!" },
+          { id: `bhao:game:${step.conversationId}:no`, title: "Nahi, bhao karein" }] }
+      : step.uiReady && g && ["game_question", "game_remind"].includes(step.action.kind)
+      ? { type: "buttons", text: said.text, buttons: g.questions[g.idx].options.map((o, i) => ({ id: `bhao:qa:${step.conversationId}:${g.idx}:${i}`, title: o })) }
+      : step.uiReady && step.action.askAddress
       ? { type: "buttons", text: said.text, buttons: addressButtons(step.conversationId) }
       : step.uiReady && step.action.confirmCancel
       ? { type: "buttons", text: said.text, buttons: [
           { id: `bhao:cxl:${step.conversationId}:no`, title: "Nahi, sauda rakhein" },
           { id: `bhao:cxl:${step.conversationId}:yes`, title: "Haan, cancel karein" }] }
-      : buttons && BUTTON_KINDS.has(step.action.kind) && step.action.kind !== "open"
+      : buttons && (BUTTON_KINDS.has(step.action.kind) || ["game_lost", "game_declined"].includes(step.action.kind)) && step.action.kind !== "open"
       ? { type: "buttons", text: said.text, buttons } : null;
     await db.query(
       `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, provider, rejected, send_after, send_status${replyUi ? ", ui" : ""})
@@ -671,11 +758,11 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
         openPaisa: open && open.askPaisa, unitPaisa: step.state.accepted.unitPaisa, qty: step.state.accepted.qty,
         itemCode: step.itemRow.item_id, title: (await G.titleOf(db, (await db.query(
           `SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label,
-        shareNumber: (env.BHAO_SHARE_NUMBER || "").replace(/\D/g, "") || null,
+        shareNumber: (env.BHAO_SHARE_NUMBER || "").replace(/\D/g, "") || null, gameWon: !!step.action.gameWon,
       });
       const vui = step.uiReady && victory ? { type: "image", image: {
         kind: "victory", itemName: step.itemRow.name, openPaisa: open && open.askPaisa, unitPaisa: step.state.accepted.unitPaisa,
-        qty: step.state.accepted.qty, itemCode: step.itemRow.item_id,
+        qty: step.state.accepted.qty, itemCode: step.itemRow.item_id, gameWon: !!step.action.gameWon,
         title: (await G.titleOf(db, (await db.query(`SELECT phone FROM bhao_conversations WHERE id = $1`, [step.conversationId])).rows[0].phone)).label } } : null;
       if (victory) await db.query(
         `INSERT INTO bhao_messages (conversation_id, direction, body, decision, source, send_after, send_status${vui ? ", ui" : ""})

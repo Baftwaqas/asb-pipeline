@@ -386,3 +386,95 @@ test("live test 14 Nov: the advance rule is told once and explained when she ref
   const again = "Sir, Rs 2,020 hai, yeh daam advance payment ke saath hai, payment delivery se pehle hogi.";
   assert.match(V.checkReply(again, { decision: d, qty: 1, lastSaid: told.map((h) => h.text) }).hard.join(), /whole sentence/);
 });
+
+// ---- "Bhao ka Khel" (founder, 14 Nov) -------------------------------------
+const Q = require("../bhao/quiz");
+const GAMEON = { BHAO_QUIZ_DRAFTS: "on", BHAO_STUBBORN: "off", BHAO_FLOOR_PROTECT: "off" };
+async function lockedAt(p, price) {
+  // open, refuse, refuse, then a counter - then she repeats her price: he holds -> the game
+  await say(p, "BHAO KARAHI", 0, { env: GAMEON });
+  let r;
+  for (const [i, b] of [String(price - 200), String(price - 100), String(price), String(price)].entries())
+    r = await say(p, b, 100 + i * 100, { env: GAMEON });
+  return r;
+}
+const tap = (p, id, sec) => { const t = BW.fromButton(id); return say(p, t.text, sec, { intent: t.intent, env: GAMEON }); };
+async function answer(p, idx, right, sec) {
+  const c = await conv(p);
+  const q = c.state.game.questions[idx];
+  const i = right ? q.options.indexOf(q.answer) : q.options.findIndex((o) => o !== q.answer);
+  await db.query(`UPDATE bhao_messages SET sent_at = $2 WHERE conversation_id = $1 AND decision->>'kind' = 'game_question' AND sent_at IS NULL`, [c.id, at(sec - 5)]);
+  return tap(p, `bhao:qa:${c.id}:${idx}:${i}`, sec);
+}
+
+test("the question bank: 3 options of at most 20 characters each, the answer among them, a mix of all four kinds", () => {
+  const cats = new Set();
+  for (const q of Q.BANK.questions) {
+    assert.equal(q.options.length, 3, q.id);
+    assert.ok(q.options.includes(q.answer), q.id);
+    assert.ok(q.options.every((o) => o.length <= 20), q.id);
+    cats.add(q.cat);
+  }
+  assert.deepEqual([...cats].sort(), ["hisaab", "paheli", "pakistan", "wah"]);
+  assert.equal(Q.playable({}).filter((q) => !q.approved).length, 0, "only approved questions go live");
+  const g = Q.pickGame("x", { BHAO_QUIZ_DRAFTS: "on" });
+  assert.equal(new Set(g.map((q) => q.cat)).size, 3, "three different kinds in one game");
+});
+
+test("locked on a price he can give: Seth Ji offers the game; three right answers win her that price", async () => {
+  const p = phone();
+  const r = await lockedAt(p, 2200);
+  assert.equal(r.kind, "game_offer");
+  const offer = (await outbox(p)).at(-1);
+  assert.deepEqual(offer.ui.buttons.map((b) => b.id.split(":").pop()), ["yes", "no"]);
+  const c0 = await conv(p);
+  assert.equal((await tap(p, `bhao:game:${c0.id}:yes`, 600)).kind, "game_question");
+  const q1 = (await outbox(p)).at(-1);
+  assert.equal(q1.ui.buttons.length, 3);
+  assert.doesNotMatch(JSON.stringify(q1.ui), /"answer"/, "the answer key never leaves the server");
+  await answer(p, 0, true, 610);
+  await answer(p, 1, true, 620);
+  const w = await answer(p, 2, true, 630);
+  assert.equal(w.kind, "accept");
+  const c = await conv(p);
+  assert.equal(c.status, "accepted");
+  assert.equal(c.accepted_offer.unitPaisa, 220000);
+  assert.equal(c.accepted_offer.why, "game_won");
+  assert.match((await outbox(p)).find((o) => o.decision.kind === "victory").body, /Sawal jeete, bhao jeeta/);
+});
+
+test("one wrong (or late) answer: no penalty, the bargain goes on - and no second game on that item this week", async () => {
+  const p = phone();
+  await lockedAt(p, 2200);
+  const c0 = await conv(p);
+  await tap(p, `bhao:game:${c0.id}:yes`, 600);
+  const l = await answer(p, 0, false, 610);
+  assert.equal(l.kind, "game_lost");
+  const c = await conv(p);
+  assert.equal(c.status, "open");
+  assert.equal(c.state.game.status, "lost");
+  assert.equal(await Q.mayOffer(db, { phone: p, itemId: "KARAHI", state: {}, now: at(700) }), false);
+  // late
+  const q = phone();
+  await lockedAt(q, 2200);
+  const d0 = await conv(q);
+  await tap(q, `bhao:game:${d0.id}:yes`, 600);
+  const d = await conv(q);
+  const qq = d.state.game.questions[0];
+  await db.query(`UPDATE bhao_messages SET sent_at = $2 WHERE conversation_id = $1 AND decision->>'kind' = 'game_question'`, [d.id, at(560)]);
+  const late = await tap(q, `bhao:qa:${d.id}:0:${qq.options.indexOf(qq.answer)}`, 600);
+  assert.equal(late.kind, "game_lost", "right but after 30 seconds");
+});
+
+test("no game below his line; 'Nahi' keeps bargaining; the engine itself refuses a win below the line", async () => {
+  const B = require("../bhao/engine");
+  const item = { itemId: "KARAHI", variantGid: "g", bhaoTaoEnabled: true, isGrocery: false, anchorPaisa: 250000, floorPaisa: 150000,
+                 costPaisa: 60000, maxQty: 20, approvedBy: "t", groupTiers: [] };
+  const { state } = B.open({ conversationId: "g", item, qty: 1, policy: { ...BW.POLICY, stubbornRate: 0 }, seed: "g" });
+  assert.throws(() => B.winGame(state, { item, policy: BW.POLICY, pricePaisa: 140000, now: at(0) }), /GAME_PRICE_BELOW_LINE/);
+  const p = phone();
+  await lockedAt(p, 2200);
+  const c0 = await conv(p);
+  assert.equal((await tap(p, `bhao:game:${c0.id}:no`, 600)).kind, "game_declined");
+  assert.equal((await conv(p)).state.game.status, "declined");
+});
