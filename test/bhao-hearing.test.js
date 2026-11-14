@@ -389,7 +389,7 @@ test("live test 14 Nov: the advance rule is told once and explained when she ref
 
 // ---- "Bhao ka Khel" (founder, 14 Nov) -------------------------------------
 const Q = require("../bhao/quiz");
-const GAMEON = { BHAO_QUIZ_DRAFTS: "on", BHAO_STUBBORN: "off", BHAO_FLOOR_PROTECT: "off" };
+const GAMEON = { BHAO_QUIZ_DRAFTS: "on", BHAO_QUIZ_FORCE: "on", BHAO_STUBBORN: "off", BHAO_FLOOR_PROTECT: "off" };
 async function lockedAt(p, price) {
   // open, refuse, refuse, then a counter - then she repeats her price: he holds -> the game
   await say(p, "BHAO KARAHI", 0, { env: GAMEON });
@@ -417,7 +417,8 @@ test("the question bank: 3 options of at most 20 characters each, the answer amo
   }
   assert.deepEqual([...cats].sort(), ["hisaab", "paheli", "pakistan", "wah"]);
   assert.equal(Q.playable({}).filter((q) => !q.approved).length, 0, "only approved questions go live");
-  const g = Q.pickGame("x", { BHAO_QUIZ_DRAFTS: "on" });
+  const g = Q.pickGame("x", { BHAO_QUIZ_DRAFTS: "on", BHAO_QUIZ_FORCE: "on" });
+  assert.equal(Q.playable({ BHAO_QUIZ_DRAFTS: "on" }).length, 0, "retired (founder, 14 Nov): never offered live");
   assert.equal(new Set(g.map((q) => q.cat)).size, 3, "three different kinds in one game");
 });
 

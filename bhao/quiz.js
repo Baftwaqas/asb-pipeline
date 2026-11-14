@@ -19,10 +19,13 @@
 
 const BANK = require("./quiz-bank.json");
 
-const QUIZ = Object.freeze({ questions: 3, answerSeconds: 30, perItemDays: 7, holdsBeforeGame: 1 });
+// Founder, 14 Nov: the quiz felt like "just another questionnaire" - RETIRED.
+// The code stays (tested) in case a new game reuses its parts; it never runs.
+const QUIZ = Object.freeze({ enabled: false, questions: 3, answerSeconds: 30, perItemDays: 7, holdsBeforeGame: 1 });
 
 /** The questions that may be played: approved ones (drafts too when BHAO_QUIZ_DRAFTS=on, test service only). */
 function playable(env = process.env) {
+  if (!QUIZ.enabled && String(env.BHAO_QUIZ_FORCE || "").toLowerCase() !== "on") return [];
   const drafts = String(env.BHAO_QUIZ_DRAFTS || "").toLowerCase() === "on";
   return BANK.questions.filter((q) => q.approved === true || drafts);
 }
