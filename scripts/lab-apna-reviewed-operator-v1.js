@@ -91,7 +91,7 @@ function shopify(){
     clientSecret:process.env.ASB_LAB_APP_CLIENT_SECRET
   });
 }
-async function readGate(db,{requireUninstalled=false}={}){
+async function readGate(db,{requireUninstalled=false,allowClosedForRecovery=false}={}){
   const x=(await db.query(
     "SELECT current_database() AS db,current_setting('server_version_num') AS ver"
   )).rows[0];
@@ -101,8 +101,9 @@ async function readGate(db,{requireUninstalled=false}={}){
     "SELECT status::text,delivery_date::text AS day,opens_at,locks_at,"+
     "clock_timestamp() AS now FROM cycles WHERE code=$1",[CYCLE]
   )).rows[0];
-  need(cycle&&cycle.status==="open"&&cycle.day==="2026-11-16"&&
-    cycle.now>=cycle.opens_at&&cycle.now<cycle.locks_at,
+  need(cycle&&cycle.day==="2026-11-16"&&
+    (allowClosedForRecovery ||
+      (cycle.status==="open"&&cycle.now>=cycle.opens_at&&cycle.now<cycle.locks_at)),
     "REVIEWED_LAB_CUTOFF_CLOSED");
   const orig=(await db.query(
     "SELECT r.shop_domain,r.shopify_order_gid,r.expected_cod_paisa,r.state,"+
@@ -184,7 +185,9 @@ async function main(){
     const client=await pool.connect();
     try{
       await client.query("BEGIN READ ONLY");
-      const gate=await readGate(client);
+      const gate=await readGate(client,{
+        allowClosedForRecovery:mode==="RECOVER_ORDER_1002_READONLY"
+      });
       need(gate.installed===2,"REVIEWED_LAB_SCHEMA_NOT_INSTALLED");
       await client.query("COMMIT");
     }catch(e){try{await client.query("ROLLBACK");}catch{}throw e;
