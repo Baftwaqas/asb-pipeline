@@ -1,0 +1,36 @@
+name: ASB Lab Apna Onion One-Shot Order Guard
+on:
+  push:
+    branches:
+      - feature/apna-lab-orderedit-transport-v1-20261112
+  pull_request:
+    paths:
+      - 'checkout/lab-apna-onion-only-policy-v1.js'
+      - 'checkout/dev-shopify-credentials-v1.js'
+      - 'checkout/lab-bridge-server.js'
+      - 'scripts/lab-apna-onion-order-v1.js'
+      - 'scripts/lab-apna-order-readonly-v1.js'
+      - 'test/adr002-lab-apna-single-onion.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lab-apna-one-shot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Syntax check only
+        run: |
+          node --check checkout/dev-shopify-credentials-v1.js
+          node --check scripts/lab-apna-onion-order-v1.js
+          node --check scripts/lab-apna-order-readonly-v1.js
+          node --check checkout/lab-bridge-server.js
+      - name: Validate Apna-only Onion synthetic order and old auth safeguards
+        run: node --test test/adr002-lab-apna-single-onion.test.js test/adr002-lab-apna-order-readonly.test.js test/adr002-bridge-granted-scopes-readonly.test.js test/adr002-dev-credentials.test.js

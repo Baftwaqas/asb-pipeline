@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "ASB_DEV_CHECKOUT_FIXTURE_V1",
+  "shopDomain": "asb-checkout-lab.myshopify.com",
+  "currency": "PKR",
+  "ianaTimezone": "Asia/Karachi",
+  "createdOn": "2026-11-05",
+  "classification": "DEV_ONLY_SYNTHETIC_NO_REAL_CUSTOMERS_NO_PAYMENTS",
+  "products": [
+    {
+      "door": "apna_order",
+      "canonicalProductId": "ASB-LAB-ONION",
+      "productGid": "gid://shopify/Product/15548928753698",
+      "title": "ASB LAB ONLY — Apna Onion (Test)",
+      "status": "DRAFT",
+      "variants": [
+        {
+          "gid": "gid://shopify/ProductVariant/69644381683746",
+          "sku": "ASB-LAB-ONION-500G",
+          "quantityGrams": 500,
+          "pricePaisa": 4500
+        },
+        {
+          "gid": "gid://shopify/ProductVariant/69644381716514",
+          "sku": "ASB-LAB-ONION-1KG",
+          "quantityGrams": 1000,
+          "pricePaisa": 9000
+        }
+      ]
+    },
+    {
+      "door": "apna_order",
+      "canonicalProductId": "ASB-LAB-GINGER",
+      "productGid": "gid://shopify/Product/15548929015842",
+      "title": "ASB LAB ONLY — Ginger (Test)",
+      "status": "DRAFT",
+      "variants": [
+        {
+          "gid": "gid://shopify/ProductVariant/69644382797858",
+          "sku": "ASB-LAB-GINGER-125G",
+          "quantityGrams": 125,
+          "pricePaisa": 3500
+        },
+        {
+          "gid": "gid://shopify/ProductVariant/69644382830626",
+          "sku": "ASB-LAB-GINGER-250G",
+          "quantityGrams": 250,
+          "pricePaisa": 7000
+        }
+      ]
+    },
+    {
+      "door": "community_order",
+      "canonicalProductId": "ASB-LAB-COM-ONION",
+      "productGid": "gid://shopify/Product/15548929277986",
+      "title": "ASB LAB ONLY — Community Hero Onion (Test)",
+      "status": "DRAFT",
+      "variants": [
+        {
+          "gid": "gid://shopify/ProductVariant/69644384436258",
+          "sku": "ASB-LAB-COM-ONION-5KG",
+          "quantityGrams": 5000,
+          "pricePaisa": 85000
+        },
+        {
+          "gid": "gid://shopify/ProductVariant/69644384469026",
+          "sku": "ASB-LAB-COM-ONION-10KG",
+          "quantityGrams": 10000,
+          "pricePaisa": 150000
+        }
+      ]
+    }
+  ],
+  "constraints": [
+    "Synthetic fixture prices are not mandi, ASB live pricing or founder-approved quantity caps.",
+    "Fixtures are DRAFT and untracked; never publish or fulfill.",
+    "Dish-to-Cart 40g may use a synthetic exact-price Shopify order line with quantity:1 after adapter variant assignment/verification; it is not a Shopify 40g variant.",
+    "Dev shop must be allowlisted and real Shopify orderCreate requires separate durable Postgres claim and signed server quote.",
+    "No production customer details or API tokens appear in fixture."
+  ]
+}

@@ -1,0 +1,47 @@
+name: ASB Amendment PG Reservation (scratch only)
+on:
+  push:
+    branches:
+      - feature/apna-amendment-pg-reservation-v1-20261110
+  pull_request:
+    paths:
+      - 'db/migrations/026_apna_amendment_reservations.sql'
+      - 'db/migrations/HOLD'
+      - 'checkout/apna-amendment-reservation-pg-v1.js'
+      - 'test/adr002-apna-amendment-reservation-pg.test.js'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pg-amendment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54330:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54330
+      PGSSLMODE: disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify migration is held
+        run: grep -Fxq '026_apna_amendment_reservations.sql' db/migrations/HOLD
+      - name: Run amendment preflight and PostgreSQL race tests
+        run: node --test --test-concurrency=1 test/adr002-apna-order-amendment-preflight.test.js test/adr002-apna-amendment-reservation-pg.test.js
