@@ -135,7 +135,7 @@ function victoryText({ openPaisa, unitPaisa, qty = 1, itemCode, title, shareNumb
   const share = `Main ne Seth Ji ko hara diya! 😎 Aap bhi try karein: "BHAO ${itemCode}"`;
   const link = shareNumber ? `\nhttps://wa.me/${shareNumber}?text=${encodeURIComponent("BHAO " + itemCode)}` : "";
   return [
-    gameWon ? "🧠🏆 *Sawal jeete, bhao jeeta!* Bhao ka Khel - teeno sahi!" : "🏆 *Aap ne Seth Ji ko hara diya!*",
+    gameWon ? "🎭🏆 *Case hal, bhao jeeta!* Seth Ji ka Case - waqt ke andar!" : "🏆 *Aap ne Seth Ji ko hara diya!*",
     `Shuru: ${nf(openPaisa)} → Aap ka sauda: ${nf(unitPaisa)}${qty > 1 ? ` × ${qty}` : ""}`,
     `Bachat: ${nf(saved)} (${pct}%)`,
     title ? `Aap ka darja: ${title}` : null,

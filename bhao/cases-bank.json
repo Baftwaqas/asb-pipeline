@@ -1,0 +1,237 @@
+{
+  "version": "CASES-DRAFT-1",
+  "note": "Seth Ji ke Case. The founder approves each case (approved: true) before it is played live. WhatsApp list rows: clue labels and options at most 24 characters. 'answer' is the correct option's text. Medical cases are famous moments from history, told as stories - never advice.",
+  "roles": [
+    { "key": "jasoos",  "emoji": "🕵️", "name": "Jasoos",          "you": "Inspector",       "desc": "Qatl ya chori ka raaz kholein" },
+    { "key": "doctor",  "emoji": "🩺", "name": "Doctor",          "you": "Doctor",          "desc": "Tareekh ka mashhoor tibbi case hal karein" },
+    { "key": "wakeel",  "emoji": "⚖️", "name": "Wakeel",          "you": "Wakeel",          "desc": "Adalat mein jhoot pakrein" },
+    { "key": "captain", "emoji": "🏏", "name": "Cricket Captain", "you": "Kaptaan",         "desc": "Match ka sab se bara faisla" },
+    { "key": "pilot",   "emoji": "✈️", "name": "Pilot",           "you": "Captain",         "desc": "Hawa mein emergency sambhalein" },
+    { "key": "rescue",  "emoji": "🚒", "name": "Rescue Officer",  "you": "Rescue Officer",  "desc": "Jaan bachane ka sahi faisla" },
+    { "key": "banker",  "emoji": "🏦", "name": "Bank Manager",    "you": "Manager",         "desc": "Bank ka fraud pakrein" },
+    { "key": "editor",  "emoji": "📰", "name": "Akhbaar Editor",  "you": "Editor",          "desc": "Sach aur afwah mein farq karein" },
+    { "key": "customs", "emoji": "🛃", "name": "Customs Officer", "you": "Customs Officer", "desc": "Smuggler ko pakrein" },
+    { "key": "curator", "emoji": "🏛️", "name": "Museum Curator",  "you": "Curator",         "desc": "Asli aur naqli pehchanein" }
+  ],
+  "cases": [
+    { "id": "j1", "role": "jasoos", "title": "Haveli ka Raaz",
+      "brief": "Seth Dawood raat 10 baje apne kamre mein mare paye gaye - chai mein zeher tha. Us waqt haveli mein teen log the: bawarchi Rahim, bhatija Kamran aur munshi Aslam. Teeno kehte hain: 'Main kamre ke qareeb bhi nahi gaya.'",
+      "question": "Qatil kaun hai?",
+      "clues": [
+        { "label": "Chai ki pyali", "text": "Chai 9:30 pe Rahim ne banayi, magar tray kamre ke darwaze ke bahar rakh ke chala gaya. Andar koi aur le gaya." },
+        { "label": "Kamran ka bayan", "text": "Kamran 9 se 11 baje tak dost ki shadi mein tha. 50 mehmanon ne usay wahan dekha." },
+        { "label": "Munshi ke joote", "text": "Munshi ke jooton pe laal qaleen ka resha mila - woh qaleen sirf Seth sahab ke kamre mein bichha hai." }
+      ],
+      "options": ["Munshi Aslam", "Bawarchi Rahim", "Bhatija Kamran"], "answer": "Munshi Aslam",
+      "explain": "Kamran shadi mein tha, Rahim ne tray bahar chhori. Munshi ke jooton pe kamre ke qaleen ka resha tha - yaani woh andar gaya tha.", "approved": false },
+
+    { "id": "j2", "role": "jasoos", "title": "Gumshuda Haar",
+      "brief": "Shadi ke ghar se dulhan ka sone ka haar ghaib ho gaya - dopahar 2 se 3 baje ke beech, jab bijli gayi hui thi. Us kamre mein teen log gaye the: darzan Shabana, photographer Bilal aur cousin Hina.",
+      "question": "Haar kis ne churaya?",
+      "clues": [
+        { "label": "Bilal ka camera", "text": "Camera mein 2:05 se 2:55 tak lagataar tasveerein hain - sab bahar lawn ki, baraat ki." },
+        { "label": "Shabana ka bayan", "text": "Shabana: 'Main ne almaari ke sheeshe mein Hina ko haar uthate dekha.' Magar bijli band thi aur us kamre mein khirki nahi." },
+        { "label": "Hina ke haath", "text": "Hina 2 baje se mehndi lagwa rahi thi - dono haath geeli mehndi se bhare the." }
+      ],
+      "options": ["Darzan Shabana", "Photographer Bilal", "Cousin Hina"], "answer": "Darzan Shabana",
+      "explain": "Andhere kamre mein sheeshe mein kuch nahi dikhta - Shabana ne jhoot bola. Bilal lawn mein tha aur Hina ke haath mehndi mein the.", "approved": false },
+
+    { "id": "d1", "role": "doctor", "title": "Jahaz ki Beemari",
+      "brief": "Saal 1747. Aap ek samandari jahaz ke doctor hain. Mahinon se safar jaari hai. Mallahon ke masoorhon se khoon aa raha hai, daant hil rahe hain, purane zakhm phir khul rahe hain. Khane mein sirf sukha gosht aur biscuit hain.",
+      "question": "Mallahon ko kya dein?",
+      "clues": [
+        { "label": "Khane ki fehrist", "text": "Mahinon se jahaz pe koi taza phal ya sabzi nahi aayi." },
+        { "label": "Afsaron ki haalat", "text": "Jin afsaron ke paas apne nimbu rakhe the, woh bilkul theek hain." },
+        { "label": "Doosre jahaz", "text": "Jo jahaz bandargah pe ruk ke taza phal lete hain, un ke mallah chand din mein theek ho jate hain." }
+      ],
+      "options": ["Lemon aur malte", "Samandar ka paani", "Zyada namkeen gosht"], "answer": "Lemon aur malte",
+      "explain": "Yeh scurvy thi - Vitamin C ki kami. Dr James Lind ne 1747 mein yahi tajurba kiya; isay tareekh ke pehle medical tajurbon mein gina jata hai.", "approved": false },
+
+    { "id": "d2", "role": "doctor", "title": "London ka Nalka",
+      "brief": "Saal 1854, London ka Soho mohalla. Das din mein 500 log ulti aur dast se mar gaye. Sab kehte hain 'gandi hawa' se beemari phail rahi hai. Aap Dr John Snow hain aur aap ko shak hai.",
+      "question": "Wabaa kahan se phail rahi hai?",
+      "clues": [
+        { "label": "Mauton ka naqsha", "text": "Zyada tar mautein Broad Street ke ek hi nalke ke ird gird ke gharon mein hui hain." },
+        { "label": "Karkhane ke mazdoor", "text": "Paas ke karkhane ke 70 mazdoor apne kuein ka paani peete hain - un mein ek bhi beemar nahi." },
+        { "label": "Door ki khatoon", "text": "Meelon door rehne wali ek khatoon bhi mar gayi. Usay isi nalke ka paani pasand tha - roz mangwati thi." }
+      ],
+      "options": ["Broad Street ka nalka", "Gandi hawa", "Bazaar ki machli"], "answer": "Broad Street ka nalka",
+      "explain": "Dr Snow ne nalke ka handle utarwa diya aur wabaa ruk gayi. Yeh haiza tha, jo gande paani se phailta hai - yahin se wabaon ki science shuru hui.", "approved": false },
+
+    { "id": "w1", "role": "wakeel", "title": "Chashm-deed Gawah",
+      "brief": "Aap ke muakkil pe ilzaam hai ke us ne raat 11 baje dukaan ka taala tora. Gawah Jameel kehta hai: 'Main ne apni khirki se saaf dekha - chaand ki roshni mein. Yehi aadmi tha.'",
+      "question": "Gawahi mein kya ghalat hai?",
+      "clues": [
+        { "label": "Us raat ka calendar", "text": "Waardaat ki raat amavas thi - aasman pe chaand tha hi nahi." },
+        { "label": "Gali ki batti", "text": "Gali ka bulb do hafte se toota hua hai. Shikayat darj hai." },
+        { "label": "Khirki ka faasla", "text": "Jameel ki khirki dukaan se 80 gaz door hai." }
+      ],
+      "options": ["Us raat chaand nahi tha", "Dukaan khuli hui thi", "Gawah so raha tha"], "answer": "Us raat chaand nahi tha",
+      "explain": "Amavas ki raat 'chaand ki roshni' mein 80 gaz door se chehra pehchanna namumkin hai. Abraham Lincoln ne 1858 mein isi daleel se ek muqadma jeeta tha.", "approved": false },
+
+    { "id": "w2", "role": "wakeel", "title": "Wasiyat ka Kaghaz",
+      "brief": "Adalat mein Seth sahab ki wasiyat pesh hui: tareekh 14 August 1995, sari jaidad naukar ke naam. Beta kehta hai wasiyat naqli hai. Aap bete ke wakeel hain.",
+      "question": "Wasiyat naqli kaise sabit hogi?",
+      "clues": [
+        { "label": "Kaghaz ka nishaan", "text": "Kaghaz pe mill ka watermark hai - aur woh mill 2003 mein khuli thi." },
+        { "label": "Gawah", "text": "Wasiyat ke dono gawah wafaat pa chuke hain - un se poochha nahi ja sakta." },
+        { "label": "Stamp ka ticket", "text": "Stamp paper pe jo ticket laga hai, woh design 2001 mein jaari hua." }
+      ],
+      "options": ["Kaghaz baad ka bana hai", "Dastakhat chhota hai", "Siyahi neeli hai"], "answer": "Kaghaz baad ka bana hai",
+      "explain": "Tareekh 1995 ki, magar kaghaz 2003 ki mill ka aur ticket 2001 ka. Jo kaghaz us waqt bana hi nahi tha, us pe wasiyat kaise likhi gayi?", "approved": false },
+
+    { "id": "c1", "role": "captain", "title": "Aakhri Over",
+      "brief": "Final ka aakhri over. Mukhalif team ko 8 run chahiye. Crease pe Zaheer hai - 70 run bana chuka, poori tarah set. Aap ke paas teen bowler bache hain.",
+      "question": "Gend kis ko dein?",
+      "clues": [
+        { "label": "Zaheer ka record", "text": "Zaheer spinner ko maidan se bahar maarta hai. Magar yorker pe pichle 6 match mein 5 dafa out hua." },
+        { "label": "Maidan ki os", "text": "Bohat os gir rahi hai - spinner ke haath se gend phisal rahi hai." },
+        { "label": "Naseem ka din", "text": "Naye tez bowler Naseem ne aaj 2 over mein 5 no-ball phenki hain." }
+      ],
+      "options": ["Yorker wala Hassan", "Spinner Imad", "Naya tez Naseem"], "answer": "Yorker wala Hassan",
+      "explain": "Os mein spinner bekaar, Naseem no-ball de raha hai. Aur Zaheer ki kamzori yorker hai - Hassan hi sahi faisla.", "approved": false },
+
+    { "id": "c2", "role": "captain", "title": "Toss ka Faisla",
+      "brief": "Semi-final, din-raat ka T20. Aap toss jeet gaye. Aap ki team ka sab se bara hathyar aap ke do spinner hain. Poora stadium aap ke faisle ka muntazir hai.",
+      "question": "Toss jeet ke kya karenge?",
+      "clues": [
+        { "label": "Raat ki os", "text": "Is maidan pe raat ko bohat os girti hai - doosri innings mein gend geeli ho jati hai." },
+        { "label": "Maidan ka record", "text": "Pichle 10 match mein 8 dafa baad mein batting karne wali team jeeti." },
+        { "label": "Aap ke spinner", "text": "Geeli gend spinner se grip nahi hoti. Sukhi gend se yehi dono match palat dete hain." }
+      ],
+      "options": ["Pehle bowling", "Pehle batting", "Barish ka intezar"], "answer": "Pehle bowling",
+      "explain": "Pehle bowling: spinner sukhi gend se bowling karenge, aur os mein hadaf ka taaqub aasan hoga.", "approved": false },
+
+    { "id": "p1", "role": "pilot", "title": "Dono Engine Band",
+      "brief": "January 2009, New York. Udaan bharne ke 2 minute baad parindon ka jhund jahaz se takraya - dono engine band. Jahaz mein 155 log hain. Aap Captain hain aur faisle ke liye chand second hain.",
+      "question": "Jahaz kahan utarenge?",
+      "clues": [
+        { "label": "Bulandi", "text": "Sirf 2,800 foot. Baghair engine ke jahaz chand minute hi hawa mein reh sakta hai." },
+        { "label": "Wapis LaGuardia", "text": "Wapis murhne mein bulandi kam par jayegi - aur raaste mein gunjaan imaratein hain." },
+        { "label": "Teterboro airport", "text": "11 kilometre door. Hisaab kehta hai jahaz wahan tak nahi pohanch sakta." }
+      ],
+      "options": ["Hudson darya pe", "Wapis LaGuardia", "Teterboro airport"], "answer": "Hudson darya pe",
+      "explain": "Captain Sullenberger ne jahaz Hudson darya pe utaar diya - 155 ke 155 log bach gaye. Duniya isay 'Miracle on the Hudson' kehti hai.", "approved": false },
+
+    { "id": "p2", "role": "pilot", "title": "Tel Khatam",
+      "brief": "Saal 1983, Canada. 12,000 metre ki bulandi pe jahaz ka tel khatam ho gaya - tel bharte waqt kilo aur pound ka hisaab ghalat laga tha. Dono engine band, 69 log sawar.",
+      "question": "Jahaz kahan utarenge?",
+      "clues": [
+        { "label": "Winnipeg ka faasla", "text": "Winnipeg airport 120 km door. Hisaab kehta hai jahaz 20 km pehle zameen pe aa jayega." },
+        { "label": "Gimli airbase", "text": "Purana fauji airbase sirf 20 km door hai. Co-pilot wahan kaam kar chuka hai - runway jaanta hai." },
+        { "label": "Jheel", "text": "Jheel ka paani barf jaisa thanda hai - musafiron ko bachana bohat mushkil hoga." }
+      ],
+      "options": ["Purana Gimli airbase", "Winnipeg airport", "Jheel ke paani pe"], "answer": "Purana Gimli airbase",
+      "explain": "Asal waqia: Air Canada ki flight 143. Pilot ne jahaz Gimli ke purane airbase pe utaara aur sab bach gaye - isay 'Gimli Glider' kehte hain.", "approved": false },
+
+    { "id": "r1", "role": "rescue", "title": "Imarat mein Aag",
+      "brief": "Paanch manzila imarat ki teesri manzil pe aag lagi hai. Chauthi manzil pe 6 log phanse hain. Aap ki team pohanch gayi hai aur sab aap ke hukm ke muntazir hain.",
+      "question": "Pehla hukm kya hai?",
+      "clues": [
+        { "label": "Lift", "text": "Aag mein lift kabhi istemal nahi hoti - bijli jate hi beech mein phans jati hai." },
+        { "label": "Seerhiyan", "text": "Seerhiyon mein zehreela dhuan bhar chuka hai - do minute mein insaan behosh ho jata hai." },
+        { "label": "Balcony", "text": "Chauthi manzil ki balcony sarak ki taraf khulti hai - seerhi wali gaari wahan tak pohanchti hai." }
+      ],
+      "options": ["Seerhi wali gaari lagao", "Lift se utaro", "Seerhiyon se bhagao"], "answer": "Seerhi wali gaari lagao",
+      "explain": "Lift phans sakti hai aur seerhiyon mein zehreela dhuan hai. Balcony se seerhi wali gaari hi mehfooz raasta hai.", "approved": false },
+
+    { "id": "r2", "role": "rescue", "title": "Sailaab ka Faisla",
+      "brief": "Sailaab aaya hua hai. Aap ki kashti mein sirf 6 logon ki jagah hai aur teen jagah se madad ki pukaar aa rahi hai: masjid ki chhat pe 20 log, ek kache ghar mein 5 log, aur ek darakht pe ek jawan.",
+      "question": "Kashti pehle kahan jayegi?",
+      "clues": [
+        { "label": "Masjid", "text": "Pakki imarat hai. Paani abhi chhat se 6 foot neeche hai aur wahan khana maujood hai." },
+        { "label": "Kacha ghar", "text": "Deewaron mein dararein par chuki hain - ghante bhar mein gir sakta hai. Andar 2 bachay aur ek buzurg hain." },
+        { "label": "Darakht", "text": "Mazboot darakht hai aur jawan ne khud ko rassi se baandh rakha hai." }
+      ],
+      "options": ["Kacha ghar (5 log)", "Masjid ki chhat (20)", "Darakht wala jawan"], "answer": "Kacha ghar (5 log)",
+      "explain": "Masjid aur darakht wale abhi mehfooz hain. Kacha ghar girne wala hai aur us mein bachay aur buzurg hain - sab se pehle wahi.", "approved": false },
+
+    { "id": "b1", "role": "banker", "title": "Tijori ki Chori",
+      "brief": "Raat ko bank ki tijori se 50 lakh ghaib ho gaye. Taala toota nahi - tijori chaabi se kholi gayi. Chaabi sirf teen logon ke paas hoti hai: cashier Tariq, guard Nawaz aur assistant Sana.",
+      "question": "Chor kaun hai?",
+      "clues": [
+        { "label": "CCTV", "text": "Raat 1:10 pe camera 4 minute ke liye band hua. Us ka switch guard room mein hai." },
+        { "label": "Tariq", "text": "Tariq ek hafte se Lahore mein chhutti pe hai - ticket aur hotel ka record maujood." },
+        { "label": "Sana ki chaabi", "text": "Sana ki chaabi kal shaam se locker mein jama hai - register mein dastakhat hain." }
+      ],
+      "options": ["Guard Nawaz", "Cashier Tariq", "Assistant Sana"], "answer": "Guard Nawaz",
+      "explain": "Tariq Lahore mein tha, Sana ki chaabi jama thi. Camera guard room se band hua - aur wahan sirf Nawaz tha.", "approved": false },
+
+    { "id": "b2", "role": "banker", "title": "ATM ka Daawa",
+      "brief": "Ek sahab aap ke paas aaye: 'Mera ATM card kal raat 9 baje Karachi mein chori hua aur chor ne 9:30 pe 50,000 nikal liye. Mujhe paise wapis chahiye.'",
+      "question": "Aap ka faisla kya hai?",
+      "clues": [
+        { "label": "ATM ka record", "text": "9:30 pe paise Lahore ke ek ATM se nikle - Karachi se nahi." },
+        { "label": "PIN", "text": "Pehli hi koshish mein sahi PIN laga." },
+        { "label": "Phone ka record", "text": "Un sahab ka apna mobile 9:30 pe Lahore ke tower pe tha." }
+      ],
+      "options": ["Daawa jhoota hai", "Asli chori - paise dein", "ATM machine ki kharabi"], "answer": "Daawa jhoota hai",
+      "explain": "9 baje Karachi mein chori hua card 9:30 pe Lahore nahi pohanch sakta. PIN pehli dafa sahi laga aur un ka apna phone bhi Lahore mein tha.", "approved": false },
+
+    { "id": "e1", "role": "editor", "title": "Viral Tasveer",
+      "brief": "WhatsApp pe ek tasveer viral hai: 'Aaj Karachi mein barf bari!' Aap ka reporter kehta hai fauran chhaap dein - sab se pehle hamari khabar hogi. Aap Editor hain.",
+      "question": "Sach kya hai?",
+      "clues": [
+        { "label": "Aaj ka mausam", "text": "Aaj Karachi ka darja hararat 31 degree hai." },
+        { "label": "Tasveer ki talaash", "text": "Yehi tasveer 2016 mein bhi internet pe maujood hai - Murree ke naam se." },
+        { "label": "Dukaan ka board", "text": "Tasveer mein ek dukaan ke board pe 'Mall Road, Murree' likha hai." }
+      ],
+      "options": ["Purani Murree ki tasveer", "Asli - Karachi mein barf", "Computer se bani hai"], "answer": "Purani Murree ki tasveer",
+      "explain": "31 degree mein barf nahi parti. Tasveer 2016 ki hai aur board pe Murree likha hai - purani tasveer ko naya naam de diya gaya.", "approved": false },
+
+    { "id": "e2", "role": "editor", "title": "Zalzale ki Afwah",
+      "brief": "Raat 9 baje ek message har group mein ghoom raha hai: 'NASA ne kaha hai aaj raat 12 baje Karachi mein zalzala aayega - sab log bahar soyein.' Log ghabra ke daftar phone kar rahe hain.",
+      "question": "Akhbaar kya karega?",
+      "clues": [
+        { "label": "Science", "text": "Duniya ka koi idara zalzale ka din aur waqt pehle se nahi bata sakta." },
+        { "label": "NASA ki website", "text": "NASA ne aisa koi bayan jaari nahi kiya." },
+        { "label": "Message ki tareekh", "text": "Yehi message 2019, 2021 aur 2023 mein bhi ghoom chuka hai." }
+      ],
+      "options": ["Afwah hai - tardeed dein", "Chhaap dein, ehtiyaatan", "Sirf radio pe batayein"], "answer": "Afwah hai - tardeed dein",
+      "explain": "Zalzale ka waqt koi nahi bata sakta, NASA ne kuch nahi kaha, aur yehi message barson se ghoom raha hai. Akhbaar ka kaam afwah rokna hai.", "approved": false },
+
+    { "id": "u1", "role": "customs", "title": "Teen Musafir",
+      "brief": "Airport pe khufia ittila aayi hai: aaj ki flight se ek musafir sona chhupa ke la raha hai. Shak teen logon pe hai: taajir Rafiq, talib-e-ilm Usman, aur wheelchair pe Mrs. Khan.",
+      "question": "Sona kis ke paas hai?",
+      "clues": [
+        { "label": "Rafiq ka bag", "text": "Rafiq ke chhote se bag ka wazan 14 kilo nikla - kapron ka bag itna bhari nahi hota." },
+        { "label": "Usman ka bag", "text": "Scanner mein sirf kitabein aur ek laptop nazar aaya." },
+        { "label": "Wheelchair", "text": "Wheelchair airline ki apni hai - musafir ke saath nahi aayi." }
+      ],
+      "options": ["Taajir Rafiq", "Talib-e-ilm Usman", "Mrs. Khan"], "answer": "Taajir Rafiq",
+      "explain": "Usman ke bag mein sirf kitabein thin aur wheelchair airline ki thi. Chhote bag ka 14 kilo wazan - sona bohat bhari hota hai.", "approved": false },
+
+    { "id": "u2", "role": "customs", "title": "Kelon ka Container",
+      "brief": "Bandargah pe ek container aaya. Kaghzaat mein likha hai: 'Ecuador se kele - 20 din ka safar.' Maalik jaldi mein hai aur kehta hai maal kharab ho jayega, fauran chhor dein.",
+      "question": "Aap ka hukm kya hai?",
+      "clues": [
+        { "label": "Darja hararat", "text": "Container ka fridge band hai, andar 35 degree. Kele is garmi mein 20 din nahi chal sakte." },
+        { "label": "Wazan", "text": "Kaghzaat mein 18 ton likha hai - kaante pe 26 ton nikla." },
+        { "label": "Sniffer kutta", "text": "Customs ka kutta container ke pichle hisse ke paas baith gaya - yeh us ka ishara hai." }
+      ],
+      "options": ["Kholo - kuch aur hai", "Kele hain, jaane do", "Pehle fridge theek karao"], "answer": "Kholo - kuch aur hai",
+      "explain": "Fridge band, wazan 8 ton zyada aur kutte ka ishara - andar kele nahi, kuch aur chhupa hai.", "approved": false },
+
+    { "id": "m1", "role": "curator", "title": "Mughal Sikka",
+      "brief": "Ek sahab museum mein 'Akbar badshah ke daur ka chandi ka sikka' bechne aaye hain. Qeemat 20 lakh maang rahe hain. Aap Curator hain - faisla aap ka hai.",
+      "question": "Sikka asli hai ya naqli?",
+      "clues": [
+        { "label": "Sikke pe san", "text": "Sikke pe '1580' angrezi hindson mein likha hai. Mughal sikkon pe Hijri san Farsi mein hota tha." },
+        { "label": "Kinara", "text": "Kinare pe machine ke barabar daane hain - yeh tareeqa sadiyon baad aaya." },
+        { "label": "Wazan", "text": "Asli Mughal rupay se 3 gram halka hai." }
+      ],
+      "options": ["Naqli hai", "Asli hai", "Asli magar ghisa hua"], "answer": "Naqli hai",
+      "explain": "Angrezi hindse, machine wala kinara aur kam wazan - teeno nishaniyan batati hain ke sikka baad mein banaya gaya.", "approved": false },
+
+    { "id": "m2", "role": "curator", "title": "Darbar ki Tasveer",
+      "brief": "Ek painting museum ko pesh ki gayi: 'Mughal darbar ka manzar - san 1650 mein bani.' Bechne wala 1 crore maang raha hai aur kehta hai aaj hi faisla karein.",
+      "question": "Painting ke baare mein sach kya hai?",
+      "clues": [
+        { "label": "Rang ka test", "text": "Lab ne bataya: neela rang 'Prussian blue' hai - yeh rang 1704 mein ijaad hua." },
+        { "label": "Tasveer ka manzar", "text": "Ek darbari ki kalai pe ghari bandhi hai. Kalai ki ghari 1650 mein nahi hoti thi." },
+        { "label": "Frame", "text": "Frame ki lakri nayi hai - magar frame toh baad mein badla bhi ja sakta hai." }
+      ],
+      "options": ["Naqli - baad ki bani", "Asli - 1650 ki", "Asli, sirf frame naya"], "answer": "Naqli - baad ki bani",
+      "explain": "Jo rang 1704 mein bana aur jo ghari sadiyon baad aayi, woh 1650 ki tasveer mein nahi ho sakte. Naya frame toh sirf bahana tha.", "approved": false }
+  ]
+}

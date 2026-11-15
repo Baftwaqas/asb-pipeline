@@ -31,6 +31,17 @@ async function onInbound(db, { phone, text, wamid, tap = null, wa = null }) {
   try {
     if (!(await ready(client))) return { handled: false, reason: "migration 025 not applied" };
     const r = await BW.onInbound(client, { phone, text, wamid, now: new Date(), intent });
+    // "Seth Ji ke Case": the game's messages go out at once, in order - a
+    // 90-second clock cannot wait for the 10-second send sweep
+    if (r.out && r.out.length) {
+      const send = (wa || sender.wa || require("../whatsapp"));
+      for (const m of r.out) {
+        const res = await sendOut(send, phone, m).catch(() => ({ ok: false }));
+        if (sender.logOutbound) await sender.logOutbound({ phone, body: m.body, agent: "seth-ji", wamid: res && res.wamid, ok: !!(res && res.ok), payload: { bhao_case: r.kind } }).catch(() => {});
+        if (!(res && res.ok)) console.error(`[bhao] ${phone} case message failed to send (${m.type})`);
+      }
+    }
+    if (r.instant && sender.wa) await sweep(client, sender.wa, sender.logOutbound).catch((e) => console.error("[bhao] instant send failed:", e.message));
     if (r.menu) {
       const send = (wa || require("../whatsapp"));
       const res = await send.sendList(phone, {
@@ -50,22 +61,36 @@ async function onInbound(db, { phone, text, wamid, tap = null, wa = null }) {
   }
 }
 
+const sender = { wa: null, logOutbound: null };
+/** One game message: a list, buttons, or plain text (also the fallback). */
+async function sendOut(send, phone, m) {
+  let res = null;
+  if (m.type === "list" && send.sendList) res = await send.sendList(phone, { body: m.body, buttonText: m.buttonText, sections: m.sections });
+  else if (m.type === "buttons" && send.sendButtons) res = await send.sendButtons(phone, { body: m.body, buttons: m.buttons });
+  if (res && res.ok) return res;
+  return send.sendText(phone, m.body);
+}
+async function sweep(client, wa, logOutbound) {
+  return BW.sendDue(client, {
+    sendText: (to, body) => wa.sendText(to, body),
+    sendButtons: wa.sendButtons ? (to, m) => wa.sendButtons(to, m) : null,
+    sendImage: wa.sendImage ? (to, id, cap) => wa.sendImage(to, id, cap) : null,
+    uploadMedia: wa.uploadMedia ? (buf, mime, name) => wa.uploadMedia(buf, mime, name) : null,
+    logOutbound: logOutbound || (async () => {}),
+  });
+}
+
 let timer = null;
 /** Every 10 s, send Seth Ji's replies whose pause has passed. */
 function start(db, wa, logOutbound) {
   if (!enabled() || timer) return;
+  sender.wa = wa; sender.logOutbound = logOutbound;
   const tick = async () => {
     const client = await db.pool.connect().catch(() => null);
     if (!client) return;
     try {
       if (!(await ready(client))) return;
-      const r = await BW.sendDue(client, {
-        sendText: (to, body) => wa.sendText(to, body),
-        sendButtons: wa.sendButtons ? (to, m) => wa.sendButtons(to, m) : null,
-        sendImage: wa.sendImage ? (to, id, cap) => wa.sendImage(to, id, cap) : null,
-        uploadMedia: wa.uploadMedia ? (buf, mime, name) => wa.uploadMedia(buf, mime, name) : null,
-        logOutbound,
-      });
+      const r = await sweep(client, wa, logOutbound);
       if (r.sent || r.failed) console.log(`[bhao] sent ${r.sent}, failed ${r.failed}`);
     } catch (e) {
       console.error("[bhao] send sweep failed:", e.message);
@@ -78,4 +103,4 @@ function start(db, wa, logOutbound) {
   console.log("[bhao] Bhao Tao on WhatsApp is ON (BHAO_TAO_WHATSAPP=on)");
 }
 
-module.exports = { enabled, onInbound, start };
+module.exports = { enabled, onInbound, start, sendOut };

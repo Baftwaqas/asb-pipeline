@@ -310,7 +310,7 @@ function offer(prev, { item, policy, pricePaisa, qty = prev.qty, now }) {
 }
 
 /**
- * "Earn your bhao" (founder, 14 Nov): she won Seth Ji's 3-question game at
+ * "Earn your bhao" (founder, 15 Nov): she solved Seth Ji's case in time, at
  * her locked price. The deal is hers - but never below this bargain's own
  * line, never above his ask, and only while the bargain is open.
  */

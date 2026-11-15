@@ -315,7 +315,17 @@ async function sendButtons(toPhone, { body, buttons, headerImageId = null, foote
 // sendList — a menu of up to 10 rows behind one button ("Cheezein dekhein").
 //   rows: [{ id, title, description? }]  title at most 24, description 72
 // ---------------------------------------------------------------------------
-async function sendList(toPhone, { body, buttonText, rows, header = null, footer = null, sectionTitle = "Cheezein" }) {
+//   sections: [{ title, rows }] instead of rows, for a list in parts (10 rows in all)
+async function sendList(toPhone, { body, buttonText, rows = [], header = null, footer = null, sectionTitle = "Cheezein", sections = null }) {
+  const row = (r) => ({
+    id: String(r.id).slice(0, 200), title: String(r.title).slice(0, 24),
+    ...(r.description ? { description: String(r.description).slice(0, 72) } : {}),
+  });
+  let room = 10;
+  const parts = (sections || [{ title: sectionTitle, rows }]).map((sec) => {
+    const rs = sec.rows.slice(0, room).map(row); room -= rs.length;
+    return { title: String(sec.title).slice(0, 24), rows: rs };
+  }).filter((sec) => sec.rows.length);
   return postMessage({
     messaging_product: "whatsapp",
     to: toPhone,
@@ -327,10 +337,7 @@ async function sendList(toPhone, { body, buttonText, rows, header = null, footer
       ...(footer ? { footer: { text: String(footer).slice(0, 60) } } : {}),
       action: {
         button: String(buttonText).slice(0, 20),
-        sections: [{ title: String(sectionTitle).slice(0, 24), rows: rows.slice(0, 10).map((r) => ({
-          id: String(r.id).slice(0, 200), title: String(r.title).slice(0, 24),
-          ...(r.description ? { description: String(r.description).slice(0, 72) } : {}),
-        })) }],
+        sections: parts,
       },
     },
   });
