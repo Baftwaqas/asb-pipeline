@@ -94,4 +94,9 @@ test("backup-backed lab schema install is atomic, idempotent, and leaves all sim
   const noSim=(await pool.query("SELECT COUNT(*)::int AS n FROM schema_migrations"+
     " WHERE filename ~ '^02[678]_'")).rows[0];
   assert.equal(noSim.n,0);
+  // After cutoff, new schema/auth/commits are blocked, but recovery of an
+  // already durable commit intent must remain possible.
+  await pool.query("UPDATE cycles SET locks_at=clock_timestamp()-interval '1 minute' WHERE code=$1",[CYCLE]);
+  await assert.rejects(()=>readGate(pool),/REVIEWED_LAB_CUTOFF_CLOSED/);
+  assert.equal((await readGate(pool,{allowClosedForRecovery:true})).installed,2);
 });
