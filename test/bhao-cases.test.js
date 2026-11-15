@@ -49,17 +49,23 @@ before(async () => {
 });
 after(async () => { if (db) await db.end(); });
 
-test("the case bank: 10 roles, 2 cases each, WhatsApp-sized labels, the answer among the options; nothing is live until approved", () => {
+test("the case bank: 10 roles, 2 cases each, four answers and a clue for each (founder, 15 Nov), all fitting one WhatsApp message; nothing is live until approved", () => {
   assert.equal(C.BANK.roles.length, 10);
   for (const r of C.BANK.roles) {
     assert.ok(`${r.emoji} ${r.name}`.length <= 24 && r.desc.length <= 72, r.key);
     assert.ok(C.BANK.cases.filter((c) => c.role === r.key).length >= 2, r.key);
   }
   for (const c of C.BANK.cases) {
-    assert.equal(c.clues.length, 3, c.id);
-    assert.ok(c.options.includes(c.answer) && new Set(c.options).size === 3, c.id);
-    assert.ok([...c.options, ...c.clues.map((k) => k.label)].every((x) => x.length <= 24), c.id);
-    assert.ok((c.brief + c.question + c.title).length < 800, c.id);
+    assert.equal(c.options.length, 4, c.id);
+    assert.equal(c.clues.length, 4, c.id + ": one clue per answer - the right one too");
+    assert.ok(c.options.includes(c.answer) && new Set(c.options).size === 4, c.id);
+    assert.ok(c.clues.every((k) => k.label.length <= 24), c.id);
+    // the whole case - story, question, all four answers - fits one list message (1,024 characters)
+    const r = C.ROLE[c.role];
+    const body = `${r.emoji} *Aap hain: ${r.you}*\n📁 Case: *${c.title}*\n\n${c.brief}\n\n❓ *${c.question}*\n` +
+      c.options.map((o) => `*A.* ${o}`).join("\n") + "\n\n⏱️ Baqi: 90 second";
+    assert.ok(body.length <= 1024, c.id + " " + body.length);
+    for (const k of c.clues) assert.ok(`🔍 *${k.label}*\n${k.text}`.length + body.length - c.brief.length - 60 <= 1024, c.id + " clue");
   }
   assert.equal(C.playable({}).length, C.BANK.cases.filter((c) => c.approved).length);
   assert.equal(C.playable({ BHAO_CASE_DRAFTS: "on" }).length, 20);
@@ -105,12 +111,14 @@ test("a case: story with clues and verdicts in one list; a clue costs 20; a righ
   const pl = await play(p);
   assert.equal(pl.role, "jasoos");
   assert.match(b.out[0].body, /Aap hain: Inspector[\s\S]*Baqi: 90 second/);
-  assert.deepEqual(b.out[0].sections.map((s) => s.rows.length), [3, 3]);
+  assert.deepEqual(b.out[0].sections.map((s) => s.rows.length), [4, 4]);
+  assert.match(b.out[0].body, /\*A\.\* [\s\S]*\*D\.\* /, "all four answers written out");
+  assert.deepEqual(b.out[0].sections[1].rows.map((x) => x.title), ["Jawab A", "Jawab B", "Jawab C", "Jawab D"]);
   assert.doesNotMatch(JSON.stringify(b.out), /"answer"|explain/, "the key never leaves the server");
   const clue = await tap(p, `bhao:case:${pl.id}:c1`, 30);
   assert.equal(clue.kind, "case_clue");
   assert.match(clue.out[0].body, /Baqi: 70 second/);
-  assert.deepEqual(clue.out[0].sections.map((s) => s.rows.length), [2, 3], "an opened clue leaves the list");
+  assert.deepEqual(clue.out[0].sections.map((s) => s.rows.length), [3, 4], "an opened clue leaves the list");
   const w = await verdict(p, true, 50);
   assert.equal(w.kind, "case_won");
   assert.match(w.out[0].body, /\+130 points/, "100 + 50 left - 20");
@@ -133,7 +141,7 @@ test("the clock: a verdict after 90 seconds is 'waqt khatam' with no points; a w
   await tap(p, `bhao:role:${C.CASE[first].role}:0`, 205);
   assert.notEqual((await play(p)).case_id, first);
   const wrong = await verdict(p, false, 220);
-  assert.match(wrong.out[0].body, /Ghalat/);
+  assert.match(wrong.out[0].body, /sab se sahi jawab nahi tha[\s\S]*Sahi jawab: \*[A-D]\.\*/);
   assert.equal((await play(p)).points, 0);
   const stale = await tap(p, `bhao:case:${(await play(p)).id}:v0`, 230);
   assert.equal(stale.kind, "case_stale");
@@ -214,7 +222,7 @@ test("a case lost in a bargain: no penalty, the bargain goes on, and no second c
   await tap(p, rowsOf(yes.out[0])[0].id, 605);
   const l = await verdict(p, false, 630);
   assert.equal(l.kind, "game_lost");
-  assert.match(l.out[0].body, /Ghalat/);
+  assert.match(l.out[0].body, /sab se sahi jawab nahi tha/);
   const c = await conv(p);
   assert.equal(c.status, "open");
   assert.equal(c.state.game.status, "lost");
@@ -235,4 +243,15 @@ test("game messages go out at once: a list with its parts, falling back to plain
   await RT.sendOut(send, "92300", { type: "list", body: "Hello", buttonText: "x", sections: [{ title: "a", rows: [] }, { title: "b", rows: [] }] });
   await RT.sendOut(send, "92300", { type: "buttons", body: "Hi", buttons: [{ id: "a", title: "A" }] });
   assert.deepEqual(calls, [["list", 2], ["text", "Hello"], ["buttons", 1]]);
+});
+
+test("a typed letter is a verdict too: 'B' or 'jawab b'", async () => {
+  const p = phone();
+  await settled(p);
+  const m = await say(p, "CASE", 0);
+  await tap(p, rowsOf(m.out[0])[5].id, 5);
+  const pl = await play(p);
+  const letter = ["A", "B", "C", "D"][pl.options.indexOf(C.CASE[pl.case_id].answer)];
+  const w = await say(p, "jawab " + letter.toLowerCase(), 40);
+  assert.equal(w.kind, "case_won");
 });

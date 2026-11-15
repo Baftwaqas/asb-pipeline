@@ -6,6 +6,11 @@
 // 90 seconds to solve one case: read the story, open clues if she wants
 // (each costs points), give her verdict. All on WhatsApp, in one list.
 //
+// The cases are REASONING cases in the style of GMAT critical reasoning
+// (founder, 15 Nov: "each answer seems correct but only one is the most
+// correct"): four answers, A to D, written out in the message; each clue is
+// one more fact about one of the answers - the right one included.
+//
 //   * In a bargain: when she is locked on a price Seth Ji can give, he offers
 //     a case. Solve it in time and that price is hers (engine.winGame - never
 //     below this bargain's line). Fail: no penalty, the bargain goes on.
@@ -140,6 +145,7 @@ async function setSociety(db, phone, text) {
 }
 
 // ---- the game --------------------------------------------------------------
+const LETTERS = ["A", "B", "C", "D", "E"];
 const secondsLeft = (play, now) => Math.max(0, GAME.seconds - Math.floor((now - new Date(play.started_at)) / 1000));
 const isLate = (play, now) => now - new Date(play.started_at) > (GAME.seconds + GAME.graceSeconds) * 1000;
 
@@ -151,9 +157,11 @@ function stepMsg(play, now, lead) {
     .filter((_, i) => !used.has(i));
   const sections = [
     ...(clueRows.length ? [{ title: "🔍 Suraagh", rows: clueRows }] : []),
-    { title: "⚖️ Aap ka faisla", rows: play.options.map((o, i) => ({ id: `bhao:case:${play.id}:v${i}`, title: o })) },
+    { title: "⚖️ Aap ka faisla", rows: play.options.map((o, i) => ({ id: `bhao:case:${play.id}:v${i}`, title: `Jawab ${LETTERS[i]}`, description: o })) },
   ];
-  return { type: "list", body: `${lead}\n\n❓ *${c.question}*\n⏱️ Baqi: ${secondsLeft(play, now)} second`, buttonText: "Suraagh ya Faisla", sections };
+  // the answers are written out in full: every one of them is meant to look right
+  const answers = play.options.map((o, i) => `*${LETTERS[i]}.* ${o}`).join("\n");
+  return { type: "list", body: `${lead}\n\n❓ *${c.question}*\n${answers}\n\n⏱️ Baqi: ${secondsLeft(play, now)} second`, buttonText: "Suraagh ya Faisla", sections };
 }
 
 async function roleMenu(db, { phone, convId = 0, env }) {
@@ -161,7 +169,8 @@ async function roleMenu(db, { phone, convId = 0, env }) {
   if (!left.length) return [{ type: "text", body: "👏 Aap sab case hal kar chuke! Naye case jald aa rahe hain - Seth Ji likh rahe hain." }];
   const keys = new Set(left.map((c) => c.role));
   return [{ type: "list",
-    body: `🎭 *Seth Ji ke Case*\nAaj kaun banenge? Role chunein - case milte hi *${GAME.seconds} second* ki ghari shuru!\n\nJitna tez hal karein, utne zyada points. Har suraagh kholne pe -${GAME.perClue} point.`,
+    body: `🎭 *Seth Ji ke Case*\nAaj kaun banenge? Role chunein - case milte hi *${GAME.seconds} second* ki ghari shuru!\n\n` +
+      `Hoshiyar: har jawab sahi lagega - magar sab se sahi sirf ek hai. Jitna tez hal karein, utne zyada points; har suraagh kholne pe -${GAME.perClue} point.`,
     buttonText: "Role chunein",
     sections: [{ title: "Role", rows: BANK.roles.filter((r) => keys.has(r.key))
       .map((r) => ({ id: `bhao:role:${r.key}:${convId || 0}`, title: `${r.emoji} ${r.name}`, description: r.desc })) }] }];
@@ -208,7 +217,7 @@ async function finish(db, play, { result, now }) {
   const clues = (play.clues_used || []).length;
   const head = result === "won"
     ? `✅ *Sahi jawab, ${r.you}!* ${c.explain}\n\n⏱️ ${p.seconds} second, ${clues} suraagh → *+${points} points* 🎉`
-    : `${result === "timeout" ? "⏰ *Waqt khatam!*" : "❌ *Ghalat!*"} Sahi jawab: *${c.answer}*.\n${c.explain}`;
+    : `${result === "timeout" ? "⏰ *Waqt khatam!*" : "❌ *Yeh sab se sahi jawab nahi tha.*"} Sahi jawab: *${LETTERS[play.options.indexOf(c.answer)]}.* ${c.answer}\n\n${c.explain}`;
   const soc = result !== "won" ? ""
     : pl.society_verified && pl.society_name ? `\n🏘️ Points *${pl.society_name}* ke khate mein jurh gaye.`
     : pl.society_text ? `\n🏘️ Points mehfooz hain - *${pl.society_name || pl.society_text}* ki tasdeeq hote hi society ke khate mein jurh jayenge.`
@@ -295,11 +304,12 @@ async function route(db, { phone, body, intent = null, now, env = process.env })
     const m = /^case:(\d+):([cv])(\d)$/.exec(intent || "");
     let kind = null, idx = null;
     if (m && Number(m[1]) === Number(play.id)) { kind = m[2]; idx = Number(m[3]); }
-    else if (!m) { // typed verdict: the answer's own words
-      const i = play.options.findIndex((o) => norm(o) === norm(text));
+    else if (!m) { // typed verdict: its letter, or the answer's own words
+      const letter = /^\s*(?:jawab\s*)?([a-e])\s*[.!]*\s*$/i.exec(text);
+      const i = letter ? LETTERS.indexOf(letter[1].toUpperCase()) : play.options.findIndex((o) => norm(o) === norm(text));
       if (i >= 0) { kind = "v"; idx = i; }
     }
-    if (kind === "v" && idx < play.options.length)
+    if (kind === "v" && idx >= 0 && idx < play.options.length)
       return finish(db, play, { result: play.options[idx] === c.answer ? "won" : "lost", now });
     if (kind === "c" && idx < c.clues.length) {
       const used = [...new Set([...(play.clues_used || []), idx])];
