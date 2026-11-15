@@ -1,6 +1,6 @@
 {
-  "version": "CASES-DRAFT-3",
-  "note": "Seth Ji ke Case - reasoning cases (founder, 15 Nov): four answers that all look right, one that survives careful thought. Written in the everyday Roman Urdu Pakistanis type on WhatsApp, with the English words they really use (clue, test, report, logic) - no bookish Urdu. Each clue is a fact about one answer (clue i belongs to option i). The founder approves each case (approved: true) before it is played live. 'answer' is the correct option's text. Medical and aviation cases are famous moments from history, told as stories - never advice.",
+  "version": "CASES-DRAFT-4",
+  "note": "Seth Ji ke Case - reasoning cases (founder, 15 Nov): four answers that all look right, one that survives careful thought, in everyday Pakistani Roman Urdu. The CLUES are red herrings (founder, 15 Nov: 'overwhelming, so the player makes a mistake'): three pull hard toward wrong answers, one quiet clue helps. Clues never change the logic - a careful thinker still has exactly one most-correct answer. After the verdict, 'Jaal' names the trap. The founder approves each case (approved: true) before it is played live. Medical and aviation cases are famous moments from history, told as stories - never advice.",
   "roles": [
     {
       "key": "jasoos",
@@ -75,7 +75,7 @@
   ],
   "cases": [
     {
-      "id": "j1v3",
+      "id": "j1v4",
       "role": "jasoos",
       "title": "Tala Nahi Toota",
       "brief": "Jeweller ki shop se raat ko zewar chori ho gaye. Tala nahi toota. Sub-inspector kehta hai: 'Tala bilkul theek hai, matlab chor shop ka apna staff hai - chabi sirf 3 staff walon ke paas hoti hai.'",
@@ -89,27 +89,27 @@
       "answer": "Pichle mahine tala lagane wale mistri ne ek extra chabi apne paas rakh li thi.",
       "clues": [
         {
-          "label": "Tale wala mistri",
-          "text": "Mistri ne maan liya ke us ne ek extra chabi banayi thi. Woh shop ka staff nahi hai."
+          "label": "Lie-detector test",
+          "text": "Teeno staff walon ka lie-detector test hua - teeno ke results bilkul saaf aaye."
         },
         {
-          "label": "Staff ka record",
-          "text": "Saaf record achi baat hai, lekin is se yeh pata nahi chalta ke chabi aur kis ke paas ho sakti thi."
+          "label": "Imran ka qarz",
+          "text": "Staff ke Imran pe 8 lakh ka qarz tha. Chori ke agle hi din us ne poora qarz utaar diya."
         },
         {
-          "label": "Alarm",
-          "text": "Alarm kharab hone se sirf yeh pata chalta hai ke ghanti kyun nahi baji. Tala kaise khula, yeh nahi."
+          "label": "Alarm ki shikayat",
+          "text": "Alarm ek hafte se kharab tha, lekin kisi ne repair ki shikayat nahi ki. Owner kehta hai: 'Yeh staff ka hi kaam hai.'"
         },
         {
-          "label": "Zewar ki qeemat",
-          "text": "Itna mehnga maal toh staff ke liye lalach ban sakta hai. Is se staff pe shak aur barhta hai, kam nahi hota."
+          "label": "Tale ka bill",
+          "text": "Pichle mahine shop ka tala badla gaya tha. Mistri ka bill: Rs 3,500, kaam 2 din chala."
         }
       ],
-      "explain": "Inspector ki poori baat is pe khari thi ke chabi sirf staff ke paas hai. Extra chabi wali baat yeh buniyad hi khatam kar deti hai. Saaf record sirf achi image hai, aur alarm ka tale se koi taalluq nahi.",
+      "explain": "Inspector ki poori baat is pe khari thi ke chabi sirf staff ke paas hai. Extra chabi wali baat yeh buniyad hi khatam kar deti hai. Saaf record sirf achi image hai, aur alarm ka tale se koi taalluq nahi.\n\n🪤 *Jaal:* Imran ka qarz aur lie-detector sirf shak ya bharosa barhate hain - chabi kis ke paas thi, yeh sawal hal nahi karte.",
       "approved": false
     },
     {
-      "id": "j2v3",
+      "id": "j2v4",
       "role": "jasoos",
       "title": "Dulhan ka Haar",
       "brief": "Shadi wale ghar se dulhan ka haar gayab hai. Kamre mein sirf 3 log gaye the aur haar in hi mein se ek ne liya. Police ko pakka pata hai ke teeno mein se sirf EK sach bol raha hai.\nShabana: 'Haar Bilal ne liya.'\nBilal: 'Main ne nahi liya.'\nHina: 'Main ne nahi liya.'",
@@ -123,27 +123,27 @@
       "answer": "Hina ne",
       "clues": [
         {
-          "label": "Agar Hina ne liya",
-          "text": "Tab Shabana jhooti, Bilal sacha, aur Hina jhooti. Yani sirf ek banda sach bol raha hai."
+          "label": "Bilal ki jeb",
+          "text": "Bilal ki jeb se dulhan ki chooriyon ka khali dabba mila. Woh kehta hai dabba farsh pe gira para tha."
         },
         {
-          "label": "Agar Bilal ne liya",
-          "text": "Tab Shabana sachi, aur Hina bhi sachi (us ne waqai nahi liya). Yani do log sach bol rahe hain."
+          "label": "Shabana ka maazi",
+          "text": "Shabana ko pichle saal ek ghar se chori ke shak mein kaam se nikala gaya tha."
         },
         {
-          "label": "Agar Shabana ne liya",
-          "text": "Tab Bilal sacha aur Hina bhi sachi. Yani do log sach bol rahe hain."
+          "label": "Hina ke aansu",
+          "text": "Hina dulhan ki sab se pyari cousin hai. Shadi ki saari tayyari usi ne ki, aur sab se zyada woh hi ro rahi hai."
         },
         {
-          "label": "Kya maloomat kam hai",
-          "text": "Teeno ko bari bari chor maan ke dekhein. Shart yeh hai ke sach sirf ek bole - yeh shart sirf ek hi soorat mein poori hoti hai."
+          "label": "Shadi ki video",
+          "text": "Kamre ka ek hi darwaza hai. Shadi ki video mein teeno bari bari andar jate dikh rahe hain."
         }
       ],
-      "explain": "Bilal chor ho toh Shabana aur Hina dono sach bolte hain. Shabana chor ho toh Bilal aur Hina dono sach bolte hain. Sirf Hina chor ho toh akela Bilal sach bolta hai - aur shart yehi thi ke sach sirf ek bol raha hai.",
+      "explain": "Bilal chor ho toh Shabana aur Hina dono sach bolte hain. Shabana chor ho toh Bilal aur Hina dono sach bolte hain. Sirf Hina chor ho toh akela Bilal sach bolta hai - aur shart yehi thi ke sach sirf ek bol raha hai.\n\n🪤 *Jaal:* Chooriyon ka dabba, Shabana ka maazi aur Hina ke aansu - teeno sirf dhyan bhatkane ke liye the. Jawab sirf logic se nikalta hai.",
       "approved": false
     },
     {
-      "id": "d1v3",
+      "id": "d1v4",
       "role": "doctor",
       "title": "Jahaz ki Bimari",
       "brief": "Saal 1747. Lambe samandari safar mein jahaz ke staff ke masooron se khoon aa raha hai aur zakhm theek nahi ho rahe. Jahaz ke doctor James Lind ko lagta hai: 'Yeh bimari taza phal na milne se hoti hai.'",
@@ -157,27 +157,27 @@
       "answer": "Jin 2 mareezon ko roz malte diye gaye woh theek ho gaye; baqi wohi khana kha ke bimar rahe.",
       "clues": [
         {
-          "label": "Malton wala test",
-          "text": "Sab mareez ek hi jagah the aur ek hi khana kha rahe the. Farq sirf itna tha ke 2 ko roz malte mile - aur sirf wohi theek hue."
+          "label": "Afsaron ki sehat",
+          "text": "Afsaron ke khane mein roz taza phal aur sabzi hoti thi - aur 6 mahine mein ek bhi afsar bimar nahi hua."
         },
         {
-          "label": "Afsaron ki life",
-          "text": "Afsaron ko taza gosht, sukha bistar aur kam kaam bhi milta hai. Farq kis cheez se para, yeh pata nahi chalta."
+          "label": "Port ka record",
+          "text": "Pichle 3 safar mein jahaz jab bhi port pe ruka, 10 din ke andar 90% mareez theek ho gaye."
         },
         {
-          "label": "Port pe kya milta hai",
-          "text": "Port pe aaram, saaf paani aur taza khana - sab ek saath milta hai. Theek kis cheez ne kiya?"
+          "label": "Chhote safar",
+          "text": "Jo jahaz sirf 2 hafte ka safar karte hain, un mein yeh bimari aaj tak ek dafa bhi nahi hui."
         },
         {
-          "label": "Lamba safar",
-          "text": "Lambe safar mein thakan, nami aur purana paani - bohat kuch badal jata hai, sirf phal nahi."
+          "label": "Test ki list",
+          "text": "Test mein 12 mareez the. Har 2 ko alag cheez di gayi: sirka, samandari paani, jau ka paani... aur 2 ko malte."
         }
       ],
-      "explain": "Sirf malton wale test mein baqi sab kuch same tha aur ek hi cheez badli. Afsar, port aur lamba safar - teeno mein kai cheezein ek saath badalti hain, is liye wajah pakki nahi hoti. Yeh duniya ke pehle mashhoor medical test mein se ek mana jata hai.",
+      "explain": "Sirf malton wale test mein baqi sab kuch same tha aur ek hi cheez badli. Afsar, port aur lamba safar - teeno mein kai cheezein ek saath badalti hain, is liye wajah pakki nahi hoti. Yeh duniya ke pehle mashhoor medical test mein se ek mana jata hai.\n\n🪤 *Jaal:* Afsaron, port aur chhote safar wale clue bohat strong lagte hain, lekin har ek mein kai cheezein ek saath badal rahi thin.",
       "approved": false
     },
     {
-      "id": "d2v3",
+      "id": "d2v4",
       "role": "doctor",
       "title": "London ka Nalka",
       "brief": "Saal 1854, London ka ek mohalla. Haize (cholera) se saikron log mar gaye. Sarkari doctor: 'Bimari gandi hawa se phailti hai - dekho, maut badbu wale mohallon mein hi ho rahi hai.' Dr John Snow ko shak hai ke wajah paani hai.",
@@ -191,27 +191,27 @@
       "answer": "Usi badbu wali gali ki factory ke 70 mazdoor, jo apne kuein ka paani peete hain, sab theek hain.",
       "clues": [
         {
-          "label": "Factory ke mazdoor",
-          "text": "Mazdoor sara din wohi hawa lete hain jo poori gali leti hai. Farq sirf un ke paani ka hai."
+          "label": "Maut ka naqsha",
+          "text": "500 mein se 400 maut Broad Street ke nalke ke 200 gaz ke andar hui."
         },
         {
-          "label": "Maut kahan hui",
-          "text": "Nalke ke paas rehne wale wohi badbu wali hawa bhi lete hain. Yeh baat hawa aur paani, dono theory se match karti hai."
+          "label": "Saaf ilaqe",
+          "text": "Jahan gutter band hain aur badbu nahi, wahan poore saal haize ka sirf ek case hua."
         },
         {
-          "label": "Ameer ilaqe",
-          "text": "Kam badbu, kam maut - yeh toh 'gandi hawa' wali theory ke haq mein jata hai."
+          "label": "Paani ki report",
+          "text": "Nalke ka paani check hua - rang, khushbu aur taste, teeno bilkul theek."
         },
         {
-          "label": "Paani ki shakal",
-          "text": "Saaf nazar aane wala paani logon ka shak paani se hata deta hai. Hawa wali theory ko is se koi nuqsan nahi."
+          "label": "Factory ka register",
+          "text": "Factory ke mazdooron ko roz muft beer milti thi, aur factory ke andar apna kuan hai."
         }
       ],
-      "explain": "Mazdoor wohi hawa lete the lekin paani alag peete the - aur bach gaye. Nalke ke qareeb maut hawa se bhi samjhayi ja sakti hai, is liye woh hawa wali theory ko galat sabit nahi karti. Dr Snow ne nalka band karwaya aur bimari ruk gayi.",
+      "explain": "Mazdoor wohi hawa lete the lekin paani alag peete the - aur bach gaye. Nalke ke qareeb maut hawa se bhi samjhayi ja sakti hai, is liye woh hawa wali theory ko galat sabit nahi karti. Dr Snow ne nalka band karwaya aur bimari ruk gayi.\n\n🪤 *Jaal:* Naqsha nalke ki taraf ishara karta hai, lekin badbu bhi wahi thi - is liye woh hawa wali theory ko galat sabit nahi karta.",
       "approved": false
     },
     {
-      "id": "w1v3",
+      "id": "w1v4",
       "role": "wakeel",
       "title": "Gawah ki Gawahi",
       "brief": "Gawah: 'Main ne raat 11 baje mulzim ko dukaan se nikalte dekha.' Sarkari wakeel: 'Gawah ki mulzim se koi dushmani nahi, usay jhoot bolne ka koi faida nahi. Is liye us ki gawahi bilkul sahi hai.' Aap mulzim ke wakeel hain.",
@@ -225,27 +225,27 @@
       "answer": "Dushmani na ho toh banda jhoot nahi bolta - lekin pehchanne mein galti phir bhi ho sakti hai.",
       "clues": [
         {
-          "label": "Sach aur sahi ka farq",
-          "text": "Imandaar gawah bhi galti kar sakta hai: raat ka time, door se dekha, sirf chand second ki jhalak."
+          "label": "Gawah ka record",
+          "text": "Gawah school teacher hai, 20 saal mein kabhi kisi case mein nahi aaya. Poora mohalla us ki imandari ki qasam khata hai."
         },
         {
-          "label": "Ek gawah ka qanoon",
-          "text": "Qanoon mein ek bharose wale gawah ki gawahi bhi kaafi ho sakti hai. Yeh wakeel ki logic ki galti nahi."
+          "label": "Mulzim ki biwi",
+          "text": "Mulzim ki biwi kehti hai woh raat 10 baje se ghar pe so raha tha."
         },
         {
-          "label": "Mulzim ka bayan",
-          "text": "Mulzim ka inkaar ek alag baat hai. Is se yeh pata nahi chalta ke wakeel ki logic mein galti kahan hai."
+          "label": "Purane faisle",
+          "text": "Purane faislon mein likha hai: 'Ek gawah pe saza dene se pehle adalat ko bohat ehtiyaat karni chahiye.'"
         },
         {
-          "label": "Wakeel ke sawal",
-          "text": "Sawal kam poochhna ek kami ho sakti hai, lekin yeh us ki logic ki galti nahi. Logic mein is se bari galti maujood hai."
+          "label": "Khirki ka faasla",
+          "text": "Gawah ki khirki dukaan se 60 gaz door hai. Us raat bahar ki street light jal rahi thi."
         }
       ],
-      "explain": "Wakeel ne 'jhoot nahi bol raha' ko 'galti nahi kar raha' samajh liya. Imandaar aadmi bhi andhere mein kisi aur ko mulzim samajh sakta hai. Baqi teeno baatein wakeel ki logic ko touch hi nahi kartin.",
+      "explain": "Wakeel ne 'jhoot nahi bol raha' ko 'galti nahi kar raha' samajh liya. Imandaar aadmi bhi andhere mein kisi aur ko mulzim samajh sakta hai. Baqi teeno baatein wakeel ki logic ko touch hi nahi kartin.\n\n🪤 *Jaal:* Gawah jitna imandaar dikhaya gaya, utna hi asal galti chhupti gayi: imandaar aadmi bhi 60 gaz door se galat pehchan sakta hai.",
       "approved": false
     },
     {
-      "id": "w2v3",
+      "id": "w2v4",
       "role": "wakeel",
       "title": "Wasiyat ka Kaghaz",
       "brief": "Wasiyat pe date 14 August 1995 likhi hai; sari jaidad naukar ke naam. Lab ki report: kaghaz us mill ka hai jo 2003 mein khuli; ink 1990 se market mein hai; signature Seth sahab ke asli signature se milta hai.",
@@ -259,27 +259,27 @@
       "answer": "Yeh kaghaz 14 August 1995 ko likha hi nahi ja sakta tha.",
       "clues": [
         {
-          "label": "Kaghaz ki mill",
-          "text": "Mill ka record: pehla kaghaz March 2003 mein bana. Us se pehle yeh kaghaz duniya mein tha hi nahi."
+          "label": "Naukar ka naya ghar",
+          "text": "Seth sahab ki wafaat se ek mahina pehle naukar ne Rs 2 crore ka naya ghar book karwaya."
         },
         {
           "label": "Signature expert",
-          "text": "Expert kehta hai signature asli bhi ho sakta hai - ho sakta hai Seth sahab se baad mein karwaya gaya ho."
+          "text": "Expert: 'Signature mein haath halka sa kaanpta hua lagta hai - jaise kisi ne dhyan se copy kiya ho.'"
         },
         {
-          "label": "Kis ne likhi",
-          "text": "Lab yeh nahi bata sakti ke kaghaz kis ne tayyar kiya. Faida kis ko hai - yeh saboot nahi hota."
+          "label": "Purani recording",
+          "text": "Bete ke paas Seth sahab ki 2010 ki recording hai: 'Meri jaidad mere bachon ki hai.'"
         },
         {
-          "label": "Seth sahab ki marzi",
-          "text": "Seth sahab zindagi mein naukar ki tareef karte the. Un ki marzi ka report se kuch pata nahi chalta."
+          "label": "Mill ki website",
+          "text": "Mill ki website: 'Hum 2003 se Pakistan ko kaghaz de rahe hain.'"
         }
       ],
-      "explain": "Report se sirf itna pakka hai ke date galat hai - 1995 mein yeh kaghaz bana hi nahi tha. Signature asli ho sakta hai aur likhne wala koi bhi ho sakta hai. Baqi teeno jawab report se aage ki baat karte hain.",
+      "explain": "Report se sirf itna pakka hai ke date galat hai - 1995 mein yeh kaghaz bana hi nahi tha. Signature asli ho sakta hai aur likhne wala koi bhi ho sakta hai. Baqi teeno jawab report se aage ki baat karte hain.\n\n🪤 *Jaal:* Naukar ka ghar, kaanpta signature aur purani recording - sab shak barhate hain, lekin 100% pakka sirf date ka galat hona hai.",
       "approved": false
     },
     {
-      "id": "c1v3",
+      "id": "c1v4",
       "role": "captain",
       "title": "Aakhri Over",
       "brief": "Final ka aakhri over. Doosri team ko 8 run chahiye aur crease pe Zaheer hai. Coach ka mashwara: 'Ball spinner Imad ko do. Aaj us ne 3 over mein sirf 12 run diye - woh hamara sab se acha bowler raha.'",
@@ -293,27 +293,27 @@
       "answer": "Imad ke teeno over tab hue jab Zaheer crease pe nahi tha - aur Zaheer spin ko bohat maarta hai.",
       "clues": [
         {
-          "label": "Imad ke over",
-          "text": "Scorecard: Imad ne teeno over doosre batsmen ko kiye. Spin ke khilaf Zaheer ka strike rate 190 hai."
+          "label": "Commentators",
+          "text": "Commentators keh rahe hain: 'Final ka aakhri over hai - jo bhi bowl karega, us ke haath kaanpenge.'"
         },
         {
-          "label": "Pressure",
-          "text": "Pressure har bowler pe hoga - Imad pe bhi, kisi aur pe bhi. Is se yeh faisla nahi hota ke ball kis ko deni hai."
-        },
-        {
-          "label": "Hassan ka din",
-          "text": "Hassan acha khela, lekin is se coach ki '12 run' wali baat galat sabit nahi hoti."
+          "label": "Hassan ki form",
+          "text": "Hassan ne aaj 2 wicket li hain aur pichle 5 match ke aakhri over mein ek bhi chhakka nahi khaya."
         },
         {
           "label": "Imad ki umar",
-          "text": "Umar kam hone se bowling kharab nahi hoti. Aaj ke 3 over is ka saboot hain."
+          "text": "Imad sirf 19 saal ka hai aur yeh us ka pehla final hai."
+        },
+        {
+          "label": "Aaj ka scorecard",
+          "text": "Imad: 3 over, 12 run, 1 wicket. Zaheer: 70 run, 41 ball, 4 chhakke."
         }
       ],
-      "explain": "Coach ki baat '12 run' pe khari hai. Lekin woh run doosre batsmen ke khilaf the, Zaheer ke nahi - aur Zaheer spin ko maarta hai. Yani coach ka saboot aaj ke aakhri over pe fit hi nahi hota.",
+      "explain": "Coach ki baat '12 run' pe khari hai. Lekin woh run doosre batsmen ke khilaf the, Zaheer ke nahi - aur Zaheer spin ko maarta hai. Yani coach ka saboot aaj ke aakhri over pe fit hi nahi hota.\n\n🪤 *Jaal:* Hassan ki form aur Imad ki umar dilchasp hain, lekin coach ki baat '12 run' pe thi - aur woh run Zaheer ke khilaf the hi nahi.",
       "approved": false
     },
     {
-      "id": "c2v3",
+      "id": "c2v4",
       "role": "captain",
       "title": "Toss ka Faisla",
       "brief": "Semi-final ka toss aap jeet gaye. Vice captain: 'Is ground pe pichle 10 match mein 8 dafa baad mein batting karne wali team jeeti hai. Is liye hum pehle bowling karenge toh hamare jeetne ka chance zyada hai.'",
@@ -327,27 +327,27 @@
       "answer": "Woh 8 teamein baad mein batting ki wajah se jeetin - waise hi zyada achi teamein nahi thin.",
       "clues": [
         {
-          "label": "Un 8 match ki teamein",
-          "text": "Un 8 mein se 6 match mein baad mein batting karne wali team ranking mein bhi kaafi upar thi."
+          "label": "Mausam ki report",
+          "text": "Mausam ka mehkma: aaj raat 9 baje ke baad ground pe bohat os giregi."
         },
         {
-          "label": "Aaj ka mausam",
-          "text": "Vice captain ne os ka naam hi nahi liya. Us ki baat sirf pichle 10 match ke record pe khari hai."
-        },
-        {
-          "label": "Hamari team",
-          "text": "Us ki baat hamari team pe nahi, ground ke record pe khari hai. Yeh maane baghair bhi us ki baat wohi rehti hai."
+          "label": "Hamare bowler",
+          "text": "Hamari team ke 3 bowler world ranking ke top 20 mein hain; batsman sirf ek."
         },
         {
           "label": "Doosri team",
-          "text": "Doosri team ke mizaj ka us ki baat se koi taalluq nahi - record mein har tarah ki teamein hain."
+          "text": "Doosri team ne is saal 5 dafa bara score chase kiya aur 4 dafa haari."
+        },
+        {
+          "label": "Purane 10 match",
+          "text": "Is ground ke pichle 10 match ki list: kuch badi teamein, kuch chhoti teamein."
         }
       ],
-      "explain": "Record tabhi kaam ka hai jab jeetne ki wajah 'baad mein batting' ho. Agar woh teamein waise hi behtar thin toh record se kuch pata nahi chalta. Os ek wajah ho sakti hai, lekin vice captain ki baat us pe khari nahi.",
+      "explain": "Record tabhi kaam ka hai jab jeetne ki wajah 'baad mein batting' ho. Agar woh teamein waise hi behtar thin toh record se kuch pata nahi chalta. Os ek wajah ho sakti hai, lekin vice captain ki baat us pe khari nahi.\n\n🪤 *Jaal:* Os, hamari bowling aur doosri team ka record - teeno pehle bowling ke haq mein lagte hain, lekin vice captain ki baat in pe khari hi nahi thi.",
       "approved": false
     },
     {
-      "id": "p1v3",
+      "id": "p1v4",
       "role": "pilot",
       "title": "Darya ya Runway",
       "brief": "January 2009: takeoff ke 2 minute baad parinde takraye aur dono engine band ho gaye. Captain ne jahaz Hudson darya pe utaar diya; 155 log bach gaye. Baad mein inquiry committee ne kaha: 'Captain ka faisla galat tha - simulator mein pilot wapis airport pohanch gaye the.'",
@@ -361,27 +361,27 @@
       "answer": "Simulator ke pilot ko pehle se pata tha kya hoga; asal mein situation samajhne mein 35 second lage.",
       "clues": [
         {
-          "label": "Simulator ka tareeqa",
-          "text": "Simulator mein pilot ne takkar hote hi jahaz mor liya, kyunke usay pehle bata diya gaya tha. Jab 35 second ka delay dala gaya toh har dafa jahaz airport se pehle gir gaya."
+          "label": "Darya ka paani",
+          "text": "Us din Hudson ka paani 2 degree tha. Is paani mein 10 minute mein insaan behosh ho jata hai."
         },
         {
-          "label": "Darya ka khatra",
-          "text": "Darya ka khatra toh committee ki baat ko aur pakka karta hai ke airport behtar hota."
+          "label": "Passengers",
+          "text": "Jahaz mein 155 log the, jin mein ek bacha sirf 9 mahine ka tha."
         },
         {
-          "label": "155 log",
-          "text": "Zyada log hon toh sahi faisla aur zaroori ho jata hai - lekin is se yeh pata nahi chalta ke sahi faisla kaunsa tha."
+          "label": "Captain ki file",
+          "text": "Captain 40 saal se jahaz chala raha tha aur glider pilot bhi tha - kabhi koi accident nahi kiya."
         },
         {
-          "label": "Captain ka experience",
-          "text": "Experience wala pilot bhi galti kar sakta hai. Committee ne experience pe nahi, simulator ke result pe baat ki hai."
+          "label": "Simulator ka test",
+          "text": "Simulator mein 20 dafa test hua. Pilot ne har dafa takkar ke foran baad jahaz mor diya."
         }
       ],
-      "explain": "Committee ki poori baat simulator pe khari hai - aur simulator asal situation jaisa nahi tha. Jab us mein insaan ke sochne ke 35 second dale gaye toh jahaz airport nahi pohanch saka. Yeh asli waqia hai: 'Miracle on the Hudson'.",
+      "explain": "Committee ki poori baat simulator pe khari hai - aur simulator asal situation jaisa nahi tha. Jab us mein insaan ke sochne ke 35 second dale gaye toh jahaz airport nahi pohanch saka. Yeh asli waqia hai: 'Miracle on the Hudson'.\n\n🪤 *Jaal:* Thanda paani aur 155 log jazbaati clue hain, aur captain ka experience bharosa dilata hai - lekin committee ki baat sirf simulator pe thi.",
       "approved": false
     },
     {
-      "id": "p2v3",
+      "id": "p2v4",
       "role": "pilot",
       "title": "Fuel Khatam",
       "brief": "1983: ek jahaz ka fuel beech hawa mein khatam ho gaya. Fuel ka meter kharab tha, is liye staff ne haath se hisaab lagaya - aur litre ko kilo ki jagah pound se multiply kar diya. Airline: 'Galti sirf staff ki hai; hisaab unhon ne galat kiya.'",
@@ -395,27 +395,27 @@
       "answer": "Airline ne usi mahine pound ki jagah kilo ka system shuru kiya aur staff ko training nahi di.",
       "clues": [
         {
-          "label": "Naya system",
-          "text": "Yeh airline ka pehla jahaz tha jo kilo pe chalta tha. Staff ko naye hisaab ki koi training nahi mili thi."
-        },
-        {
-          "label": "Hisaab kis ne kiya",
-          "text": "Do log hon ya ek - dono staff ke hi log the. Is se galti staff se bahar nahi jati."
+          "label": "Do signature",
+          "text": "Fuel ka hisaab do logon ne mil ke lagaya, aur dono ne us pe apne signature kiye."
         },
         {
           "label": "Safe landing",
-          "text": "Landing ka kamaal baad ki baat hai. Is se yeh tay nahi hota ke fuel ki galti kis ki thi."
+          "text": "Pilot ne bina engine ke 69 logon ko safe utaara - sab ne us ki tareef ki."
         },
         {
-          "label": "Pilot ka check",
-          "text": "Pilot ne check kiya aur phir bhi galti reh gayi - yeh toh staff ki galti ko aur pakka karta hai."
+          "label": "Pilot ka OK",
+          "text": "Pilot ne khud bhi hisaab dobara dekha aur form pe 'OK' likh diya."
+        },
+        {
+          "label": "Jahaz ka model",
+          "text": "Yeh airline ka bilkul naya jahaz tha - sirf 3 mahine purana."
         }
       ],
-      "explain": "Agar airline ne system badla aur training nahi di, toh galti 'sirf staff ki' nahi rehti - airline ki bhi hai. Baqi teeno baatein galti ko staff se bahar nahi le jatin. Yeh asli waqia hai: 'Gimli Glider', sab log bach gaye.",
+      "explain": "Agar airline ne system badla aur training nahi di, toh galti 'sirf staff ki' nahi rehti - airline ki bhi hai. Baqi teeno baatein galti ko staff se bahar nahi le jatin. Yeh asli waqia hai: 'Gimli Glider', sab log bach gaye.\n\n🪤 *Jaal:* Do signature aur pilot ka OK galti ko staff pe hi pakka karte lagte hain - asal sawal yeh tha ke naya system diya, training kyun nahi di.",
       "approved": false
     },
     {
-      "id": "r1v3",
+      "id": "r1v4",
       "role": "rescue",
       "title": "Building mein Aag",
       "brief": "5 manzil ki building ki teesri manzil pe aag lagi hai; chauthi manzil pe 6 log phanse hain. Naya officer: 'Sab ko foran seerhiyon se neeche bhejo. Seerhiyan pakki hain aur aag abhi wahan nahi pohanchi - yeh sab se safe raasta hai.'",
@@ -429,27 +429,27 @@
       "answer": "Aag mein zyada log dhuein se marte hain, aur dhuan seerhiyon se hi upar charhta hai.",
       "clues": [
         {
-          "label": "Dhuan",
-          "text": "Garam dhuan seerhiyon ko chimney ki tarah use karta hai. Do-teen saans mein banda behosh ho sakta hai."
+          "label": "Seerhi ki chaurai",
+          "text": "Seerhi sirf 3 feet chauri hai aur us mein 2 jagah mor hain."
         },
         {
-          "label": "Tang seerhiyan",
-          "text": "Tang seerhi se log ek ek kar ke, thori der se utrenge. Yeh der hai, jaan ka khatra nahi."
+          "label": "82 saal ke buzurg",
+          "text": "Phanse logon mein 82 saal ke ek buzurg hain jo walker ke baghair nahi chal sakte."
         },
         {
-          "label": "Buzurg",
-          "text": "Buzurg ko sahara de ke utaara ja sakta hai. Is se raasta safe ya unsafe nahi hota."
+          "label": "Lift ka button",
+          "text": "Lift ka button abhi bhi jal raha hai aur lift chauthi manzil pe khari hai."
         },
         {
-          "label": "Lift",
-          "text": "Aag mein lift waise bhi use nahi hoti. Order seerhiyon ka hai, lift ka nahi."
+          "label": "Teesri manzil",
+          "text": "Teesri manzil ke flat ka darwaza khula hai. Ab tak aag sirf ek flat mein hai."
         }
       ],
-      "explain": "Officer ne sirf aag ko khatra samjha. Asal qatil dhuan hai, aur woh seerhiyon mein hi bharta hai - 'aag wahan nahi pohanchi' ka matlab 'safe' nahi. Tang seerhi aur buzurg sirf speed kam karte hain.",
+      "explain": "Officer ne sirf aag ko khatra samjha. Asal qatil dhuan hai, aur woh seerhiyon mein hi bharta hai - 'aag wahan nahi pohanchi' ka matlab 'safe' nahi. Tang seerhi aur buzurg sirf speed kam karte hain.\n\n🪤 *Jaal:* Tang seerhi, buzurg aur chalti lift - sab dhyan kheenchte hain. Khula darwaza yaad rakhna tha: dhuan wahin se seerhiyon mein jata hai.",
       "approved": false
     },
     {
-      "id": "r2v3",
+      "id": "r2v4",
       "role": "rescue",
       "title": "Sailaab ka Faisla",
       "brief": "Sailaab mein aap ki boat mein 6 logon ki jagah hai. Masjid ki pakki chhat pe 20 log hain (paani abhi 6 foot neeche hai). Ek kache ghar mein 5 log hain (deewaron mein dararein par gayi hain). Ek darakht pe ek jawan larka hai (rassi se bandha hua). Aap ne boat pehle kache ghar bheji.",
@@ -463,27 +463,27 @@
       "answer": "Pehle un ko bachao jin ki jaan ko sab se jaldi khatra hai.",
       "clues": [
         {
-          "label": "Time ka hisaab",
-          "text": "Engineer ka andaza: kacha ghar ek ghante mein gir sakta hai. Masjid aur darakht kal tak safe hain."
+          "label": "Masjid pe log",
+          "text": "Masjid ki chhat pe 20 log hain - kache ghar se 4 guna zyada."
         },
         {
-          "label": "Logon ki ginti",
-          "text": "Sab se zyada log masjid pe hain. Is rule pe chalte toh boat masjid jati, kache ghar nahi."
+          "label": "Kache ghar mein",
+          "text": "Kache ghar mein 2 bachay aur ek 80 saal ki amma hain."
         },
         {
-          "label": "Bachay aur buzurg",
-          "text": "Masjid ki chhat pe bhi 7 bachay aur kai buzurg hain. Is rule se kacha ghar masjid se pehle nahi aata."
+          "label": "Darakht wala larka",
+          "text": "Darakht wala larka madad ke liye chilla raha hai aur us ki maa kinare pe ro rahi hai."
         },
         {
-          "label": "Raasta",
-          "text": "Sab se qareeb darakht wala larka hai. Is rule pe chalte toh boat pehle wahan jati."
+          "label": "Engineer ki baat",
+          "text": "Engineer ne kache ghar ki deewaron ki photo dekh ke kaha: 'Dararein taza hain aur barh rahi hain.'"
         }
       ],
-      "explain": "Faisla 'kis ko sab se pehle khatra hai' pe tha: kacha ghar girne wala hai, baqi dono abhi safe hain. Ginti wala rule boat ko masjid bhejta aur aasani wala rule darakht pe - sirf 'sab se jaldi khatra' wala rule is faisle pe fit hota hai.",
+      "explain": "Faisla 'kis ko sab se pehle khatra hai' pe tha: kacha ghar girne wala hai, baqi dono abhi safe hain. Ginti wala rule boat ko masjid bhejta aur aasani wala rule darakht pe - sirf 'sab se jaldi khatra' wala rule is faisle pe fit hota hai.\n\n🪤 *Jaal:* Bachay aur amma wala clue sab se zyada kheenchta hai - lekin masjid pe bhi bachay aur buzurg the. Faisla sirf 'kaun pehle doobega' se samajh aata hai.",
       "approved": false
     },
     {
-      "id": "b1v3",
+      "id": "b1v4",
       "role": "banker",
       "title": "Do Chabiyon ki Tijori",
       "brief": "Bank ki tijori sirf tab khulti hai jab do chabiyan ek saath lagein: ek manager ki, ek cashier ki. Kal raat tijori khuli aur 50 lakh gayab ho gaye; tala nahi toota. Manager: 'Meri chabi poori raat meri jeb mein thi.'",
@@ -497,27 +497,27 @@
       "answer": "Ya toh manager khud tijori pe maujood tha, ya us ki chabi ki duplicate ban chuki hai.",
       "clues": [
         {
-          "label": "Manager ki chabi",
-          "text": "Tijori manager wali chabi ke baghair khul hi nahi sakti. Chabi jeb mein thi - toh ya jeb wala khud wahan tha, ya waisi hi koi doosri chabi lagi."
+          "label": "Chabi wala",
+          "text": "Bazaar ka ek chabi wala kehta hai: 'Aisi tijori ki chabi ki duplicate main 2 ghante mein bana sakta hun.'"
         },
         {
-          "label": "Duplicate ka chance",
-          "text": "Duplicate ek chance hai, pakki baat nahi. Yeh bhi ho sakta hai ke manager khud apni chabi le ke tijori pe gaya ho."
+          "label": "Cashier gayab",
+          "text": "Cashier chori ki raat se phone band kar ke gayab hai."
         },
         {
-          "label": "Cashier ki chabi",
-          "text": "Cashier ki chabi chori bhi ho sakti hai aur us ki duplicate bhi ban sakti hai. Chabi us ke naam hone se woh chor nahi ban jata."
+          "label": "CCTV",
+          "text": "Camera mein raat 2 baje do saaye tijori ki taraf jate dikhe."
         },
         {
-          "label": "Kitne chor",
-          "text": "Do chabiyan chahiye, do aadmi nahi. Ek hi banda dono chabiyan (ya un ki duplicate) laga sakta hai."
+          "label": "Manager ka ghar",
+          "text": "Manager ka ghar bank se sirf 5 minute ki walk pe hai."
         }
       ],
-      "explain": "Tijori ke liye manager wali chabi (ya us ki duplicate) lazmi hai. Asli chabi jeb mein thi - toh ya jeb wala khud wahan tha, ya duplicate bani. 'Duplicate zaroor bani' ek chance ko pakki baat bana deta hai - yehi is sawal ka trap hai.",
+      "explain": "Tijori ke liye manager wali chabi (ya us ki duplicate) lazmi hai. Asli chabi jeb mein thi - toh ya jeb wala khud wahan tha, ya duplicate bani. 'Duplicate zaroor bani' ek chance ko pakki baat bana deta hai - yehi is sawal ka trap hai.\n\n🪤 *Jaal:* Chabi wala, gayab cashier aur do saaye - har clue ek 'pakki' kahani banata hai, lekin sawal yeh tha ke 100% pakka kya hai.",
       "approved": false
     },
     {
-      "id": "b2v3",
+      "id": "b2v4",
       "role": "banker",
       "title": "ATM ka Claim",
       "brief": "Customer: 'Mera ATM card kal raat 9 baje Karachi mein chori hua aur 9:30 pe chor ne 50,000 nikal liye.' Record: paise 9:30 pe Lahore ke ATM se nikle aur PIN pehli dafa mein sahi laga. Clerk: 'Claim jhoota hai - aadhe ghante mein card Karachi se Lahore nahi pohanch sakta.'",
@@ -531,27 +531,27 @@
       "answer": "Card ka data aur PIN copy kar ke kisi bhi sheher mein duplicate card banaya ja sakta hai.",
       "clues": [
         {
-          "label": "Card ki copy",
-          "text": "Bank ki security team: is mahine 'skimming' ke kai case aaye hain - asli card jeb mein rehta hai aur us ki copy doosre sheher mein chalti hai."
+          "label": "Gold customer",
+          "text": "Customer ne 10 saal mein ek dafa bhi late payment nahi ki; bank ne usay 'Gold' rating di hai."
         },
         {
-          "label": "Customer ka record",
-          "text": "Acha record achi baat hai, lekin yeh nahi batata ke card aadhe ghante mein Lahore kaise pohancha."
+          "label": "Foran FIR",
+          "text": "Customer ne raat 10 baje hi police mein FIR katwa di thi."
         },
         {
-          "label": "Police report",
-          "text": "Report toh jhoota claim karne wala bhi likhwa sakta hai. Is se clerk ki 'faasle' wali baat nahi toot'ti."
+          "label": "Camera ka raaz",
+          "text": "Lahore wale ATM ka camera usi raat kharab hua - aur agle din khud hi theek ho gaya."
         },
         {
-          "label": "ATM ka camera",
-          "text": "Camera kharab hone se sirf itna hua ke photo nahi mili. Is se claim na sahi sabit hota hai na galat."
+          "label": "Security alert",
+          "text": "Is mahine bank ne 3 ATM machines se ajeeb chhote devices utaare hain."
         }
       ],
-      "explain": "Clerk ne maan liya ke paise nikalne ke liye asli card ka Lahore pohanchna zaroori hai. Agar card ki copy ban sakti hai toh us ki baat ki buniyad hi khatam. Acha record aur police report customer ko shareef dikhate hain, clerk ki logic ko nahi torte.",
+      "explain": "Clerk ne maan liya ke paise nikalne ke liye asli card ka Lahore pohanchna zaroori hai. Agar card ki copy ban sakti hai toh us ki baat ki buniyad hi khatam. Acha record aur police report customer ko shareef dikhate hain, clerk ki logic ko nahi torte.\n\n🪤 *Jaal:* Gold rating aur foran FIR customer ko shareef dikhate hain, camera ka raaz shak dalta hai - lekin clerk ki logic sirf 'asli card' pe khari thi.",
       "approved": false
     },
     {
-      "id": "e1v3",
+      "id": "e1v4",
       "role": "editor",
       "title": "Viral Photo",
       "brief": "WhatsApp pe ek photo viral hai: 'Aaj Karachi mein barf pari!' Aap ka reporter: 'Photo asli hai. Main ne expert se check karwaya - is mein koi editing nahi hui. Foran chhaap dete hain.'",
@@ -565,27 +565,27 @@
       "answer": "Yeh photo kab aur kahan li gayi thi?",
       "clues": [
         {
-          "label": "Photo ki date",
-          "text": "Internet pe search kiya toh yehi photo 2016 mein bhi mili - Murree ke naam se."
+          "label": "Bhejne wale",
+          "text": "Photo ek retired judge ne group mein bheji - woh kabhi galat cheez forward nahi karte."
         },
         {
-          "label": "Bhejne wala",
-          "text": "Bhejne wale shareef aadmi hain - unhein bhi kisi group se aayi thi. Imandaar log bhi purani photo aage forward kar dete hain."
+          "label": "Breaking news",
+          "text": "Do bare news channel 15 minute se yehi photo 'Breaking' ke saath chala rahe hain."
         },
         {
-          "label": "Doosre akhbaar",
-          "text": "Do website chhaap chuki hain. Lekin galat khabar sab mil ke chhaapein tab bhi galat hi rehti hai."
+          "label": "Photo ki quality",
+          "text": "Photo itni saaf hai ke barf ka har zarra dikh raha hai - naye iPhone se li gayi lagti hai."
         },
         {
-          "label": "Camera",
-          "text": "Camera ka model jaan ke yeh pata nahi chalta ke photo Karachi ki hai ya aaj ki."
+          "label": "Peeche ka board",
+          "text": "Photo mein peeche ek dukaan ka board dhundla sa hai - 'Mall Road' jaisa kuch likha hai."
         }
       ],
-      "explain": "'Editing nahi hui' ka matlab sirf itna hai ke photo asli hai - yeh nahi ke woh aaj ki aur Karachi ki hai. Purani asli photo bhi jhooti khabar ban sakti hai. Bhejne wale ka imandaar hona is khatre ko nahi rokta.",
+      "explain": "'Editing nahi hui' ka matlab sirf itna hai ke photo asli hai - yeh nahi ke woh aaj ki aur Karachi ki hai. Purani asli photo bhi jhooti khabar ban sakti hai. Bhejne wale ka imandaar hona is khatre ko nahi rokta.\n\n🪤 *Jaal:* Judge sahab, do channel aur saaf photo - teeno bharosa dilate hain. Sawal yeh tha ke photo kab aur kahan ki hai; board ne ishara de diya tha.",
       "approved": false
     },
     {
-      "id": "e2v3",
+      "id": "e2v4",
       "role": "editor",
       "title": "Ice Cream aur Doobna",
       "brief": "Reporter ki khabar: 'Jin mahinon mein ice cream zyada bikti hai, unhi mahinon mein doobne ke waqiaat bhi zyada hote hain. Sabit hua ke ice cream khane se doobne ka khatra barh jata hai.'",
@@ -599,27 +599,27 @@
       "answer": "Dono cheezein garmi ki wajah se barhti hain: log ice cream bhi zyada khate hain, nahate bhi zyada.",
       "clues": [
         {
-          "label": "Garmi ke mahine",
-          "text": "Data: ice cream aur doobne ke waqiaat dono May se August mein barhte hain - jab log samandar aur nehron pe jate hain."
+          "label": "Sirf Karachi",
+          "text": "Reporter ke paas sirf Karachi ka data hai - Lahore ya Islamabad ka bilkul nahi."
         },
         {
-          "label": "Ek sheher ka data",
-          "text": "Doosre sheheron mein bhi yehi dono cheezein saath barhti hain. Zyada data lene se yeh galti theek nahi hoti."
+          "label": "40% ne nahi khayi",
+          "text": "Pichle saal doobne wale 40% logon ne us din ice cream nahi khayi thi."
         },
         {
-          "label": "Baghair ice cream",
-          "text": "Chand misaalon se 'khatra barhta hai' wali baat galat sabit nahi hoti - khatra barhne ka matlab yeh nahi ke har doobne wale ne ice cream khayi ho."
+          "label": "Dukaandar",
+          "text": "Ice cream walon se poochha toh bole: 'Hamari ice cream ka doobne se kya taalluq?'"
         },
         {
-          "label": "Dukaandaron ki raaye",
-          "text": "Dukaandar sirf yeh batate ke bikri barhi hai - jo pehle hi pata hai."
+          "label": "Sab se zyada kab",
+          "text": "Data ke mutabiq dono cheezein June mein sab se zyada hoti hain."
         }
       ],
-      "explain": "Do cheezon ka saath barhna yeh sabit nahi karta ke ek ki wajah doosri hai. Yahan dono ki wajah teesri cheez hai: garmi. 'Sirf ek sheher' wali baat sahi lagti hai, lekin sau sheheron ka data bhi yehi galti dohrata.",
+      "explain": "Do cheezon ka saath barhna yeh sabit nahi karta ke ek ki wajah doosri hai. Yahan dono ki wajah teesri cheez hai: garmi. 'Sirf ek sheher' wali baat sahi lagti hai, lekin sau sheheron ka data bhi yehi galti dohrata.\n\n🪤 *Jaal:* 'Sirf Karachi ka data' sab se zyada sahi lagta hai - lekin sau sheheron ka data bhi wohi galti dohrata. June wala clue garmi ki taraf ishara tha.",
       "approved": false
     },
     {
-      "id": "u1v3",
+      "id": "u1v4",
       "role": "customs",
       "title": "Mukhbir ki Khabar",
       "brief": "Shak 3 musafiron pe hai aur sona in hi mein se ek ke paas hai. Mukhbir: 'Jis ke paas sona hai us ne ticket cash pe liya hai, aur woh Dubai se aaya hai.' Record: Rafiq - Dubai se aaya, ticket card se liya. Usman - Doha se aaya, ticket cash pe liya. Mrs. Khan - Dubai se aayin, ticket ka record nahi mila.",
@@ -633,27 +633,27 @@
       "answer": "Sona Mrs. Khan ke paas hai, aur unhon ne ticket cash pe liya tha.",
       "clues": [
         {
-          "label": "Mrs. Khan ka ticket",
-          "text": "Travel agent ka register mil gaya: Mrs. Khan ka ticket cash de ke liya gaya tha."
+          "label": "Usman ka bag",
+          "text": "Usman ke bag se 3 naye mobile nikle, aur woh officer se nazar nahi mila raha tha."
         },
         {
-          "label": "Usman ka safar",
-          "text": "Usman ka passport: woh Doha se seedha aaya, Dubai gaya hi nahi. Mukhbir ki doosri baat us pe fit nahi hoti."
+          "label": "Rafiq ka maazi",
+          "text": "Rafiq pe 2019 mein sona smuggle karne ka case chal chuka hai."
         },
         {
-          "label": "Rafiq ka ticket",
-          "text": "Rafiq ke ticket ki receipt pe us ke bank card ka number chhapa hai - cash nahi."
+          "label": "Mukhbir ka bhai",
+          "text": "Mukhbir ka bhai pichle mahine customs ke haathon pakra gaya tha - usay customs se nafrat hai."
         },
         {
-          "label": "Khabar kitni pakki",
-          "text": "Yeh mukhbir pichle 5 case mein har dafa sahi nikla. Aur sawal mein pehle hi maan liya gaya hai ke dono baatein sach hain."
+          "label": "Mrs. Khan",
+          "text": "Mrs. Khan 70 saal ki hain aur wheelchair pe hain; un ka beta unhein lene aaya hai."
         }
       ],
-      "explain": "Dono shartein ek saath chahiye: cash ka ticket AUR Dubai. Rafiq ne card diya, Usman Doha se aaya - dono bahar. Bachi Mrs. Khan, toh un ka ticket cash ka hi hoga. 'Sirf Usman ne cash diya' wala jawab bhool jata hai ke Mrs. Khan ka record mila hi nahi.",
+      "explain": "Dono shartein ek saath chahiye: cash ka ticket AUR Dubai. Rafiq ne card diya, Usman Doha se aaya - dono bahar. Bachi Mrs. Khan, toh un ka ticket cash ka hi hoga. 'Sirf Usman ne cash diya' wala jawab bhool jata hai ke Mrs. Khan ka record mila hi nahi.\n\n🪤 *Jaal:* Usman ki ghabrahat, Rafiq ka purana case aur Mrs. Khan ki umar - sab dil se faisla karwate hain. Mukhbir ki do shartein sirf ek pe poori utarti hain.",
       "approved": false
     },
     {
-      "id": "u2v3",
+      "id": "u2v4",
       "role": "customs",
       "title": "Kelon ka Container",
       "brief": "Container ke papers mein likha hai: '18 ton kele'. Lekin weight 26 ton nikla. Malik: 'Farq barf ka hai. Kelon ko thanda rakhne ke liye 8 ton barf rakhi thi, aur barf ka weight papers mein nahi likha jata.'",
@@ -667,27 +667,27 @@
       "answer": "Container ka fridge 20 din se band hai, andar 35 degree - barf kab ki pighal chuki hoti.",
       "clues": [
         {
-          "label": "Fridge ka record",
-          "text": "Container ka apna meter: fridge safar ke pehle din hi band ho gaya tha. Farsh pe paani nikalne ke suraakh khule hain."
+          "label": "Malik ka jurmana",
+          "text": "Malik pe pichle saal galat papers ka Rs 5 lakh jurmana hua tha."
         },
         {
-          "label": "Malik ka record",
-          "text": "Purana jurmana shak barhata hai, lekin is se yeh sabit nahi hota ke aaj ki baat jhoot hai."
+          "label": "Doosre containers",
+          "text": "Usi jahaz ke 9 doosre kele wale containers mein kisi ne barf nahi rakhi."
         },
         {
-          "label": "Doosre container",
-          "text": "Doosre container naye hain aur un ke fridge theek the - unhein barf ki zaroorat hi nahi thi."
+          "label": "Barf ki qeemat",
+          "text": "8 ton barf ki qeemat kelon ki aadhi qeemat ke barabar hai."
         },
         {
-          "label": "Barf ka kharcha",
-          "text": "Mehnga hona ka matlab namumkin nahi. Mehngay maal ko bachane ke liye log kharcha kar lete hain."
+          "label": "Container ka meter",
+          "text": "Container ke meter pe likha hai: 'Cooling: OFF - Day 1'."
         }
       ],
-      "explain": "35 degree mein 20 din baad barf bach hi nahi sakti, toh 8 ton ka farq barf nahi ho sakta. Purana jurmana aur doosron ka barf na rakhna sirf shak barhate hain - malik ki baat ko seedha galat sabit nahi karte.",
+      "explain": "35 degree mein 20 din baad barf bach hi nahi sakti, toh 8 ton ka farq barf nahi ho sakta. Purana jurmana aur doosron ka barf na rakhna sirf shak barhate hain - malik ki baat ko seedha galat sabit nahi karte.\n\n🪤 *Jaal:* Purana jurmana aur doosre containers malik pe shak dalte hain - lekin seedha saboot meter tha: barf 20 din tak bach hi nahi sakti.",
       "approved": false
     },
     {
-      "id": "m1v3",
+      "id": "m1v4",
       "role": "curator",
       "title": "Akbari Sikka",
       "brief": "Ek sahab 'Akbar badshah ke zamane ka sikka' bechne aaye hain. Kehte hain: 'Is ki chandi ka test hua hai - 96% pure nikli, bilkul waisi jaisi Akbar ke sikkon mein hoti thi. Is liye sikka asli hai.'",
@@ -701,27 +701,27 @@
       "answer": "Pure chandi aaj bhi milti hai - test se yeh pata nahi chalta ke sikka kab bana.",
       "clues": [
         {
-          "label": "Chandi aur zamana",
-          "text": "Sunar ne bataya: 96% pure chandi aaj market mein aam milti hai, aur naqli sikke isi se banaye jate hain."
+          "label": "Lab kis ki hai",
+          "text": "Sirf ek lab ne test kiya - aur woh lab bechne wale ke cousin ki hai."
         },
         {
-          "label": "Lab ka test",
-          "text": "Doosri lab ne bhi 96% hi bataya. Test sahi hai - masla test mein nahi, us se nikale gaye matlab mein hai."
+          "label": "Bechne ka andaz",
+          "text": "Bechne wala sikke ka naam bhi theek se nahi bol pa raha aur bohat jaldi mein hai."
         },
         {
-          "label": "Bechne wala",
-          "text": "Bechne wale ka expert hona zaroori nahi. Us ki baat test pe khari hai, us ke ilm pe nahi."
+          "label": "Museum ke sikke",
+          "text": "Museum ke 40 asli Akbari sikkon mein chandi 94 se 97% tak hai."
         },
         {
-          "label": "Akbar ke sikke",
-          "text": "Museum ke asli Akbari sikkon mein chandi 94 se 97% tak hai. 96% usi range ke andar hai."
+          "label": "Saddar ka sunar",
+          "text": "Saddar ke sunar ki dukaan pe 96% pure chandi aaj bhi aam mil rahi hai."
         }
       ],
-      "explain": "Test sirf yeh batata hai ke chandi pure hai - yeh nahi ke sikka 450 saal purana hai. Wohi chandi aaj bhi sikke mein dhaali ja sakti hai. Doosri lab se bhi yehi result aata, is liye 'ek lab' asal galti nahi.",
+      "explain": "Test sirf yeh batata hai ke chandi pure hai - yeh nahi ke sikka 450 saal purana hai. Wohi chandi aaj bhi sikke mein dhaali ja sakti hai. Doosri lab se bhi yehi result aata, is liye 'ek lab' asal galti nahi.\n\n🪤 *Jaal:* Cousin ki lab sab se bara jaal hai - lekin agar test bilkul sahi bhi ho, tab bhi pure chandi se sikke ki umar sabit nahi hoti.",
       "approved": false
     },
     {
-      "id": "m2v3",
+      "id": "m2v4",
       "role": "curator",
       "title": "Darbar ki Painting",
       "brief": "Ek painting aayi hai: 'Mughal darbar, san 1650'. Lab ki report: aasman mein jo neela rang hai woh 'Prussian blue' hai, jo 1704 mein pehli dafa bana. Baqi sare rang wohi hain jo 1650 mein use hote the.",
@@ -735,23 +735,23 @@
       "answer": "Kam az kam aasman wala hissa 1704 ke baad paint hua - chahe repair ho ya poori painting naqli ho.",
       "clues": [
         {
-          "label": "Neela rang",
-          "text": "Prussian blue 1704 se pehle duniya mein tha hi nahi. Jahan yeh rang laga hai, woh hissa us ke baad hi paint hua."
+          "label": "95% purane rang",
+          "text": "Painting ke 95% hisse mein 1650 wale purane rang hain - sirf aasman alag hai."
         },
         {
-          "label": "Baqi rang",
-          "text": "Baqi rang purane hain. Naqli painting banane wala bhi purane rang use kar sakta hai - aur asli painting mein bhi yehi hote."
+          "label": "Bechne wale ka record",
+          "text": "Bechne wale ne pichle saal 3 'Mughal' paintings bechi thin - teeno baad mein naqli niklin."
         },
         {
-          "label": "Repair ka record",
-          "text": "Painting ki repair ka koi record nahi mila - na yeh ke repair hui, na yeh ke nahi hui."
+          "label": "Lab ka pehla case",
+          "text": "Lab ne yeh test pehli dafa kisi Mughal painting pe kiya hai."
         },
         {
-          "label": "Lab ka test",
-          "text": "Lab ne test teen dafa kiya - har dafa wohi result. Baqi rang purane hone se neela rang purana nahi ho jata."
+          "label": "Prussian blue",
+          "text": "Prussian blue rang 1704 mein Berlin mein ek rang banane wale ne pehli dafa banaya tha."
         }
       ],
-      "explain": "Report se sirf itna pakka hai ke aasman 1704 ke baad paint hua. Poori painting naqli hai ya sirf repair hui - dono ho sakte hain, is liye dono 'pakke' jawab report se aage nikal jate hain. Sab se pakka jawab wohi hai jo utna hi kahe jitna sabit hai.",
+      "explain": "Report se sirf itna pakka hai ke aasman 1704 ke baad paint hua. Poori painting naqli hai ya sirf repair hui - dono ho sakte hain, is liye dono 'pakke' jawab report se aage nikal jate hain. Sab se pakka jawab wohi hai jo utna hi kahe jitna sabit hai.\n\n🪤 *Jaal:* 95% purane rang 'repair' ki taraf kheenchte hain aur bechne wale ka record 'naqli' ki taraf - lekin report sirf aasman ke baare mein pakki hai.",
       "approved": false
     }
   ]

@@ -49,7 +49,7 @@ before(async () => {
 });
 after(async () => { if (db) await db.end(); });
 
-test("the case bank: 10 roles, 2 cases each, four answers and a clue for each (founder, 15 Nov), all fitting one WhatsApp message; nothing is live until approved", () => {
+test("the case bank: 10 roles, 2 cases each, four answers and four misleading clues (founder, 15 Nov), all fitting one WhatsApp message; nothing is live until approved", () => {
   assert.equal(C.BANK.roles.length, 10);
   for (const r of C.BANK.roles) {
     assert.ok(`${r.emoji} ${r.name}`.length <= 24 && r.desc.length <= 72, r.key);
@@ -57,7 +57,8 @@ test("the case bank: 10 roles, 2 cases each, four answers and a clue for each (f
   }
   for (const c of C.BANK.cases) {
     assert.equal(c.options.length, 4, c.id);
-    assert.equal(c.clues.length, 4, c.id + ": one clue per answer - the right one too");
+    assert.equal(c.clues.length, 4, c.id);
+    assert.match(c.explain, /Jaal:/, c.id + ": after the verdict, the trap is named");
     assert.ok(c.options.includes(c.answer) && new Set(c.options).size === 4, c.id);
     assert.ok(c.clues.every((k) => k.label.length <= 24), c.id);
     // the whole case - story, question, all four answers - fits one list message (1,024 characters)
@@ -81,7 +82,7 @@ test("the necklace case is airtight: only one suspect leaves exactly one true st
   const says = { Shabana: (t) => t === "Bilal", Bilal: (t) => t !== "Bilal", Hina: (t) => t !== "Hina" };
   const fits = ["Shabana", "Bilal", "Hina"].filter((thief) => Object.values(says).filter((f) => f(thief)).length === 1);
   assert.deepEqual(fits, ["Hina"]);
-  assert.equal(C.CASE.j2v3.answer, "Hina ne");
+  assert.equal(C.CASE.j2v4.answer, "Hina ne");
 });
 
 test("CASE the first time asks her society; a typed name is matched, kept as 'tasdeeq baqi', and the role menu follows", async () => {

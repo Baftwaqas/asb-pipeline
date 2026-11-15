@@ -8,8 +8,9 @@
 //
 // The cases are REASONING cases in the style of GMAT critical reasoning
 // (founder, 15 Nov: "each answer seems correct but only one is the most
-// correct"): four answers, A to D, written out in the message; each clue is
-// one more fact about one of the answers - the right one included.
+// correct"): four answers, A to D, written out in the message. The clues are
+// red herrings (founder, 15 Nov): three pull toward wrong answers, one quiet
+// clue helps - and each costs points. After the verdict, "Jaal" names the trap.
 //
 //   * In a bargain: when she is locked on a price Seth Ji can give, he offers
 //     a case. Solve it in time and that price is hers (engine.winGame - never
