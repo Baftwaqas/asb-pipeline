@@ -131,11 +131,11 @@ function gameText(action) {
   switch (action.kind) {
     case "game_offer":
       return `Achha baji, aap ${rsText(action.pricePaisa)} pe ruke hain aur main apni jagah. 😄 Chalein, faisla ek case se karte hain!\n\n` +
-        `🎭 *Seth Ji ka Case*: aap banenge jasoos, doctor ya pilot. ${C.GAME.seconds} second mein case hal kar liya toh ${rsText(action.pricePaisa)} aap ka! ` +
-        `Na hua toh koi baat nahi - bhao wahin se chalega. Tayyar?`;
+        `🎭 *Seth Ji ka Case*: aap banenge jasoos, doctor ya pilot. ${C.GAME.seconds} second mein case solve kar liya toh ${rsText(action.pricePaisa)} aap ka! ` +
+        `Na hua toh koi baat nahi - bhao wahin se chalega. Ready?`;
     case "game_lost": return `Koi baat nahi baji - case gaya, bhao jaari hai. 😄 Mera daam abhi ${rsText(action.askPaisa)} hai. Aap bataiye?`;
     case "game_declined": return `Theek hai baji, case nahi toh bhao hi sahi! 😄 Mera daam ${rsText(action.askPaisa)}. Aap bataiye?`;
-    default: return `🏆 Case hal! Seth Ji haar gaye - waada waada hai: ${rsText(action.offer.unitPaisa)} pe sauda pakka! 🤝`; // accept, won by the case
+    default: return `🏆 Case solve! Seth Ji haar gaye - waada waada hai: ${rsText(action.offer.unitPaisa)} pe sauda pakka! 🤝`; // accept, won by the case
   }
 }
 
@@ -209,7 +209,7 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const rows = await menu(db, { phone, now });
     const game = (await C.ready(db).catch(() => false)) && C.playable(env).length > 0;
     return rows.length ? { handled: true, menu: rows, menuText: "Kis cheez pe bhao lagana hai? Neeche se chunein 👇" +
-                           (game ? "\n\n🎭 Ya Seth Ji ka case hal karein - *CASE* likh dein!" : "") }
+                           (game ? "\n\n🎭 Ya Seth Ji ka case solve karein - *CASE* likh dein!" : "") }
       : { handled: false, reason: "no items" };
   }
   const start = START.exec(body);

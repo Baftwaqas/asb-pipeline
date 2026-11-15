@@ -127,7 +127,7 @@ async function askSociety(db, phone, now) {
       buttons: [{ id: `bhao:soc:yes:${rec.id}`, title: "Haan, yehi" }, { id: "bhao:soc:no:0", title: "Nahi, doosri hai" }] }];
   }
   await db.query(`UPDATE bhao_players SET awaiting = 'society', awaiting_at = $2, updated_at = now() WHERE phone = $1`, [phone, now]);
-  return [{ type: "text", body: "🏘️ Leaderboard societies ke beech hai - aap ke points aap ki society ke khate mein jayenge!\n\nApni society ya apartments ka naam likh dein. (Abhi nahi batana? Dobara CASE likh dein.)" }];
+  return [{ type: "text", body: "🏘️ Leaderboard societies ke beech hai - aap ke points aap ki society ke account mein jayenge!\n\nApni society ya apartments ka naam likh dein. (Abhi nahi batana? Dobara CASE likh dein.)" }];
 }
 
 async function setSociety(db, phone, text) {
@@ -137,11 +137,11 @@ async function setSociety(db, phone, text) {
   await db.query(
     `UPDATE bhao_players SET society_id = $2, society_text = $3, society_verified = $4, awaiting = NULL, updated_at = now() WHERE phone = $1`,
     [phone, m ? m.id : null, String(text).slice(0, 80), verified]);
-  if (verified) return `✅ *${m.name}* - tasdeeq ho gayi, yehi aap ka delivery address hai. Aap ke points isi ke khate mein jayenge!`;
+  if (verified) return `✅ *${m.name}* - confirm ho gayi, yehi aap ka delivery address hai. Aap ke points isi ke account mein jayenge!`;
   console.log(`[bhao] TEAM CHECK: ${phone} plays for society ${JSON.stringify(String(text).slice(0, 80))}` +
     (m ? ` (matched ${m.name}; delivery record: ${rec ? rec.name : "none"})` : " (not in ASB's society list)"));
   const name = m ? m.name : String(text).slice(0, 60);
-  return `📝 *${name}* likh liya. Tasdeeq tab hogi jab ASB ki delivery aap ke isi pate pe hogi - tab tak aap ke points mehfooz hain, aur tasdeeq hote hi society ke khate mein jurh jayenge.`;
+  return `📝 *${name}* likh liya. Confirm tab hogi jab ASB ki delivery aap ke isi address pe hogi - tab tak aap ke points safe hain, aur confirm hote hi society ke account mein add ho jayenge.`;
 }
 
 // ---- the game --------------------------------------------------------------
@@ -153,24 +153,24 @@ const isLate = (play, now) => now - new Date(play.started_at) > (GAME.seconds + 
 function stepMsg(play, now, lead) {
   const c = CASE[play.case_id];
   const used = new Set(play.clues_used || []);
-  const clueRows = c.clues.map((k, i) => ({ id: `bhao:case:${play.id}:c${i}`, title: k.label, description: `Suraagh kholein (-${GAME.perClue} point)` }))
+  const clueRows = c.clues.map((k, i) => ({ id: `bhao:case:${play.id}:c${i}`, title: k.label, description: `Clue kholein (-${GAME.perClue} point)` }))
     .filter((_, i) => !used.has(i));
   const sections = [
-    ...(clueRows.length ? [{ title: "🔍 Suraagh", rows: clueRows }] : []),
-    { title: "⚖️ Aap ka faisla", rows: play.options.map((o, i) => ({ id: `bhao:case:${play.id}:v${i}`, title: `Jawab ${LETTERS[i]}`, description: o })) },
+    ...(clueRows.length ? [{ title: "🔍 Clue", rows: clueRows }] : []),
+    { title: "✅ Aap ka jawab", rows: play.options.map((o, i) => ({ id: `bhao:case:${play.id}:v${i}`, title: `Jawab ${LETTERS[i]}`, description: o })) },
   ];
   // the answers are written out in full: every one of them is meant to look right
   const answers = play.options.map((o, i) => `*${LETTERS[i]}.* ${o}`).join("\n");
-  return { type: "list", body: `${lead}\n\n❓ *${c.question}*\n${answers}\n\n⏱️ Baqi: ${secondsLeft(play, now)} second`, buttonText: "Suraagh ya Faisla", sections };
+  return { type: "list", body: `${lead}\n\n❓ *${c.question}*\n${answers}\n\n⏱️ Baqi: ${secondsLeft(play, now)} second`, buttonText: "Clue ya Jawab", sections };
 }
 
 async function roleMenu(db, { phone, convId = 0, env }) {
   const left = await unplayed(db, phone, env);
-  if (!left.length) return [{ type: "text", body: "👏 Aap sab case hal kar chuke! Naye case jald aa rahe hain - Seth Ji likh rahe hain." }];
+  if (!left.length) return [{ type: "text", body: "👏 Aap sare case solve kar chuke! Naye case jald aa rahe hain - Seth Ji likh rahe hain." }];
   const keys = new Set(left.map((c) => c.role));
   return [{ type: "list",
-    body: `🎭 *Seth Ji ke Case*\nAaj kaun banenge? Role chunein - case milte hi *${GAME.seconds} second* ki ghari shuru!\n\n` +
-      `Hoshiyar: har jawab sahi lagega - magar sab se sahi sirf ek hai. Jitna tez hal karein, utne zyada points; har suraagh kholne pe -${GAME.perClue} point.`,
+    body: `🎭 *Seth Ji ke Case*\nAaj kaun banenge? Role chunein - case milte hi *${GAME.seconds} second* ka time shuru!\n\n` +
+      `Dhyan se: har jawab sahi lagega - lekin sab se sahi sirf ek hai. Jitni jaldi solve karein, utne zyada points; har clue kholne pe -${GAME.perClue} point.`,
     buttonText: "Role chunein",
     sections: [{ title: "Role", rows: BANK.roles.filter((r) => keys.has(r.key))
       .map((r) => ({ id: `bhao:role:${r.key}:${convId || 0}`, title: `${r.emoji} ${r.name}`, description: r.desc })) }] }];
@@ -216,11 +216,11 @@ async function finish(db, play, { result, now }) {
   const pl = await playerOf(db, play.phone);
   const clues = (play.clues_used || []).length;
   const head = result === "won"
-    ? `✅ *Sahi jawab, ${r.you}!* ${c.explain}\n\n⏱️ ${p.seconds} second, ${clues} suraagh → *+${points} points* 🎉`
-    : `${result === "timeout" ? "⏰ *Waqt khatam!*" : "❌ *Yeh sab se sahi jawab nahi tha.*"} Sahi jawab: *${LETTERS[play.options.indexOf(c.answer)]}.* ${c.answer}\n\n${c.explain}`;
+    ? `✅ *Sahi jawab, ${r.you}!* ${c.explain}\n\n⏱️ ${p.seconds} second, ${clues} clue → *+${points} points* 🎉`
+    : `${result === "timeout" ? "⏰ *Time khatam!*" : "❌ *Yeh sab se sahi jawab nahi tha.*"} Sahi jawab: *${LETTERS[play.options.indexOf(c.answer)]}.* ${c.answer}\n\n${c.explain}`;
   const soc = result !== "won" ? ""
-    : pl.society_verified && pl.society_name ? `\n🏘️ Points *${pl.society_name}* ke khate mein jurh gaye.`
-    : pl.society_text ? `\n🏘️ Points mehfooz hain - *${pl.society_name || pl.society_text}* ki tasdeeq hote hi society ke khate mein jurh jayenge.`
+    : pl.society_verified && pl.society_name ? `\n🏘️ Points *${pl.society_name}* ke account mein add ho gaye.`
+    : pl.society_text ? `\n🏘️ Points safe hain - *${pl.society_name || pl.society_text}* confirm hote hi society ke account mein add ho jayenge.`
     : "\n🏘️ Apni society ke liye khelna hai? *SOCIETY* likh dein.";
   console.log(`[bhao] CASE ${result.toUpperCase()} ${play.phone} ${c.id} role=${c.role} mode=${play.mode} seconds=${p.seconds} clues=${clues} points=${points}`);
   const bargain = play.mode === "bargain";
@@ -251,9 +251,9 @@ async function leaderboard(db, { phone, now }) {
   rows.slice(0, 5).forEach((r, i) => lines.push(`${medal[i] || `${i + 1}.`} ${r.name} - ${r.pts.toLocaleString("en-US")} points (${r.players} khiladi)`));
   const mine = pl && pl.society_verified ? rows.findIndex((r) => Number(r.id) === Number(pl.society_id)) : -1;
   if (mine >= 5) lines.push(`…\n${mine + 1}. ${rows[mine].name} - ${rows[mine].pts.toLocaleString("en-US")} points`);
-  lines.push("", `👤 *Aap*: ${rank}`, `Is hafte ${me.week} points · kul ${me.total} points · ${me.solved} case hal`);
+  lines.push("", `👤 *Aap*: ${rank}`, `Is hafte ${me.week} points · total ${me.total} points · ${me.solved} case solve`);
   if (!pl || (!pl.society_id && !pl.society_text)) lines.push("🏘️ Apni society ke liye khelna hai? *SOCIETY* likh dein.");
-  else if (!pl.society_verified) lines.push(`🏘️ ${pl.society_name || pl.society_text}: tasdeeq baqi - ASB ki delivery is pate pe hote hi aap ke points board pe aa jayenge.`);
+  else if (!pl.society_verified) lines.push(`🏘️ ${pl.society_name || pl.society_text}: confirm hona baqi hai - ASB ki delivery is address pe hote hi aap ke points board pe aa jayenge.`);
   return { rows, me, rank, text: lines.join("\n") };
 }
 
@@ -282,7 +282,7 @@ async function startFree(db, { phone, now, env }) {
   if (!pl.society_id && !pl.society_text && !pl.awaiting_at) return { kind: "case_society", out: await askSociety(db, phone, now) };
   if (pl.awaiting) await db.query(`UPDATE bhao_players SET awaiting = NULL WHERE phone = $1`, [phone]);
   if (await freeToday(db, phone, now) >= GAME.freePerDay)
-    return { kind: "case_limit", out: [{ type: "text", body: `Aaj ke ${GAME.freePerDay} case ho gaye - dimagh ko aaram dein! 😄 Kal naye case. Ranking dekhni ho toh LEADERBOARD likhein.` }] };
+    return { kind: "case_limit", out: [{ type: "text", body: `Aaj ke ${GAME.freePerDay} case ho gaye - dimagh ko rest dein! 😄 Kal naye case. Ranking dekhni ho toh LEADERBOARD likhein.` }] };
   return { kind: "case_roles", out: await roleMenu(db, { phone, env }) };
 }
 
@@ -317,7 +317,7 @@ async function route(db, { phone, body, intent = null, now, env = process.env })
       play.clues_used = used;
       return { kind: "case_clue", out: [stepMsg(play, now, `🔍 *${c.clues[idx].label}*\n${c.clues[idx].text}`)] };
     }
-    return { kind: "case_remind", out: [stepMsg(play, now, "⏳ Ghari chal rahi hai! Neeche se suraagh ya apna faisla chunein 👇")] };
+    return { kind: "case_remind", out: [stepMsg(play, now, "⏳ Time chal raha hai! Neeche se clue ya apna jawab chunein 👇")] };
   }
   if (/^case:/.test(intent || ""))
     return { kind: "case_stale", out: [{ type: "text", body: "Yeh case khatam ho chuka hai. Naya case chahiye toh CASE likh dein. 🎭" }] };
@@ -350,7 +350,7 @@ async function route(db, { phone, body, intent = null, now, env = process.env })
         await db.query(`UPDATE bhao_players SET society_id = $2, society_text = $3, society_verified = TRUE, awaiting = NULL, updated_at = now() WHERE phone = $1`,
           [phone, rec.id, rec.name]);
         const next = await startFree(db, { phone, now, env });
-        return { kind: "case_society", out: [{ type: "text", body: `✅ *${rec.name}* - aap ke points isi ke khate mein jayenge!` }, ...next.out] };
+        return { kind: "case_society", out: [{ type: "text", body: `✅ *${rec.name}* - aap ke points isi ke account mein jayenge!` }, ...next.out] };
       }
     }
     await db.query(`UPDATE bhao_players SET awaiting = 'society', awaiting_at = $2 WHERE phone = $1`, [phone, now]);

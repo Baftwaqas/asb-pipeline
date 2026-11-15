@@ -71,13 +71,26 @@ test("the case bank: 10 roles, 2 cases each, four answers and a clue for each (f
   assert.equal(C.playable({ BHAO_CASE_DRAFTS: "on" }).length, 20);
 });
 
+test("the cases are written the way Pakistanis type Roman Urdu - no bookish words (founder, 15 Nov)", () => {
+  const all = JSON.stringify(C.BANK).toLowerCase() ;
+  for (const w of ["suraagh", "mushahid", "nazariy", "nateej", "haqaiq", "qiyas", "tasdeeq", "wazahat", "daleel", "tarbiyat", "bulandi", "imkaan", "bandargah", "marammat", "mukhalif", "kaghzaat"])
+    assert.ok(!all.replace(/"note":"[^"]*"/, "").includes(w), w);
+});
+
+test("the necklace case is airtight: only one suspect leaves exactly one true statement", () => {
+  const says = { Shabana: (t) => t === "Bilal", Bilal: (t) => t !== "Bilal", Hina: (t) => t !== "Hina" };
+  const fits = ["Shabana", "Bilal", "Hina"].filter((thief) => Object.values(says).filter((f) => f(thief)).length === 1);
+  assert.deepEqual(fits, ["Hina"]);
+  assert.equal(C.CASE.j2v3.answer, "Hina ne");
+});
+
 test("CASE the first time asks her society; a typed name is matched, kept as 'tasdeeq baqi', and the role menu follows", async () => {
   const p = phone();
   const a = await say(p, "case", 0);
   assert.equal(a.kind, "case_society");
   assert.match(a.out[0].body, /society ya apartments ka naam/);
   const b = await say(p, "gulshan heights apartments", 20);
-  assert.match(b.out[0].body, /Gulshan Heights.*likh liya[\s\S]*Tasdeeq tab hogi/);
+  assert.match(b.out[0].body, /Gulshan Heights.*likh liya[\s\S]*Confirm tab hogi/);
   assert.equal(b.out[1].type, "list");
   assert.equal(rowsOf(b.out[1]).length, 10, "ten roles");
   const pl = (await db.query(`SELECT * FROM bhao_players WHERE phone = $1`, [p])).rows[0];
@@ -122,7 +135,7 @@ test("a case: story with clues and verdicts in one list; a clue costs 20; a righ
   const w = await verdict(p, true, 50);
   assert.equal(w.kind, "case_won");
   assert.match(w.out[0].body, /\+130 points/, "100 + 50 left - 20");
-  assert.match(w.out[0].body, /Gulshan Heights\* ke khate mein/);
+  assert.match(w.out[0].body, /Gulshan Heights\* ke account mein/);
   assert.equal((await play(p)).points, 130);
   assert.deepEqual(w.out[0].buttons.map((x) => x.id), ["bhao:play:more:0", "bhao:play:board:0"]);
 });
@@ -134,7 +147,7 @@ test("the clock: a verdict after 90 seconds is 'waqt khatam' with no points; a w
   await tap(p, rowsOf(menu.out[0])[0].id, 5);
   const late = await verdict(p, true, 5 + 96);
   assert.equal(late.kind, "case_lost");
-  assert.match(late.out[0].body, /Waqt khatam[\s\S]*Sahi jawab/);
+  assert.match(late.out[0].body, /Time khatam[\s\S]*Sahi jawab/);
   assert.equal((await play(p)).status, "timeout");
   const first = (await play(p)).case_id;
   await tap(p, "bhao:play:more:0", 200);
@@ -171,7 +184,7 @@ test("the leaderboard counts only verified societies; kept points join the board
   const before = await C.leaderboard(db, { phone: b, now: at(1100) });
   const rufiBefore = before.rows.find((r) => Number(r.id) === Number(rufi));
   assert.equal(rufiBefore.pts, 170, "only the verified player's 100 + 70");
-  assert.match(before.text, /tasdeeq baqi/);
+  assert.match(before.text, /confirm hona baqi/);
   await db.query(`INSERT INTO customers (phone, society_id) VALUES ($1, $2)`, [b, rufi]); // ASB now delivers to her there
   const after = await say(b, "leaderboard", 1200);
   assert.equal(after.kind, "case_board");
@@ -193,7 +206,7 @@ test("stuck on a price in a bargain: Seth Ji offers a case; solved in time, that
   assert.equal(r.kind, "game_offer");
   const c0 = await conv(p);
   const offer = (await db.query(`SELECT * FROM bhao_messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT 1`, [c0.id])).rows[0];
-  assert.match(offer.body, /90 second mein case hal kar liya toh Rs 2,200 aap ka/);
+  assert.match(offer.body, /90 second mein case solve kar liya toh Rs 2,200 aap ka/);
   assert.deepEqual(offer.ui.buttons.map((b) => b.id.split(":").pop()), ["yes", "no"]);
   const yes = await tap(p, offer.ui.buttons[0].id, 600);
   assert.equal(yes.kind, "game_started");
@@ -210,8 +223,8 @@ test("stuck on a price in a bargain: Seth Ji offers a case; solved in time, that
   assert.equal(c.accepted_offer.unitPaisa, 220000);
   assert.equal(c.accepted_offer.why, "game_won");
   const out = (await db.query(`SELECT body, decision FROM bhao_messages WHERE conversation_id = $1 AND direction = 'out' ORDER BY id`, [c.id])).rows;
-  assert.ok(out.some((o) => /Case hal! Seth Ji haar gaye.*Rs 2,200/.test(o.body)));
-  assert.match(out.find((o) => o.decision.kind === "victory").body, /Case hal, bhao jeeta/);
+  assert.ok(out.some((o) => /Case solve! Seth Ji haar gaye.*Rs 2,200/.test(o.body)));
+  assert.match(out.find((o) => o.decision.kind === "victory").body, /Case solve, bhao jeeta/);
 });
 
 test("a case lost in a bargain: no penalty, the bargain goes on, and no second case on that item this week; 'Nahi' just bargains", async () => {
