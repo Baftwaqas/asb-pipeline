@@ -1,0 +1,65 @@
+name: ASB Lab Reviewed Operator — isolated scratch PG, never Shopify
+on:
+  push:
+    branches:
+      - feature/asb-lab-reviewed-one-shot-operator-20261115
+  pull_request:
+    paths:
+      - 'scripts/lab-apna-reviewed-operator-v1.js'
+      - 'checkout/lab-bridge-server.js'
+      - 'test/adr002-lab-reviewed-operator.test.js'
+      - '.github/workflows/asb-lab-reviewed-operator.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-gated-operator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 54360:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_PG_URL: postgres://postgres:postgres@localhost:54360
+      PGSSLMODE: disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+      - run: npm ci
+      - name: Verify syntax and no exposed commit route
+        run: |
+          node --check scripts/lab-apna-reviewed-operator-v1.js
+          node --check checkout/lab-bridge-server.js
+          node --check test/adr002-lab-reviewed-operator.test.js
+          ! grep -q 'makeLabCommitCoordinator' checkout/lab-bridge-server.js
+          ! grep -q 'ASB_LAB_REAL_COMMIT' checkout/lab-bridge-server.js
+          grep -q 'SAFE_LOCKED' checkout/lab-bridge-server.js
+          grep -q 'lab-apna-reviewed-operator-v1.js' checkout/lab-bridge-server.js
+      - name: Audit hold and backup-gated operator — scratch PostgreSQL only
+        run: node --test --test-concurrency=1 test/adr002-lab-reviewed-operator.test.js
+      - name: Re-test crash-safe one-shot commit with FAKE Shopify
+        run: |
+          node --test --test-concurrency=1 \
+            test/adr002-lab-real-commit-pg.test.js \
+            test/adr002-lab-postcommit-verifier.test.js \
+            test/adr002-lab-real-shopify-commit-transport.test.js \
+            test/adr002-lab-signed-amendment-pg.test.js
+      - name: Enforce all 026–030 stay held
+        run: |
+          for f in 026_apna_amendment_reservations.sql 027_apna_amendment_bill_simulations.sql 028_apna_edit_commit_intents.sql 029_lab_signed_apna_amendments.sql 030_lab_apna_commit_and_bill_history.sql; do
+            grep -Fxq "$f" db/migrations/HOLD
+          done

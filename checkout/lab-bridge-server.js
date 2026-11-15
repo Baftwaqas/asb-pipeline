@@ -130,6 +130,24 @@ if(process.env.ASB_LAB_DB_AUDIT==="READONLY_SCHEMA_GATE"){
     console.error("[checkout-lab] DB audit refused: unsafe target");
   }
 }
+// Four explicit, private operator phases for synthetic lab #1002.
+// Each phase is a separate Render deployment; the public HTTP service is
+// always SAFE_LOCKED and never accepts order requests.
+if([
+  "INSTALL_REVIEWED_LAB_029_030",
+  "AUTHORIZE_ONE_SYNTHETIC_AMENDMENT",
+  "COMMIT_ORDER_1002_ONCE",
+  "RECOVER_ORDER_1002_READONLY"
+].includes(process.env.ASB_LAB_REVIEWED_OP)){
+  try{
+    assertExactLabDatabase();
+    const cli=pathModule.join(__dirname,
+      "../scripts/lab-apna-reviewed-operator-v1.js");
+    launch([cli],{},()=>{});
+  }catch{
+    console.error("[checkout-lab] reviewed operator refused: unsafe lab DB");
+  }
+}
 // Operator-only, one idempotent synthetic 500g Apna Onion order. The entrypoint
 // validates exact lab shop, exact DB, signed quote and product-catalog price.
 // No public HTTP route or customer-facing checkout is enabled.
