@@ -36,6 +36,7 @@ const productSync = require("./productSync");
 const bill = require("./bill");
 const { writeGroceryOrder, resolveProduct } = require("./grocery/write");
 const groceryWorker = require("./grocery/worker");
+const bhao = require("./bhao/runtime");
 const groceryAlerts = require("./grocery/alerts");
 const groceryReceipts = require("./grocery/receipts");
 const grocerySwitches = require("./grocery/switches");
@@ -221,7 +222,7 @@ async function saveInbound(msg, contact) {
     push.newMessage(db, { from, name: contact?.profile?.name || null, preview, type })
       .catch((e) => console.error("[push] inbound ping failed:", e.message));
   }
-  return { from, type, preview };
+  return { from, type, preview, fresh: saved.rowCount === 1 };
 }
 
 // ============================================================
@@ -420,8 +421,17 @@ app.post("/webhooks/whatsapp", async (req, res) => {
         for (let i = 0; i < (value.messages || []).length; i++) {
           const msg = value.messages[i];
           try {
-            await saveInbound(msg, contacts[i] || contacts[0]);
+            const got = await saveInbound(msg, contacts[i] || contacts[0]);
             handled++;
+            // Bhao Tao (off unless BHAO_TAO_WHATSAPP=on): a new text may be a
+            // bargain with Seth Ji. Not awaited; it never affects the inbox.
+            // A tap on one of Seth Ji's buttons or menu rows comes back as
+            // an "interactive" message whose id starts with "bhao:".
+            const bhaoTap = got.type === "interactive"
+              ? String(msg.interactive?.button_reply?.id || msg.interactive?.list_reply?.id || "") : "";
+            if (got.fresh && bhao.enabled() && (got.type === "text" || bhaoTap.startsWith("bhao:"))) {
+              bhao.onInbound(db, { phone: got.from, text: got.preview, wamid: msg.id, tap: bhaoTap || null }).catch(() => {});
+            }
             // Blue ticks: cheap, free, and tells the customer a human
             // is on the other end. Never allowed to fail the webhook.
             wa.markRead(msg.id).catch(() => {});
@@ -673,6 +683,9 @@ return app.listen(...(BIND_HOST ? [PORT, BIND_HOST] : [PORT]), async () => {
   // A rate-list broadcast interrupted by a restart carries on from where it
   // stopped. Every recipient is marked as sent, so nobody gets it twice.
   if (h.ok) broadcast.resumeAll(db, require("./inbox").logOutbound);
+
+  // Bhao Tao on WhatsApp: off unless BHAO_TAO_WHATSAPP=on (and migration 025).
+  if (h.ok) bhao.start(db, wa, require("./inbox").logOutbound);
 
   // Read the Meta catalogue's product names (retailer id -> name), then write
   // names into saved catalogue orders that still show "item <id>" or the old

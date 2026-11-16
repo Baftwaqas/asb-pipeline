@@ -3,6 +3,7 @@
     "node": ">=24 <25"
   },
   "dependencies": {
+    "@napi-rs/canvas": "1.0.12",
     "express": "^5.2.1",
     "pg": "^8.23.0",
     "pg-connection-string": "^2.14.0",
