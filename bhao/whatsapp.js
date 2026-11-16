@@ -43,6 +43,7 @@ const G = require("./guard");
 const K = require("./cards");
 const U = require("./understand");
 const C = require("./cases");
+const ST = require("./stories");
 // Seth Ji's game messages: fixed wording, never the AI (the game is the rules)
 const GAME_KINDS = new Set(["game_offer", "game_lost", "game_declined"]);
 
@@ -95,6 +96,12 @@ const BUTTON_KINDS = new Set(["open", "refuse", "counter", "final_offer", "talk"
 
 /** What a tap means, as if she had typed it. Null for taps that are not Seth Ji's. */
 function fromButton(id) {
+  // "Asli Kahaniyan" (bhao/stories.js): a choice in a scene, a story picked, the story menu
+  const sy = /^bhao:story:(\d+):(\d+):(\d)$/.exec(String(id || ""));
+  if (sy) return { text: "Faisla", intent: `story:${sy[1]}:${sy[2]}:${sy[3]}` };
+  const tl = /^bhao:tale:([a-z0-9-]+)$/.exec(String(id || ""));
+  if (tl) return { text: "Kahani", intent: `tale:${tl[1]}` };
+  if (String(id || "") === "bhao:tales:0") return { text: "KAHANI", intent: "tales" };
   // "Seth Ji ke Case" (bhao/cases.js): a clue or verdict, a role, her society, play again
   const cs = /^bhao:case:(\d+):([cv])(\d)$/.exec(String(id || ""));
   if (cs) return { text: "Case", intent: `case:${cs[1]}:${cs[2]}${cs[3]}` };
@@ -209,7 +216,8 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
     const rows = await menu(db, { phone, now });
     const game = (await C.ready(db).catch(() => false)) && C.playable(env).length > 0;
     return rows.length ? { handled: true, menu: rows, menuText: "Kis cheez pe bhao lagana hai? Neeche se chunein 👇" +
-                           (game ? "\n\n🎭 Ya Seth Ji ka case solve karein - *CASE* likh dein!" : "") }
+                           (game ? "\n\n🎭 Ya Seth Ji ka case solve karein - *CASE* likh dein!" : "") +
+                           ((await ST.ready(db).catch(() => false)) && ST.playable(env).length ? "\n📜 Ya ek asli kahani jiyein - *KAHANI* likh dein!" : "") }
       : { handled: false, reason: "no items" };
   }
   const start = START.exec(body);
@@ -218,6 +226,10 @@ async function onInbound(db, { phone, text, wamid, now = new Date(), env = proce
   // LEADERBOARD / SOCIETY. Its messages go out at once (`out`). A case that
   // ends inside a bargain then carries on below: her price, or the bargain.
   let caseOut = null;
+  if (!start) {
+    const t = await ST.route(db, { phone, body, intent, now, env }).catch((e) => { console.error("[bhao] story router failed:", e.message); return null; });
+    if (t) return { handled: true, kind: t.kind, out: t.out, instant: true };
+  }
   if (!start) {
     const g = await C.route(db, { phone, body, intent, now, env }).catch((e) => { console.error("[bhao] case router failed:", e.message); return null; });
     if (g && g.final && g.final.bargain) { intent = g.final.won ? "case_won" : "case_lost"; caseOut = g.out; }

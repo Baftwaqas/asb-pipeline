@@ -231,19 +231,29 @@ async function finish(db, play, { result, now }) {
 }
 
 // ---- leaderboard -----------------------------------------------------------
+// every game's points (cases; and Asli Kahaniyan once migration 029 is there)
+async function pointsSource(db) {
+  const stories = (await db.query(`SELECT to_regclass('bhao_story_plays') IS NOT NULL AS ok`)).rows[0].ok;
+  return stories
+    ? `(SELECT phone, points, ended_at, (status = 'won') AS solved FROM bhao_case_plays
+        UNION ALL SELECT phone, points, ended_at, FALSE AS solved FROM bhao_story_plays WHERE status = 'done')`
+    : `(SELECT phone, points, ended_at, (status = 'won') AS solved FROM bhao_case_plays)`;
+}
+
 async function leaderboard(db, { phone, now }) {
   await refreshVerified(db, phone);
+  const src = await pointsSource(db);
   const rows = (await db.query(
     `SELECT s.id, s.name, sum(p.points)::int AS pts, count(DISTINCT p.phone)::int AS players
-       FROM bhao_case_plays p
+       FROM ${src} p
        JOIN bhao_players pl ON pl.phone = p.phone AND pl.society_verified AND pl.society_id IS NOT NULL
        JOIN societies s ON s.id = pl.society_id
       WHERE p.ended_at >= $1 AND p.points > 0
       GROUP BY s.id, s.name ORDER BY pts DESC, s.name`, [weekStart(now)])).rows;
   const me = (await db.query(
     `SELECT COALESCE(sum(points), 0)::int AS total, COALESCE(sum(points) FILTER (WHERE ended_at >= $2), 0)::int AS week,
-            count(*) FILTER (WHERE status = 'won')::int AS solved
-       FROM bhao_case_plays WHERE phone = $1`, [phone, weekStart(now)])).rows[0];
+            count(*) FILTER (WHERE solved)::int AS solved
+       FROM ${src} p WHERE phone = $1`, [phone, weekStart(now)])).rows[0];
   const pl = await playerOf(db, phone);
   const rank = RANKS.find((r) => me.total >= r.min).label;
   const medal = ["🥇", "🥈", "🥉"];

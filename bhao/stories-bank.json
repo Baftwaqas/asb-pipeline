@@ -1,0 +1,554 @@
+{
+  "version": "STORIES-DRAFT-3",
+  "note": "Asli Kahaniyan (founder, 16 Nov): real moments from history, played blind - names, companies and places only in the reveal. 4 decisions, 60 seconds each, every choice plays out at once (then), later scenes open differently by earlier choices (flags -> variants), 3 hidden meters decide one of 3 endings. Journey = drama; reveal = checked facts (sources). Pakistani Roman Urdu. The founder approves each story (approved: true) before it is played live. Pictures: bhao/assets/stories/<id>.jpg (one per story; each scene is a different crop).",
+  "stories": [
+    {
+      "id": "ghost-ship",
+      "genre": "😱 Dehshat · Samandar",
+      "role": "Kaptaan",
+      "title": "Khali Jahaz",
+      "meters": [
+        "🔎 Raaz",
+        "🛡️ Hifazat",
+        "💰 Inaam"
+      ],
+      "scenes": [
+        {
+          "text": "Saal 1872. Beech samandar, aas paas sainkron meel tak koi zameen nahi. Subah ki dhund mein ek jahaz nazar aata hai - baadban phate hue, bina kisi rukh ke dol raha hai. Deck pe koi nahi. Aap awaaz dete hain... jawab mein sirf lakdi ke charcharane ki awaaz. Aap ka sab se purana mallah kaanpti awaaz mein kehta hai: 'Kaptaan sahab, aise jahaz pe paon nahi rakhte.'",
+          "choices": [
+            {
+              "t": "Kuch der door se dekho, phir 3 aadmi andar bhejo",
+              "fx": [
+                2,
+                1,
+                1
+              ],
+              "real": true,
+              "then": "Aap ka naib kaptaan aur do mallah rassi pakar ke charhte hain. Aap doorbeen se dekh rahe hain... achanak teeno ek kamre ke darwaze pe ruk jate hain. Bohat der tak koi bahar nahi aata. Phir naib kaptaan ka haath hilta hai: 'Kaptaan! Neeche aaiye... yeh dekhiye.'"
+            },
+            {
+              "t": "Waqt zaya na karo - sab ko le ke foran charh jao",
+              "fx": [
+                2,
+                -2,
+                1
+              ],
+              "flag": "rushed",
+              "then": "Sab ek saath kood parte hain. Teesre qadam pe ek sarri hui takhti toot'ti hai - aap ka sab se jawan mallah kamar tak neeche phans jata hai, us ki cheekh khali jahaz mein goonjti hai. Use nikal toh lete hain, lekin us ka paon toot chuka hai. Ab aap ke paas ek aadmi kam hai."
+            },
+            {
+              "t": "Nazar-andaz karo, apna raasta pakro",
+              "fx": [
+                -2,
+                2,
+                -2
+              ],
+              "flag": "fled",
+              "then": "Aap rukh mor lete hain. Shaam tak sab bhool jate hain... lekin raat ko chowkidar cheekhta hai. Wohi jahaz - bina kisi ke chalaye - aap ke bilkul saath saath chal raha hai. Laaltain ki roshni mein us ka khali deck chamak raha hai. Ab mallah kehte hain: 'Yeh hamara peecha kar raha hai. Dekhna toh parega.'"
+            }
+          ]
+        },
+        {
+          "text": "Andar ajeeb sa sannata hai. Khana aur paani 6 mahine ka. Sab ka saaman apni jagah, jaise log abhi wapas aane wale hon. Kaptaan ke kamre mein ek silai machine - is jahaz pe ek aurat bhi thi. Neeche 3.5 feet paani, ek pump khula para hai. Lifeboat gayab. Kaptaan ki roznamcha ki aakhri line 10 din purani hai - aur us mein sab 'normal' likha hai.",
+          "variants": {
+            "rushed": "Zakhmi mallah ki karahein aap ke peeche goonj rahi hain. ",
+            "fled": "Raat ke andhere mein, laaltain haath mein, aap aakhir us jahaz pe utarte hain. "
+          },
+          "choices": [
+            {
+              "t": "Jahaz ko port le chalo - qanoon ke mutabiq bara inaam milega",
+              "fx": [
+                1,
+                -1,
+                3
+              ],
+              "real": true,
+              "flag": "salvage",
+              "then": "Aap ke staff ki aankhon mein chamak aa jati hai - itna maal, itna inaam! Lekin naib kaptaan dheere se kehta hai: 'Captain, socha hai port pe log kya poochhenge? Kahenge yeh jahaz khali kaise mila?' Aap jawab nahi dete."
+            },
+            {
+              "t": "Diary aur papers utha lo, jahaz yahin chhor do",
+              "fx": [
+                1,
+                2,
+                -2
+              ],
+              "then": "Aap roznamcha utha ke mudte hain - tabhi khali jahaz ka phata baadban zor se phar-phar karta hai, jaise kisi ne pukara ho. Neeche hold se ek dabi si 'thak... thak...' ki awaaz aati hai. Staff bhag ke wapas apne jahaz pe aata hai. Koi peeche mud ke nahi dekhta."
+            },
+            {
+              "t": "Raat bhar ruk ke har kona dhoondo",
+              "fx": [
+                3,
+                -2,
+                0
+              ],
+              "flag": "searched",
+              "then": "Raat 3 baje laaltain bujh jata hai. Andhere mein kaptaan ke kamre se kisi ke chalne ki awaaz... aap laaltain jalate hain - koi nahi. Subah aap ko kaptaan ke bistar ke neeche ek talwar milti hai, us pe laal laal daagh. Ek mallah bukhar mein bas ek hi baat dohra raha hai: 'Woh lifeboat mein the... rassi toot gayi...'"
+            }
+          ]
+        },
+        {
+          "text": "Do jahaz chalane ke liye aap ko apne aadmi baantne honge. Aasman kaala ho chuka hai, hawa cheekh rahi hai - toofan sar pe hai. Aap ka staff aap ki taraf dekh raha hai.",
+          "variants": {
+            "rushed": "Aap ke paas pehle hi ek aadmi kam hai. ",
+            "searched": "Raat bhar ki dehshat ke baad aap ka staff thaka hua aur dara hua hai. "
+          },
+          "choices": [
+            {
+              "t": "3 aadmi khali jahaz pe bhejo, dono jahaz saath chalo",
+              "fx": [
+                0,
+                -1,
+                2
+              ],
+              "real": true,
+              "then": "Toofan mein dono jahaz ek doosre ki laaltain dekh ke chalte hain. Aadhi raat ko khali jahaz ki laaltain achanak bujh jati hai. Aap ki saans ruk jati hai... 5 minute baad woh phir jalti hai. Subah naib kaptaan sirf itna kehta hai: 'Raat ko kaptaan ke kamre mein koi tha, sahab. Main qasam khata hun.'"
+            },
+            {
+              "t": "Khali jahaz ko rassi se khench ke le chalo",
+              "fx": [
+                0,
+                -2,
+                1
+              ],
+              "flag": "towed",
+              "then": "Toofan ki pehli lehar mein rassi tan jati hai - phir ek dhamake se toot'ti hai. Khali jahaz andhere mein gayab. Subah sab use dhoondte hain... aur dopahar ko woh khud hi aap ke saamne aa jata hai, bilkul seedha, jaise koi usay chala raha ho."
+            },
+            {
+              "t": "Toofan se pehle khali jahaz chhor do",
+              "fx": [
+                0,
+                2,
+                -3
+              ],
+              "flag": "abandoned",
+              "then": "Aap khali jahaz ko toofan ke hawale kar dete hain. Staff mein khamoshi chha jati hai - un ka inaam samandar mein doob gaya. Raat ko aap sunte hain, neeche koi kehta hai: 'Kaptaan darpok nikla.' Agli subah do aadmi kaam karne se inkaar kar dete hain."
+            }
+          ]
+        },
+        {
+          "text": "Port pe pohanchte hi aap ko giraftar kar liya jata hai. Sarkari wakeel adalat mein garajta hai: 'Kaptaan ki talwar pe khoon ke daagh hain! Tum ne un sab ko maara, lashein samandar mein phenkin, aur ab inaam lene aaye ho!' Akhbaar aap ko 'qatil kaptaan' likh rahe hain. Aap ke bachon ko school mein chheda ja raha hai.",
+          "variants": {
+            "abandoned": "Aap khali haath aaye hain - lekin aap ke naraz mallahon ne hi kahani bahar phaila di. ",
+            "searched": "Woh talwar aap ne khud dhoondi thi - aur ab wohi aap ke khilaf saboot hai. "
+          },
+          "choices": [
+            {
+              "t": "Sach pe dat jao - talwar ki jaanch karwao, poori inquiry hone do",
+              "fx": [
+                2,
+                1,
+                1
+              ],
+              "real": true,
+              "then": "Mahinon tak adalat chalti hai. Har din wakeel naya ilzaam lata hai. Phir ek doctor talwar ke daagh ki jaanch karta hai. Adalat mein sannata... 'Yeh khoon nahi hai.' Aap ki aankhon se aansu nikal aate hain."
+            },
+            {
+              "t": "Inaam chhor do aur raaton raat sheher se nikal jao",
+              "fx": [
+                -2,
+                2,
+                -3
+              ],
+              "then": "Aap raat ko chupke se nikal jate hain. Agle din akhbaar ki surkhi: 'Qatil captain faraar!' Ab aap jahan bhi jayenge, yeh kahani aap ke peeche peeche jayegi."
+            },
+            {
+              "t": "Ulta wakeel pe ilzaam lagao ke woh inaam khud khana chahta hai",
+              "fx": [
+                0,
+                -3,
+                0
+              ],
+              "then": "Adalat mein hungama mach jata hai. Judge aap ko sakht daant'ta hai. Wakeel muskurata hai - ab poori adalat aap ko ghusse wala, chhupane wala aadmi samajhti hai."
+            }
+          ]
+        }
+      ],
+      "endings": [
+        {
+          "min": 6,
+          "text": "🏆 Adalat ne aap ko baizzat bari kar diya. Aap ne jahaz bhi bachaya, apna naam bhi. Lekin raat ko jab samandar khamosh hota hai, aap ko aaj bhi woh khali deck aur bujhti hui laaltain yaad aati hai. Aap jaante hain - kuch raaz kabhi hal nahi hote."
+        },
+        {
+          "min": 1,
+          "text": "⚖️ Aap bach gaye, lekin aadhe hi. Logon ki nazron mein shak ka daagh hamesha raha. Bandargah pe log aap ko dekh ke aapas mein kaanaphoosi karte hain: 'Yehi hai woh... khali jahaz wala.'"
+        },
+        {
+          "min": -99,
+          "text": "🌊 Na raaz mila, na inaam, na izzat. Samandar ne apna bhed chhupa liya - aur aap ka naam ek kahani ban ke reh gaya jo mallah raat ko dar ke sunate hain."
+        }
+      ],
+      "reveal": "Yeh 'Mary Celeste' thi - tareekh ka sab se mashhoor bhoot jahaz. Aap 'Dei Gratia' ke kaptaan ki jagah the, jis ne December 1872 mein usay Atlantic mein khali paya. Kaptaan Briggs, un ki biwi, 2 saal ki beti aur 7 staff kabhi nahi mile. Asal kaptaan ne naib kaptaan aur 2 mallah bhej ke jahaz Gibraltar pohanchaya. Wahan sarkari wakeel ne unhi pe qatl ka shak kiya; talwar ke laal daaghon ki jaanch hui - khoon nahi nikla. Inaam mila, lekin jahaz aur maal ki qeemat ka sirf 1/5 hissa. 150 saal baad bhi raaz hal nahi hua.",
+      "sources": [
+        "https://www.history.com/this-day-in-history/december-5/the-mystery-of-the-mary-celeste",
+        "https://www.maryceleste.net/doctor.htm",
+        "https://www.maryceleste.net/news.htm",
+        "https://www.cbc.ca/1.6830855"
+      ],
+      "approved": false
+    },
+    {
+      "id": "50-million",
+      "genre": "💼 Karobaar",
+      "role": "Company ka Sarbarah",
+      "title": "5 Karor ka Faisla",
+      "meters": [
+        "💰 Paisa",
+        "🚀 Mustaqbil",
+        "🤝 Hissedaron ka bharosa"
+      ],
+      "scenes": [
+        {
+          "text": "Saal 2000. Aap duniya ki sab se bari filmein kiraye pe dene wali company ke sarbarah hain - hazaron dukaanein, hazaron mulazim, saal ki 5 arab dollar ki kamai. Aaj aap ke shandar daftar mein do nojawan aaye hain - chappal aur aadhi aasteen ki qameez mein. Un ki company internet pe order le ke DVD daak se bhejti hai, aur is saal bhaari ghate mein hai. Un ki offer: 'Hamein 5 karor dollar mein khareed lein.' Aap ke saathi muskurahat daba rahe hain.",
+          "choices": [
+            {
+              "t": "Mana kar do - yeh chhota sa shauqia kaam hai",
+              "fx": [
+                1,
+                -3,
+                2
+              ],
+              "real": true,
+              "flag": "refused",
+              "then": "Kamre mein dabi dabi hansi. Dono nojawan sar jhuka ke nikal jate hain. Darwaze se nikalte hue un mein se ek aap ki taraf dekhta hai - us ki aankhon mein sharmindagi nahi, ek ajeeb si zid hai. Aap ka munshi kehta hai: 'Sir, yeh dobara nahi aayenge.' Aap muskura dete hain."
+            },
+            {
+              "t": "Khareed lo - 5 karor hamare liye kuch nahi",
+              "fx": [
+                -1,
+                3,
+                -2
+              ],
+              "flag": "bought",
+              "then": "Agle din baazar mein aap ki company ke hisson ki qeemat gir jati hai. Akhbaar likhte hain: 'Sarbarah ne ghate wali internet company pe 5 karor phoonk diye.' Hissedaron ka sardar aap ko phone pe sirf ek jumla kehta hai: 'Umeed hai aap jaante hain kya kar rahe hain.'"
+            },
+            {
+              "t": "Khareedo nahi, lekin saath kaam ka sauda karo",
+              "fx": [
+                0,
+                1,
+                1
+              ],
+              "flag": "partner",
+              "then": "Sauda ho jata hai. Lekin chhe mahine mein dono companiyon ke log aapas mein ladne lagte hain. Woh nojawan aap ke gahakon ki saari maloomat dekh rahe hain - aur seekh rahe hain. Aap ka ek afsar khabardar karta hai: 'Sir, hum apne dushman ko khud paal rahe hain.'"
+            }
+          ]
+        },
+        {
+          "text": "4 saal guzar gaye. Woh chhoti company ab har mahine 1 lakh naye gahak bana rahi hai. Aap ki kamai ka bara hissa der se film lautane ke jurmane se aata hai. Gahak is se nafrat karte hain; doosri company ka ishtihar hai: 'Koi jurmana nahi. Kabhi nahi.'",
+          "variants": {
+            "bought": "Woh company ab aap ki hai - lekin aap ke dukaanon wale afsar usay 'sarbarah sahab ka khilona' keh ke us ka bajat kaat rahe hain. ",
+            "partner": "Partnership toot chuki hai. Woh company ab aap ke diye hue maloomat se aap hi ke gahak chheen rahi hai. "
+          },
+          "choices": [
+            {
+              "t": "Jurmana khatam karo - chahe karoron dollar ka nuqsan ho",
+              "fx": [
+                -2,
+                2,
+                -2
+              ],
+              "real": true,
+              "then": "Pehle hi mahine kamai mein bara gadha. Aap ke dukaanon ke malik adalat chale jate hain. Hissedaron ki baithak mein ek director mez pe haath maar ke kehta hai: 'Aap company ki sab se bari kamai khud kaat rahe hain!' Aap jaante hain - yeh jung ab ghar ke andar shuru ho gayi hai."
+            },
+            {
+              "t": "Jurmana rehne do - yeh hamari kamai hai",
+              "fx": [
+                2,
+                -2,
+                1
+              ],
+              "flag": "kept_fees",
+              "then": "Is saal ka munafa ab tak ka sab se zyada hai. Hissedar taaliyan bajata hai. Lekin aap ki beti raat ko khane pe kehti hai: 'Papa, meri saheliyan ab aap ki dukaan nahi jatin. Woh kehti hain aap log jurmana lete ho.'"
+            },
+            {
+              "t": "Jurmana aur barha do",
+              "fx": [
+                1,
+                -3,
+                0
+              ],
+              "flag": "kept_fees",
+              "then": "Ek hafte mein akhbaar ki surkhi: 'Duniya ki sab se lalchi dukaan.' Internet pe log aap ke membership membership card kaat kaat ke tasveerein lagate hain. Doosri company ke naye gahak is mahine double ho jate hain."
+            }
+          ]
+        },
+        {
+          "text": "Ab faisle ki ghari hai. Aap bhi internet pe apni service shuru kar sakte hain - lekin is pe karoron dollar lagenge, aap ki apni dukaanon ka kaam kamzor hoga, aur hissedar shor machayenge. Ek bara hissedar pehle se aap ko hatane ki baatein kar raha hai.",
+          "variants": {
+            "kept_fees": "Gahak tezi se ja rahe hain - pichle 6 mahine mein 10% kam. "
+          },
+          "choices": [
+            {
+              "t": "Haan - poori taqat se internet pe jao",
+              "fx": [
+                -2,
+                3,
+                -2
+              ],
+              "real": true,
+              "then": "Aap ki internet wali service dhamake se shuru hoti hai - pehle hi saal lakhon gahak! Doosri company pehli dafa ghabra jati hai. Lekin kharcha itna hai ke company ka qarzaa pahaar ban jata hai. Hissedaron ki baithak ab ek jung ka maidan hai."
+            },
+            {
+              "t": "Thora sa try kar ke dekho",
+              "fx": [
+                0,
+                1,
+                0
+              ],
+              "then": "Ek chhoti si internet dukaan, chhoti si toli. Gahak usay 'adhoori' kehte hain. Doosri company ka sarbarah akhbaar se baat karte hue hans ke kehta hai: 'Woh ab bhi soch rahe hain ke internet asli hai ya nahi.'"
+            },
+            {
+              "t": "Nahi - dukaanein hi hamari asal taqat hain",
+              "fx": [
+                1,
+                -3,
+                2
+              ],
+              "then": "Is saal aap 300 nayi dukaanein kholte hain. Feeta kaatte hue photo khinchwate hain. Usi hafte doosri company apne 50 lakh gahak ka jashan manati hai."
+            }
+          ]
+        },
+        {
+          "text": "Hissedaron ki baithak. Darwaza band. Bara hissedar khara ho ke kehta hai: 'Sarbarah sahab ne company ka paisa pani ki tarah bahaya hai. Main aaj in ko hatane ka vote chahta hun.' Saari nazrein aap pe hain. Aap ke hazaron mulazimon ka mustaqbil is kamre mein hai.",
+          "variants": {
+            "bought": "Aap ki khareedi hui company ab tezi se barh rahi hai - aur yahi aap ka sab se bara hathiyar hai. "
+          },
+          "choices": [
+            {
+              "t": "Ladai mat karo - izzat se company chhor do",
+              "fx": [
+                0,
+                -2,
+                1
+              ],
+              "real": true,
+              "then": "Aap khamoshi se istifa rakh dete hain. Naya sarbarah aate hi internet ka kharcha kaat deta hai aur dukaanon pe wapas zor deta hai. Aap TV pe yeh khabar dekhte hain aur remote rakh dete hain."
+            },
+            {
+              "t": "Lado - apni internet wale faisle pe dat jao",
+              "fx": [
+                -1,
+                3,
+                -2
+              ],
+              "then": "Vote barabar barabar... aakhri vote aap ke haq mein! Aap bach jate hain. Lekin hissedar ab do hisson mein bat chuka hai, aur har faisle pe jung hai. Aap jaante hain - waqt kam hai."
+            },
+            {
+              "t": "Beech ka raasta nikalo - internet ka kharcha aadha kar do",
+              "fx": [
+                1,
+                -1,
+                1
+              ],
+              "then": "Hissedar khush, bara hissedar khamosh. Aap ki kursi bach gayi. Lekin aap ki internet wali toli ke aadhe log usi hafte doosri company join kar lete hain."
+            }
+          ]
+        }
+      ],
+      "endings": [
+        {
+          "min": 5,
+          "text": "🚀 Aap ne woh dekh liya jo baqi na dekh sake. Dukaanein band huin, lekin company naye zamane mein zinda rahi. Aaj college aur university mein aap ka naam misaal ke taur pe parhaya jata hai."
+        },
+        {
+          "min": 0,
+          "text": "⚖️ Company bach gayi, lekin aadhi. Har saal kuch aur dukaanein band hoti hain, aur har saal aap sochte hain: 'Kaash us din...'"
+        },
+        {
+          "min": -99,
+          "text": "🏚️ Ek ek kar ke saari dukaanein band ho gayin. Aaj sirf ek dukaan bachi hai - log usay ajaib ghar ki tarah dekhne aate hain. Aur woh do nojawan? Un ki company duniya ki sab se bari tafreeh ki company ban gayi."
+        }
+      ],
+      "reveal": "Yeh 'Blockbuster' thi, aur woh do nojawan 'Netflix' ke founders - Reed Hastings aur Marc Randolph. Saal 2000 mein unhon ne Netflix 5 karor dollar mein bechne ki offer di; Blockbuster ke sarbarah John Antioco ne mana kar diya. Baad mein Blockbuster ne jurmana khatam kiya aur apni internet pe apni service bhi shuru ki - lekin 2005 mein hissedaron se jhagde ke baad Antioco company chhor gaye. 2010 mein Blockbuster deewaliya ho gayi. Netflix aaj 200 arab dollar se zyada ki company hai. Reed Hastings ne baad mein kaha: 'Shukar hai unhon ne hamein nahi khareeda.'",
+      "sources": [
+        "https://marketplace.org/2020/09/08/ceo-reed-hastings-on-how-netflix-beat-blockbuster",
+        "https://newsweek.com/fact-check-did-blockbuster-turn-downchance-buy-netflix-50-million-1575557",
+        "https://news.yahoo.com/netflix-reed-hastings-streaming-wars-blockbuster-120914436.html"
+      ],
+      "approved": false
+    },
+    {
+      "id": "cave",
+      "genre": "🚨 Bachao",
+      "role": "Bachao ka Sarbarah",
+      "title": "Gaar mein 13 Zindagiyan",
+      "meters": [
+        "❤️ Jaanein",
+        "⏳ Waqt",
+        "⚠️ Khatra"
+      ],
+      "scenes": [
+        {
+          "text": "Ek pahari gaar ke bahar hazaron log khamosh khare hain. Andar 12 bachay (11 se 16 saal) aur un ka coach phanse hain - tez barish ne raasta paani se bhar diya. 9 din baad ghotakhoron ne unhein zinda dhoond liya: 4 km andar, ek sookhi chattan pe, bhooke aur kamzor. Ek maa aap ka haath pakar ke kehti hai: 'Mera beta lauta do.' Saawan ki asal barish 3 din mein aane wali hai.",
+          "choices": [
+            {
+              "t": "Pump chalate raho, aur ghotakhoron ka mansooba saath saath banao",
+              "fx": [
+                2,
+                1,
+                0
+              ],
+              "real": true,
+              "then": "Sainkron pump din raat chalte hain - paani thora sa kam hota hai. Ghotakhor naqsha banate hain. Lekin har ghante aasman aur kaala hota ja raha hai. Ek purana ghotakhor aap ke kaan mein kehta hai: 'Hamare paas din nahi, ghante hain.'"
+            },
+            {
+              "t": "Khana bhejte raho, 4 mahine baad paani utarne pe nikalo",
+              "fx": [
+                -1,
+                -3,
+                -1
+              ],
+              "flag": "waited",
+              "then": "Andar khana pohanchaya jata hai. Bachay muskura ke video mein haath hilate hain. Lekin agle din doctor bataate hain: gaar ki hawa mein oxygen tezi se kam ho rahi hai. 4 mahine? Shayad 4 hafte bhi nahi."
+            },
+            {
+              "t": "Sab chhor ke pahar ke upar se naya raasta khodo",
+              "fx": [
+                0,
+                -2,
+                0
+              ],
+              "flag": "drilled",
+              "then": "Machines pahar pe charh jati hain. 3 din, 100 se zyada suraakh. Har suraakh ke neeche sirf patthar. Pump band hone se andar paani phir barhne laga hai. Bahar maayein ab ro nahi rahi - bas khamoshi se aap ko dekh rahi hain."
+            }
+          ]
+        },
+        {
+          "text": "Raat 2 baje radio pe khabar aati hai: oxygen ke cylinder pohanchate hue ek tajurbekar razakaar ghotakhor ki raaste mein hi hawa khatam ho gayi. Woh wapas nahi aaya. Poore camp pe sannata. Ghotakhor ek doosre se nazrein chura rahe hain. Aur gaar ke andar oxygen ab khatarnak had tak kam hai.",
+          "variants": {
+            "waited": "Aap ke intezar ke faisle ne qeemti din kha liye. ",
+            "drilled": "Khudai ke din zaya ho gaye - aur ab har ghanta bhaari hai. "
+          },
+          "choices": [
+            {
+              "t": "Sirf duniya ke sab se mahir ghotakhoron ko aage bhejo",
+              "fx": [
+                2,
+                0,
+                1
+              ],
+              "real": true,
+              "then": "Duniya bhar se aaye 13 mahir ghotakhor ek line mein khare hain. Aap un se poochhte hain: 'Koi wapas jana chahta hai toh abhi chala jaye.' Koi nahi hilta. Ek kehta hai: 'Hum us ghotakhor ke liye bhi andar ja rahe hain.'"
+            },
+            {
+              "t": "Kaarwai rok do - ek aur maut nahi chahiye",
+              "fx": [
+                -2,
+                -2,
+                2
+              ],
+              "flag": "paused",
+              "then": "Aap kaarwai rok dete hain. Do din. Teesre din andar se ek kaghaz aata hai - coach ki likhi hui chithi: 'Hum theek hain, lekin saans lena mushkil ho raha hai.' Ek maa behosh ho jati hai. Aap ko ab har pal ka hisaab dena hai."
+            },
+            {
+              "t": "Jo bhi ghotakhor hai, sab ko andar bhejo - waqt nahi hai",
+              "fx": [
+                1,
+                2,
+                -3
+              ],
+              "flag": "rushed",
+              "then": "Sainkron ghotakhor gaar mein bhar jate hain - tang raaston mein bheed, ek doosre ke cylinder takrate hain. Do ghotakhoron ka raabta toot jata hai. Ghanton baad ek bahar aata hai... doosre ka aap saari raat intezar karte hain."
+            }
+          ]
+        },
+        {
+          "text": "Ab sab se mushkil faisla. Bachay tairna nahi jaante. Raaste mein ek jagah sirf 38 cm chaudi hai - ek bachay ke kandhon jitni - poora andhera, barf jaisa thanda paani, aur 4 ghante ka safar. Agar koi bacha paani mein ghabra ke haath pair maarne laga, toh bachay aur ghotakhor dono ki jaan ja sakti hai.",
+          "variants": {
+            "paused": "Rukne ki wajah se bachay ab aur kamzor ho chuke hain. ",
+            "rushed": "Pichli raat ki bheed ke baad ghotakhor ab dare hue aur thake hue hain. "
+          },
+          "choices": [
+            {
+              "t": "Bachon ko dawai se behosh kar ke ghotakhor khud le kar aayen",
+              "fx": [
+                3,
+                1,
+                -1
+              ],
+              "real": true,
+              "then": "Ek doctor andar jata hai aur har bachay ko teeka lagata hai. Behosh bachon ko paani ke libas mein lapeta jata hai, chehre pe saans ka naqab. Ek ghotakhor har bachay ko apne seene se laga ke paani mein utarta hai. Aap bahar khade hain - ghadi ki sui jaise ruk gayi hai."
+            },
+            {
+              "t": "Hosh mein le jao - sab se mazboot bacha pehle",
+              "fx": [
+                -1,
+                1,
+                -2
+              ],
+              "flag": "awake",
+              "then": "Pehla bacha paani mein utarta hai. Tang raaste mein andhera hote hi woh ghabra jata hai, ghotakhor ka naqab kheench leta hai. Ghotakhor ki saans ruk jati hai... kisi tarah dono wapas aate hain. Bacha cheekh cheekh ke kehta hai: 'Main dobara nahi jaunga!'"
+            },
+            {
+              "t": "Pehle ek bacha le ke aazma ke dekho, phir faisla",
+              "fx": [
+                1,
+                -1,
+                0
+              ],
+              "then": "Ek bacha, chaar ghotakhor, poora din. Woh zinda bahar aata hai! Lekin is aazmaish mein poora din chala gaya, aur aasman pe pehli boondein girne lagi hain."
+            }
+          ]
+        },
+        {
+          "text": "Pehle din 4 bachay zinda bahar aaye! Poori duniya mein khushi ki lehar. Lekin abhi 9 andar hain. Aasman pe kaale badal, ghotakhor 20 ghante se jaag rahe hain, aur mausam wale kehte hain kal se moosla dhaar barish.",
+          "variants": {
+            "awake": "Ek bachay ke ghabrane ke baad ab har bacha dara hua hai. "
+          },
+          "choices": [
+            {
+              "t": "Ruko mat - roz 4-5 nikalte raho",
+              "fx": [
+                2,
+                2,
+                -1
+              ],
+              "real": true,
+              "then": "Doosre din 4 aur. Teesre din aakhri 4 bachay aur coach. Jaise hi aakhri ghotakhor bahar aata hai, andar ka ek pump band ho jata hai aur paani tezi se barhne lagta hai. Bas chand minute ka farq tha."
+            },
+            {
+              "t": "Ghotakhoron ko 2 din aaram do, phir dobara",
+              "fx": [
+                -2,
+                -2,
+                1
+              ],
+              "then": "Raat ko barish shuru ho jati hai. Subah tak gaar ke andar paani 1 meter barh chuka hai. Sarbarah hone ke naate ab sirf aap jaante hain ke agla qadam kitna mushkil hai."
+            },
+            {
+              "t": "Baqi sab ko ek hi din mein nikalne ki koshish karo",
+              "fx": [
+                0,
+                2,
+                -3
+              ],
+              "then": "Thake hue ghotakhor, 9 behosh bachay, ek hi din. Shaam ko ek ghotakhor ka cylinder raaste mein khatam hone lagta hai - woh bachay ko le ke chattan pe ruk jata hai. Aap ki poori raat radio ke saath guzarti hai."
+            }
+          ]
+        }
+      ],
+      "endings": [
+        {
+          "min": 6,
+          "text": "🎉 Aakhri bacha bahar aata hai aur hazaron log ek saath cheekh parte hain. Mayein apne bachon ko seene se lagati hain. Aap gaar ke muhane pe baith ke pehli dafa 17 din baad aankh band karte hain. Aap ne sab ko wapas la diya."
+        },
+        {
+          "min": 1,
+          "text": "😔 Bachay ghar laute - lekin bachane wali toli ne bhaari qeemat chukayi, aur aap jaante hain ke kuch faisle behtar ho sakte the. Har saal us din aap gaar ke bahar ek mombatti jalate hain."
+        },
+        {
+          "min": -99,
+          "text": "🌧️ Barish jeet gayi. Kaarwai mahinon ke liye ruk gaya, aur har guzarta din saari duniya pe bhaari tha. Aap ke faisle - har ek - aap ko zindagi bhar yaad rahenge."
+        }
+      ],
+      "reveal": "Yeh 2018 ka Thailand ka 'Tham Luang' gaar ka bachao tha. 12 bachay aur un ka 25 saal ka coach 23 June ko gaar mein gaye aur phans gaye; 9 din baad British ghotakhoron ne unhein zinda dhoonda. Oxygen pohanchate hue Thai bahriya ke purane ghotakhor Saman Kunan shaheed ho gaye. Phir faisla hua ke bachon ko dawai se behosh kar ke mahir ghotakhor khud nikalenge - 8 se 10 July, sirf 3 din mein, teraon zinda bahar aa gaye. Hazaron log duniya bhar se madad ko aaye.",
+      "sources": [
+        "https://www.history.com/this-day-in-history/july-10/thai-soccer-team-rescued-from-cave",
+        "https://amp.cnn.com/cnn/2018/07/11/asia/thai-cave-rescue-full-story-intl",
+        "https://www.nationalgeographic.com/adventure/article/thai-rescue-cave-divers"
+      ],
+      "approved": false
+    }
+  ]
+}

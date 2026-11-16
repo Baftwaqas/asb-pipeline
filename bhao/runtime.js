@@ -63,10 +63,19 @@ async function onInbound(db, { phone, text, wamid, tap = null, wa = null }) {
 
 const sender = { wa: null, logOutbound: null };
 /** One game message: a list, buttons, or plain text (also the fallback). */
-async function sendOut(send, phone, m) {
+async function sendOut(send, phone, m, { render = null } = {}) {
   let res = null;
   if (m.type === "list" && send.sendList) res = await send.sendList(phone, { body: m.body, buttonText: m.buttonText, sections: m.sections });
-  else if (m.type === "buttons" && send.sendButtons) res = await send.sendButtons(phone, { body: m.body, buttons: m.buttons });
+  else if (m.type === "buttons" && send.sendButtons) {
+    // a scene of Asli Kahaniyan: its picture goes on top of the buttons
+    let headerImageId = null;
+    if (m.image && send.uploadMedia) {
+      const jpg = await (render || require("./cards").storyScene)(m.image).catch(() => null);
+      const up = jpg ? await send.uploadMedia(jpg, "image/jpeg", "scene.jpg").catch(() => null) : null;
+      headerImageId = up && up.ok ? up.id : null;
+    }
+    res = await send.sendButtons(phone, { body: m.body, buttons: m.buttons, headerImageId });
+  }
   if (res && res.ok) return res;
   return send.sendText(phone, m.body);
 }

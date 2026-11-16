@@ -178,4 +178,30 @@ async function victoryCard({ itemName, openPaisa, unitPaisa, qty = 1, title = nu
   return cv.toBuffer("image/jpeg", 90);
 }
 
-module.exports = { BRAND, bhaoCard, victoryCard, plain, available: () => !!canvasLib() };
+/**
+ * "Asli Kahaniyan": the picture on top of a scene - the story's one picture
+ * (assets/stories/<id>.jpg, founder-approved), cropped differently for each
+ * scene and darkened a little more each time, so the pressure shows. Null when
+ * the story has no picture yet (the scene then goes as words only).
+ */
+async function storyScene({ storyId, step = 0 }) {
+  const L = canvasLib(); if (!L) return null;
+  const file = path.join(__dirname, "assets", "stories", String(storyId).replace(/[^a-z0-9-]/gi, "") + ".jpg");
+  if (!fs.existsSync(file)) return null;
+  const img = await L.loadImage(fs.readFileSync(file));
+  const W = 1080, H = 1080, cv = L.createCanvas(W, H), g = cv.getContext("2d");
+  // scene 1: the whole picture; then closer in, each scene somewhere else
+  const zoom = [1, 1.25, 1.4, 1.6][Math.min(step, 3)];
+  const focus = [[0.5, 0.5], [0.4, 0.45], [0.6, 0.55], [0.5, 0.4]][Math.min(step, 3)];
+  const sw = img.width / zoom, sh = img.height / zoom;
+  const sx = Math.min(img.width - sw, Math.max(0, img.width * focus[0] - sw / 2));
+  const sy = Math.min(img.height - sh, Math.max(0, img.height * focus[1] - sh / 2));
+  g.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+  g.fillStyle = `rgba(0,0,0,${0.08 * step})`; g.fillRect(0, 0, W, H);
+  const v = g.createRadialGradient(W / 2, H / 2, W * 0.3, W / 2, H / 2, W * 0.75);
+  v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(1, `rgba(0,0,0,${0.35 + 0.1 * step})`);
+  g.fillStyle = v; g.fillRect(0, 0, W, H);
+  return cv.toBuffer("image/jpeg", 88);
+}
+
+module.exports = { BRAND, bhaoCard, victoryCard, storyScene, plain, available: () => !!canvasLib() };
