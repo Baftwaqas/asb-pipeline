@@ -64,3 +64,32 @@ test("what is submitted to Meta for the notice has no example block (it has no v
   assert.equal(bodyC.example, undefined);
   assert.equal(d.category, "UTILITY");
 });
+
+test("who gets the notice: chosen from the chat history by 7 / 14 / 30 days, ever, or one by one; STOP never", async () => {
+  const now = new Date("2026-11-19T09:00:00Z");
+  const day = 86400000;
+  const msg = (phone, daysAgo, i) => db.query(
+    `INSERT INTO whatsapp_messages (wamid, phone, direction, body_preview, msg_type, status, received_at, profile_name)
+     VALUES ($1, $2, 'inbound', 'x', 'text', 'delivered', $3, 'P')`,
+    [`wamid.pick${i}`, phone, new Date(now.getTime() - daysAgo * day)]);
+  await msg("923002000001", 2, 1);     // this week
+  await msg("923002000002", 10, 2);    // two weeks
+  await msg("923002000003", 25, 3);    // this month
+  await msg("923002000004", 200, 4);   // long ago
+  await msg("923002000005", 1, 5);     // this week, but said STOP
+  await db.query(`INSERT INTO marketing_opt_outs (phone, source) VALUES ('923002000005', 'replied STOP')`);
+  // a customer who never messaged is never picked by the notice
+  await db.query(`INSERT INTO customers (phone) VALUES ('923002000099') ON CONFLICT DO NOTHING`);
+
+  const pick = async (who, chosen) => (await broadcast.pickFromChats(db, { who, chosen, now })).phones.sort();
+  assert.deepEqual(await pick("7"), ["923002000001"]);
+  assert.deepEqual(await pick("14"), ["923002000001", "923002000002"]);
+  assert.deepEqual(await pick("30"), ["923002000001", "923002000002", "923002000003"]);
+  assert.ok((await pick("ever")).includes("923002000004"));
+  assert.ok(!(await pick("ever")).includes("923002000099"));
+  assert.ok(!(await pick("ever")).includes("923002000005"));
+  assert.deepEqual(await pick("choose", ["923002000002", "0300 2000005", "0321-1234567"]), ["923002000002", "923211234567"]);
+  const counts = broadcast.chatCounts(await broadcast.chatPeople(db), now);
+  assert.equal(counts["7"], 1);
+  assert.equal(counts["30"], 3);
+});

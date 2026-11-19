@@ -783,6 +783,18 @@ router.post("/api/inbox/send-image", requireAuth, express.json({ limit: "8mb" })
 
 // What the panel needs before anything is chosen: this delivery's wording,
 // how many customers there are, how many said STOP, and the last few sends.
+// Who can get the "please message again" notice: everyone who ever wrote,
+// newest first, with counts for 7 / 14 / 30 days and ever.
+router.get("/api/inbox/broadcast/chat-people", requireAuth, async (_req, res) => {
+  try {
+    const people = await broadcast.chatPeople(db);
+    res.json({ counts: broadcast.chatCounts(people), people: people.slice(0, 3000) });
+  } catch (e) {
+    console.error("[inbox] chat-people failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
 router.get("/api/inbox/broadcast/setup", requireAuth, async (_req, res) => {
   try {
     const slot = schedule.deliveryFor(new Date());
@@ -839,7 +851,18 @@ router.post("/api/inbox/broadcast", requireAuth, express.json(), async (req, res
 
   try {
     let phones;
-    if (isTest) {
+    if (kind === "resend_request" && !isTest) {
+      // Never the whole customer base: only people chosen from the chat history.
+      const pick = await broadcast.pickFromChats(db, { who: String(b.who || ""), chosen: b.chosen });
+      phones = pick.phones;
+      if (b.dryRun) return res.json({ ok: true, count: phones.length, leftOut: pick.leftOut });
+      if (Number(b.confirmCount) !== phones.length) {
+        return res.status(409).json({
+          error: "count_changed", count: phones.length,
+          message: `The list is now ${phones.length} numbers, not ${b.confirmCount}. Check and confirm again.`,
+        });
+      }
+    } else if (isTest) {
       phones = broadcast.parsePhones(b.testPhone);
       if (phones.length !== 1) return res.status(400).json({ error: "bad_phone", message: "Enter one mobile number for the test." });
     } else {

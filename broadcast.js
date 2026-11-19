@@ -82,6 +82,58 @@ async function audience(db) {
   return rows;
 }
 
+// ---------------------------------------------------------------------------
+// Everyone who has ever messaged the business number, newest first, with the
+// name we know and when they last wrote. The "please message again" notice is
+// chosen from this list (last 7 / 14 / 30 days, ever, or ticked one by one) -
+// never the whole customer base by default.
+// ---------------------------------------------------------------------------
+async function chatPeople(db) {
+  const { rows } = await db.query(
+    `SELECT m.phone,
+            COALESCE(c.name, (SELECT profile_name FROM whatsapp_messages x
+                               WHERE x.phone = m.phone AND x.profile_name IS NOT NULL
+                               ORDER BY x.received_at DESC LIMIT 1)) AS name,
+            max(m.received_at) AS last_at,
+            (o.phone IS NOT NULL) AS opted_out
+       FROM whatsapp_messages m
+       LEFT JOIN customers c ON c.phone = m.phone
+       LEFT JOIN marketing_opt_outs o ON o.phone = m.phone
+      WHERE m.direction = 'inbound' AND m.phone ~ '^92[0-9]{10}$'
+      GROUP BY m.phone, c.name, o.phone
+      ORDER BY max(m.received_at) DESC`);
+  return rows;
+}
+
+const WHO = { "7": 7, "14": 14, "30": 30, ever: null };
+
+/** Phones for the notice. who: "7" | "14" | "30" | "ever" | "choose". STOP numbers never. */
+async function pickFromChats(db, { who, chosen, now = new Date() }) {
+  const people = await chatPeople(db);
+  const allowed = (p) => !p.opted_out;
+  if (who === "choose") {
+    const out = new Set(Array.isArray(chosen) ? chosen.flatMap((x) => parsePhones(x)) : parsePhones(chosen));
+    const stop = new Set(people.filter((p) => p.opted_out).map((p) => p.phone));
+    const optedOut = (await db.query(`SELECT phone FROM marketing_opt_outs WHERE phone = ANY($1)`, [[...out]])).rows;
+    for (const r of optedOut) stop.add(r.phone);
+    return { phones: [...out].filter((p) => !stop.has(p)), leftOut: [...out].filter((p) => stop.has(p)).length };
+  }
+  if (!(who in WHO)) throw new Error("who must be 7, 14, 30, ever or choose");
+  const days = WHO[who];
+  const since = days ? new Date(now.getTime() - days * 86400000) : null;
+  const inRange = people.filter((p) => !since || new Date(p.last_at) >= since);
+  return { phones: inRange.filter(allowed).map((p) => p.phone), leftOut: inRange.filter((p) => !allowed(p)).length };
+}
+
+function chatCounts(people, now = new Date()) {
+  const out = {};
+  for (const [k, days] of Object.entries(WHO)) {
+    const since = days ? new Date(now.getTime() - days * 86400000) : null;
+    out[k] = people.filter((p) => !p.opted_out && (!since || new Date(p.last_at) >= since)).length;
+  }
+  return out;
+}
+
 /** "0300-1234567, +92 300 7654321\n3001112223" -> ['923001234567', ...] */
 // Numbers arrive written every way: "0300 1234567", "+92 300-1234567",
 // one per line, comma separated, or a spreadsheet column. Split on commas,
@@ -272,6 +324,6 @@ async function resumeAll(db, logOutbound) {
 }
 
 module.exports = {
-  handleOptWords, audience, parsePhones, create, start, stop, status, recent, resumeAll,
+  handleOptWords, audience, chatPeople, pickFromChats, chatCounts, parsePhones, create, start, stop, status, recent, resumeAll,
   isRunning: () => running,
 };
