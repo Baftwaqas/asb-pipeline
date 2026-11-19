@@ -43,6 +43,7 @@ const { parseOrderJson, UnsafeIntegerError } = require("./grocery/orderjson");
 const wa = require("./whatsapp");
 const areas = require("./areas");
 const ratelist = require("./ratelist");
+const autoorder = require("./autoorder");
 const notify = require("./notify");
 const broadcast = require("./broadcast");
 const communityIntake = require("./community/intake");
@@ -163,6 +164,26 @@ async function answerRateList(msg) {
   };
   const r = await ratelist.onInbound(db, { phone, msg, send });
   if (r) console.log(`[ratelist] +${phone}: ${r.did}${r.part ? " " + r.part : ""}`);
+  return r;
+}
+
+// Orders without a human: catalogue carts and "order" -> confirm -> real order.
+let catalogIdCache = null;
+async function takeOrder(msg, contact) {
+  const phone = normalizePhone(msg.from);
+  if (!phone || !autoorder.on()) return null;
+  const { logOutbound } = require("./inbox");
+  const log = (body) => (r) => logOutbound({ phone, body, agent: "order bot", wamid: r.wamid, ok: r.ok, payload: r.data }).then(() => r);
+  if (!catalogIdCache) catalogIdCache = await productSync.catalogId(db).catch(() => null);
+  const send = {
+    text: (to, body) => wa.sendText(to, body).then(log(body)),
+    buttons: (to, body, buttons) => wa.sendButtons(to, body, buttons).then(log(`${body}\n[${buttons.map((b) => b.title).join("] [")}]`)),
+    productList: (to, header, body, cat, sections) => wa.sendProductList(to, header, body, cat, sections)
+      .then(log(`${body}\n[list: ${sections.map((s) => `${s.title} (${s.product_items.length})`).join(", ")}]`)),
+    catalog: (to, body) => wa.sendCatalog(to, body).then(log(`${body}\n[View catalogue]`)),
+  };
+  const r = await autoorder.onInbound(db, { phone, msg, send, contactName: contact?.profile?.name || null, catalogId: catalogIdCache });
+  if (r) console.log(`[order-bot] +${phone}: ${r.did}${r.orderNumber ? " " + r.orderNumber : ""}${r.error ? " - " + r.error : ""}`);
   return r;
 }
 
@@ -495,7 +516,12 @@ app.post("/webhooks/whatsapp", async (req, res) => {
             const asked = await askArea(msg).catch((e) => { console.error("[areas] bot failed:", e.message); return null; });
             // "Rate list?" -> the menu (ratelist.js, switch RATELIST_BOT), unless
             // the area bot just answered this same message.
-            if (!asked) await answerRateList(msg).catch((e) => console.error("[ratelist] bot failed:", e.message));
+            const listed = asked ? null
+              : await answerRateList(msg).catch((e) => { console.error("[ratelist] bot failed:", e.message); return null; });
+            // Orders without a human (autoorder.js, switch ORDER_BOT).
+            if (!asked && !listed) {
+              await takeOrder(msg, contacts[i] || contacts[0]).catch((e) => console.error("[order-bot] failed:", e.message));
+            }
             // Blue ticks: cheap, free, and tells the customer a human
             // is on the other end. Never allowed to fail the webhook.
             wa.markRead(msg.id).catch(() => {});
