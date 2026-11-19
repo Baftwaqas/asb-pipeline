@@ -262,7 +262,7 @@ test("rewards follow people who joined AND people who ordered (draft tiers)", as
   assert.deepEqual([net.joined, net.ordered], [5, 2]);
   assert.equal(net.reward, A.REWARDS.tiers[1].reward);
   assert.equal(net.next.joined, 10);
-  assert.equal(net.draft, true);
+  assert.equal(net.draft, !A.REWARDS.approved);   // approved by the founder 19 Nov
 });
 
 test("milestones: each once; at the target the team is alerted; the founder opens and announces", async () => {
