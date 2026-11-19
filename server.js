@@ -384,22 +384,31 @@ app.post("/webhooks/whatsapp", async (req, res) => {
     }
   }
 
-  // Answer 200 fast, or Meta keeps retrying
-  res.sendStatus(200);
-
+  // ---- Save the event BEFORE saying "received" (19 Nov 2026) ----
+  // Meta never resends a webhook we answered 200. On 19 Nov the database was
+  // paused and ten customer messages were answered 200, then failed to save,
+  // and were lost for good. So the raw event is written first; if that fails
+  // we answer 503 and Meta keeps retrying until the database is back. Once the
+  // event is stored, its full payload is safe in webhook_events even if the
+  // processing below fails.
   const eventId = crypto
     .createHash("sha256")
     .update(raw)
     .digest("hex")
     .slice(0, 40);
 
+  let isNew, eventRowId;
   try {
-    const { isNew, id: eventRowId } = await db.recordWebhook(
-      "whatsapp",
-      eventId,
-      "messages",
-      body
-    );
+    ({ isNew, id: eventRowId } = await db.recordWebhook("whatsapp", eventId, "messages", body));
+  } catch (e) {
+    console.error("[wa] could not save the webhook - answering 503 so Meta retries:", e.message);
+    return res.sendStatus(503);
+  }
+
+  // Stored: answer 200 fast, or Meta keeps retrying
+  res.sendStatus(200);
+
+  try {
     if (!isNew) {
       console.log("Duplicate WhatsApp webhook ignored");
       return;
