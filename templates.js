@@ -93,6 +93,20 @@ const TEMPLATES = {
     footer: "Apna Sasta Bazaar",
     example: ["Monday, 5 October", "Sunday, 4 October, 8:00 PM"],
   },
+
+  // "Please send your message again" - for after a system problem (19 Nov 2026:
+  // the database was paused and ten customer messages were lost). No variables,
+  // no picture. Submitted from WhatsApp Manager on 19 Nov as Utility; the
+  // wording here must stay word for word what Meta approved.
+  resendRequest: {
+    name: "asb_resend_request_v1",
+    language: LANG,
+    category: "UTILITY",
+    body:
+      "Assalam-o-Alaikum! Aaj subah hamare system mein masla tha. Agar aap ne message kiya tha " +
+      "aur jawab nahi mila, to meharbani se dobara bhej dein.",
+    footer: "Apna Sasta Bazaar",
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -104,7 +118,9 @@ function definition(t, headerHandle) {
   if (t.headerImage) {
     components.push({ type: "HEADER", format: "IMAGE", example: { header_handle: [headerHandle] } });
   }
-  components.push({ type: "BODY", text: t.body, example: { body_text: [t.example] } });
+  components.push(t.example
+    ? { type: "BODY", text: t.body, example: { body_text: [t.example] } }
+    : { type: "BODY", text: t.body });
   if (t.footer) components.push({ type: "FOOTER", text: t.footer });
   return { name: t.name, language: t.language, category: t.category, components };
 }

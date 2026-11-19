@@ -110,13 +110,21 @@ function parsePhones(text) {
 // ---------------------------------------------------------------------------
 // Create a broadcast and its recipient list. Does not send.
 // ---------------------------------------------------------------------------
-async function create(db, { agent, mediaId, mediaMime, delivery, cutoff, phones, isTest }) {
+// Which approved message a broadcast sends: the rate list (default, with the
+// poster) or the "please send again" notice (no picture, no wording to fill).
+const KINDS = { rate_list: "rateList", resend_request: "resendRequest" };
+function templateFor(name) {
+  return Object.values(T.TEMPLATES).find((t) => t.name === name) || T.TEMPLATES.rateList;
+}
+
+async function create(db, { agent, mediaId, mediaMime, delivery, cutoff, phones, isTest, kind = "rate_list" }) {
+  const tpl = T.TEMPLATES[KINDS[kind] || "rateList"];
   const unique = [...new Set(phones)];
   return db.tx(async (client) => {
     const b = await client.query(
       `INSERT INTO broadcasts (created_by, template, media_id, media_mime, delivery, cutoff, is_test)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [agent || null, T.TEMPLATES.rateList.name, mediaId, mediaMime || null, delivery, cutoff, Boolean(isTest)]
+      [agent || null, tpl.name, mediaId || null, mediaMime || null, delivery || null, cutoff || null, Boolean(isTest)]
     );
     const id = b.rows[0].id;
     // One statement for the whole list; opted-out numbers go in as 'skipped'
@@ -143,7 +151,7 @@ async function create(db, { agent, mediaId, mediaMime, delivery, cutoff, phones,
 async function status(db, id) {
   const { rows } = await db.query(
     `SELECT id, created_at, created_by, status, is_test, total, sent, failed, skipped,
-            delivery, cutoff, media_id, started_at, finished_at, last_error,
+            delivery, cutoff, media_id, template, started_at, finished_at, last_error,
             (SELECT count(*) FROM broadcast_recipients r
               WHERE r.broadcast_id = b.id AND r.status = 'pending')::int AS pending
        FROM broadcasts b WHERE id = $1`, [id]);
@@ -180,9 +188,10 @@ async function run(db, id, logOutbound) {
     `UPDATE broadcasts SET status = 'sending', started_at = COALESCE(started_at, now()) WHERE id = $1`, [id]);
   console.log(`[broadcast] ${id} sending to ${b.pending} customer(s)`);
 
-  const t = T.TEMPLATES.rateList;
-  const params = T.rateListParams(b.delivery, b.cutoff);
-  const preview = T.rateListText(b.delivery, b.cutoff);
+  const t = templateFor(b.template);
+  const isRateList = t === T.TEMPLATES.rateList;
+  const params = isRateList ? T.rateListParams(b.delivery, b.cutoff) : [];
+  const preview = isRateList ? T.rateListText(b.delivery, b.cutoff) : t.body;
   let sameError = { text: null, count: 0 };
 
   for (;;) {
@@ -196,7 +205,7 @@ async function run(db, id, logOutbound) {
     const phone = next.rows[0]?.phone;
     if (!phone) break;
 
-    const r = await wa.sendTemplate(phone, t.name, params, { lang: t.language, headerImageId: b.media_id });
+    const r = await wa.sendTemplate(phone, t.name, params, { lang: t.language, headerImageId: isRateList ? b.media_id : null });
     const msg = r.data?.error?.message || "refused";
     const err = r.ok ? null : (/^\(#\d+\)/.test(msg) ? msg : `(#${r.code || "?"}) ${msg}`).slice(0, 300);
 
@@ -213,7 +222,7 @@ async function run(db, id, logOutbound) {
       await logOutbound({
         phone, body: preview, agent: `broadcast #${id}`, template: t.name,
         wamid: r.wamid, ok: r.ok, payload: r.data,
-        mediaId: b.media_id, mediaMime: b.media_mime || "image/jpeg",
+        mediaId: isRateList ? b.media_id : null, mediaMime: isRateList ? (b.media_mime || "image/jpeg") : null,
       });
     }
 

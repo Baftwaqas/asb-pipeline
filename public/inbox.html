@@ -529,6 +529,7 @@
       <button class="btn" id="bcSend" disabled>Send to everyone</button>
       <button class="btn alt" id="bcStop" hidden>Stop sending</button>
     </div>
+    <button class="btn alt" id="bcResend" style="margin-top:8px">Send "please message again" notice to everyone</button>
   </div>
 </aside>
 
@@ -1488,6 +1489,7 @@ function bcUpdateButtons() {
   const ready = Boolean(B.mediaId) && $('bcDelivery').value.trim() && $('bcCutoff').value.trim();
   $('bcSend').disabled = !ready || busy;
   $('bcTest').disabled = !ready || busy;
+  $('bcResend').disabled = busy;
   // The exact number is worked out by the server and shown on the confirm
   // step (a pasted number already on the list is not counted twice).
   $('bcSend').textContent = B.one ? `Send to +${B.one}` : `Send to everyone (about ${bcTotal()})`;
@@ -1658,6 +1660,23 @@ async function startBroadcast(isTest) {
   watchBroadcast(data.id);
 }
 $('bcTest').addEventListener('click', () => startBroadcast(true));
+
+// The "please send your message again" notice (approved template, no poster).
+// For after a system problem. Same count-then-confirm as the rate list.
+$('bcResend').addEventListener('click', async () => {
+  $('bcErr').textContent = '';
+  const body = { kind: 'resend_request', agent: S.agent, isTest: false, extraPhones: $('bcExtra').value };
+  const dry = await api('/api/inbox/broadcast', { method: 'POST', body: JSON.stringify({ ...body, dryRun: true }) });
+  if (!dry.ok) { $('bcErr').textContent = dry.data?.message || 'Could not count the list.'; return; }
+  const n = dry.data.count;
+  if (!confirm(`Send this to ${n} people now?\n\n"Assalam-o-Alaikum! Aaj subah hamare system mein masla tha. ` +
+    `Agar aap ne message kiya tha aur jawab nahi mila, to meharbani se dobara bhej dein."\n\n` +
+    `Meta charges for each message. Once sent it cannot be taken back.`)) return;
+  body.confirmCount = n;
+  const { ok, data } = await api('/api/inbox/broadcast', { method: 'POST', body: JSON.stringify(body) });
+  if (!ok) { $('bcErr').textContent = data?.message || 'Could not start.'; return; }
+  watchBroadcast(data.id);
+});
 $('bcSend').addEventListener('click', () => startBroadcast(Boolean(B.one)));
 $('bcStop').addEventListener('click', async () => {
   if (B.id) await api(`/api/inbox/broadcast/${B.id}/stop`, { method: 'POST' });
