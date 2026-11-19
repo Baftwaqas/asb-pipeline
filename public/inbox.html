@@ -751,6 +751,7 @@ $('filterBtn').addEventListener('click', (e) => {
 // ===========================================================================
 // THREAD
 // ===========================================================================
+const THREADS = new Map();   // phone -> last thread seen, for an instant re-open
 async function openThread(phone, keepScroll = false) {
   // An order half-typed for one customer must never be saved against another.
   if (O.phone && O.phone !== phone) closeOrderPanel(true);
@@ -762,11 +763,32 @@ async function openThread(phone, keepScroll = false) {
     $('thread').classList.remove('hide-mobile');
   }
 
+  // Show the right chat AT ONCE: name from the list, and the messages from the
+  // last time it was opened (or "Loading…"). The fresh copy replaces it below.
+  // Before this, the previous customer's name and messages stayed on screen
+  // until the server answered, which felt like the click had not worked.
+  if (!keepScroll) {
+    const fromList = (S.convs || []).find((x) => x.phone === phone) || {};
+    $('tName').textContent = fromList.display_name || '+' + phone;
+    $('tPhone').textContent = '+' + phone + (fromList.society_id ? ' · society ' + fromList.society_id : '');
+    $('tCtx').hidden = true;
+    const cached = THREADS.get(phone);
+    if (cached) renderMsgs(cached.messages || [], false);
+    else $('msgs').innerHTML = '<p style="padding:22px 16px;color:var(--ink-2);font-size:13.5px">Loading…</p>';
+    // Clear the unread badge on screen now; the server clears it when it serves the chat.
+    // and re-draw the list from what we already have (no server call) so the
+    // highlight moves to this chat straight away.
+    fromList.unread_count = 0;
+    renderConvs((S.convs || []).reduce((n, x) => n + (x.unread_count || 0), 0));
+  }
+
   const { ok, data } = await api('/api/inbox/thread/' + encodeURIComponent(phone));
   if (!ok) return;
 
   if (phone !== S.phone) return;   // she clicked another chat while this loaded
   S.thread = data;
+  THREADS.set(phone, data);
+  if (THREADS.size > 40) THREADS.delete(THREADS.keys().next().value);
 
   const c = data.conversation || {};
   $('tName').textContent = c.display_name || '+' + phone;
@@ -792,10 +814,8 @@ async function openThread(phone, keepScroll = false) {
 
   renderMsgs(data.messages || [], keepScroll);
   setComposer(c);
-
-  // The server clears the unread badge when it serves a thread, so all that is
-  // left to do here is refresh the list so the badge disappears on screen.
-  if (!keepScroll) loadConvs();
+  // No full list reload here any more: the badge was cleared on screen above,
+  // and the regular poll brings the list up to date.
 }
 
 function renderMsgs(msgs, keepScroll) {

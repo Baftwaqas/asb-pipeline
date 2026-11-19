@@ -244,21 +244,38 @@ router.get("/api/inbox/thread/:phone", requireAuth, async (req, res) => {
 
   try {
     const [msgs, conv, orders] = await Promise.all([
+      // The NEWEST 300 messages, shown oldest-first. (It used to take the
+      // oldest 500, so a long chat never showed its latest messages.)
       db.query(
-        `SELECT wamid, direction, body_preview, msg_type, media_id, media_mime,
-                template_name, agent, status, reply_to,
-                COALESCE(received_at, sent_at) AS at,
-                delivered_at, read_at, error_code
-           FROM whatsapp_messages
-          WHERE phone = $1
-          ORDER BY COALESCE(received_at, sent_at) ASC NULLS FIRST
-          LIMIT 500`,
+        `SELECT * FROM (
+           SELECT wamid, direction, body_preview, msg_type, media_id, media_mime,
+                  template_name, agent, status, reply_to,
+                  COALESCE(received_at, sent_at) AS at,
+                  delivered_at, read_at, error_code
+             FROM whatsapp_messages
+            WHERE phone = $1
+            ORDER BY COALESCE(received_at, sent_at) DESC NULLS LAST
+            LIMIT 300) m
+          ORDER BY at ASC NULLS FIRST`,
         [phone]
       ),
+      // This one customer's header, read directly. The asb_conversations view
+      // works out every chat at once - too slow to run on every click.
       db.query(
-        `SELECT phone, display_name, customer_id, society_id, badge,
-                window_open, window_minutes_left, last_inbound_at
-           FROM asb_conversations WHERE phone = $1`,
+        `WITH li AS (
+           SELECT max(received_at) AS last_inbound_at FROM whatsapp_messages
+            WHERE phone = $1 AND direction = 'inbound')
+         SELECT $1::text AS phone,
+                COALESCE(c.name, (SELECT profile_name FROM whatsapp_messages
+                                   WHERE phone = $1 AND profile_name IS NOT NULL
+                                   ORDER BY COALESCE(received_at, sent_at) DESC NULLS LAST LIMIT 1)) AS display_name,
+                c.id AS customer_id, c.society_id, c.badge,
+                (li.last_inbound_at > now() - interval '24 hours') AS window_open,
+                CASE WHEN li.last_inbound_at IS NULL THEN NULL
+                     ELSE GREATEST(0, floor(EXTRACT(EPOCH FROM (li.last_inbound_at + interval '24 hours' - now())) / 60))::int
+                END AS window_minutes_left,
+                li.last_inbound_at
+           FROM li LEFT JOIN customers c ON c.phone = $1`,
         [phone]
       ),
       // Recent orders give context while answering — "where is my bag" is the
