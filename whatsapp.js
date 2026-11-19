@@ -366,8 +366,49 @@ function verifySignature(rawBody, signatureHeader) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// sendButtons — up to 3 reply buttons (titles max 20 characters). Free-form,
+// so only inside the 24-hour window. A tap comes back as an "interactive"
+// message with button_reply.id.
+// ---------------------------------------------------------------------------
+async function sendButtons(toPhone, bodyText, buttons) {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: String(bodyText).slice(0, 1024) },
+      action: {
+        buttons: buttons.slice(0, 3).map((b) => ({
+          type: "reply", reply: { id: String(b.id).slice(0, 256), title: String(b.title).slice(0, 20) },
+        })),
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// sendLocationRequest — a message with WhatsApp's own "Send location" button.
+// The customer's pin comes back as a "location" message. 24-hour window only.
+// ---------------------------------------------------------------------------
+async function sendLocationRequest(toPhone, bodyText) {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "interactive",
+    interactive: {
+      type: "location_request_message",
+      body: { text: String(bodyText).slice(0, 1024) },
+      action: { name: "send_location" },
+    },
+  });
+}
+
 module.exports = {
   postMessage,
+  sendButtons,
+  sendLocationRequest,
   SEND_TIMEOUT_MS,
   sendTemplate,
   sendText,

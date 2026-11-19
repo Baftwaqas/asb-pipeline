@@ -322,6 +322,27 @@
   .pic-bar input { flex: 1; min-width: 0; margin: 0; }
   .pic-bar .btn { width: auto; padding: 9px 14px; }
 
+  /* ---------- Karachi areas ---------- */
+  .area-chip {
+    display: inline-block; margin-top: 3px; border: 1px solid var(--line); border-radius: 999px;
+    background: none; color: var(--ink-2); font-size: 12px; padding: 1px 9px; cursor: pointer;
+  }
+  .area-chip.set { color: var(--green); border-color: var(--green); }
+  .area-chip.out { color: var(--warn); border-color: var(--warn); }
+  #arPanel[hidden] { display: none; }
+  #arPanel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 31;
+    width: min(460px, 100vw); background: var(--panel); color: var(--ink);
+    border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgb(0 0 0 / .18);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  @media (max-width: 820px) { #arPanel { width: 100vw; border-left: 0; } }
+  .ar-d { font-size: 12px; font-weight: 700; color: var(--ink-2); margin: 14px 0 4px; display: flex; justify-content: space-between; }
+  .ar-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none;
+    border: 0; border-bottom: 1px solid var(--line); padding: 8px 2px; color: inherit; font-size: 14px; }
+  .ar-row .n { margin-left: auto; color: var(--ink-2); font-size: 12.5px; }
+  .ar-row .srv { font-size: 11px; color: var(--green); border: 1px solid var(--green); border-radius: 999px; padding: 0 6px; }
+
   /* ---------- rate-list broadcast ---------- */
   #bcPanel[hidden] { display: none; }
   #notifBtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
@@ -379,6 +400,7 @@
       <button class="ghost" id="notifBtn" title="Phone notifications for new customer messages" hidden>🔔 Alerts</button>
       <button class="ghost" id="installBtn" title="Put ASB Inbox on this phone's home screen" hidden>Install</button>
       <button class="ghost" id="rateListBtn" title="Send the rate-list poster to customers">Rate list</button>
+      <button class="ghost" id="areasBtn" title="Where your customers live, all over Karachi">Areas</button>
       <button class="ghost" id="filterBtn" aria-pressed="false">Unread</button>
       <button class="ghost" id="themeBtn" title="Switch light / dark">Theme</button>
       <button class="ghost" id="outBtn">Exit</button>
@@ -400,6 +422,8 @@
         <div style="min-width:0">
           <h3 id="tName">—</h3>
           <small id="tPhone"></small>
+          <button class="area-chip" id="tArea" title="Where she lives - tap to set or change">📍 Area?</button>
+          <small id="tPlace" style="display:block;color:var(--ink-2);font-size:11.5px;margin-top:2px"></small>
         </div>
         <span class="win" id="tWin">—</span>
         <button class="add-order" id="addOrderBtn" title="She ordered in this chat — enter it so she gets the same bill as a Shopify order">+ Order</button>
@@ -478,6 +502,28 @@
   </div>
 </aside>
 
+<!-- ======================= KARACHI AREAS ======================= -->
+<aside id="arPanel" hidden aria-labelledby="arTitle" role="dialog">
+  <div class="op-head">
+    <h3 id="arTitle">Areas<small id="arSub">Where your customers live</small></h3>
+    <button class="op-x" id="arClose" aria-label="Close">×</button>
+  </div>
+  <div class="op-body">
+    <p class="op-hint" id="arNote"></p>
+    <input class="field" id="arSearch" placeholder="Search area (e.g. Gulshan, DHA, Nazimabad)">
+    <div id="arList"></div>
+    <div style="border-top:1px solid var(--line);margin-top:16px;padding-top:12px">
+      <label class="op-label">Area not in the list? Add it</label>
+      <div class="op-row">
+        <input class="field" id="arNewName" placeholder="Area name">
+        <select class="field" id="arNewDistrict" style="width:auto"></select>
+      </div>
+      <button class="btn alt" id="arAdd" style="margin-top:8px">Add area</button>
+    </div>
+  </div>
+  <div class="op-foot"><p class="op-err" id="arErr"></p></div>
+</aside>
+
 <!-- ======================= RATE-LIST BROADCAST ======================= -->
 <aside id="bcPanel" hidden aria-labelledby="bcTitle" role="dialog">
   <div class="op-head">
@@ -524,6 +570,10 @@
         <label><input type="radio" name="rsWho" value="14"> Messaged in the last 14 days <b id="rsC14"></b></label>
         <label><input type="radio" name="rsWho" value="30"> Messaged in the last 30 days <b id="rsC30"></b></label>
         <label><input type="radio" name="rsWho" value="ever"> Everyone who has ever messaged <b id="rsCever"></b></label>
+        <label><input type="radio" name="rsWho" value="area"> Everyone in an area:
+          <select class="field" id="rsArea" style="display:inline-block;width:auto;margin:4px 0 0"></select></label>
+        <label><input type="radio" name="rsWho" value="district"> Everyone in a district:
+          <select class="field" id="rsDistrict" style="display:inline-block;width:auto;margin:4px 0 0"></select></label>
         <label><input type="radio" name="rsWho" value="choose"> Let me choose <b id="rsCchoose"></b></label>
       </div>
       <div id="rsChoose" hidden style="margin-top:8px">
@@ -773,6 +823,8 @@ async function openThread(phone, keepScroll = false) {
     $('tPhone').textContent = '+' + phone + (fromList.society_id ? ' · society ' + fromList.society_id : '');
     $('tCtx').hidden = true;
     const cached = THREADS.get(phone);
+    areaChip(cached?.area || null, cached?.areaTyped || null);
+    placeLine(cached);
     if (cached) renderMsgs(cached.messages || [], false);
     else $('msgs').innerHTML = '<p style="padding:22px 16px;color:var(--ink-2);font-size:13.5px">Loading…</p>';
     // Clear the unread badge on screen now; the server clears it when it serves the chat.
@@ -788,6 +840,8 @@ async function openThread(phone, keepScroll = false) {
   if (phone !== S.phone) return;   // she clicked another chat while this loaded
   S.thread = data;
   THREADS.set(phone, data);
+  areaChip(data.area, data.areaTyped);
+  placeLine(data);
   if (THREADS.size > 40) THREADS.delete(THREADS.keys().next().value);
 
   const c = data.conversation || {};
@@ -1739,6 +1793,15 @@ $('bcResendOpen').addEventListener('click', async () => {
   if (!ok) { $('bcErr').textContent = data?.message || 'Could not load the chat list.'; return; }
   RS.people = data.people || [];
   for (const k of ['7', '14', '30', 'ever']) $('rsC' + k).textContent = `(${data.counts[k]})`;
+  // Area and district choices, with how many people each has.
+  const ar = await api('/api/inbox/areas');
+  if (ar.ok) {
+    const list = ar.data.areas.filter((a) => a.people > 0);
+    $('rsArea').innerHTML = list.map((a) => `<option value="${a.id}">${a.name} (${a.people})</option>`).join('') || '<option value="">No areas yet</option>';
+    const byD = {};
+    for (const a of ar.data.areas) byD[a.district] = (byD[a.district] || 0) + a.people;
+    $('rsDistrict').innerHTML = Object.entries(byD).map(([d, n]) => `<option value="${d}">${d} (${n})</option>`).join('');
+  }
   rsDrawList(); rsRefresh();
   $('rsBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
@@ -1747,7 +1810,8 @@ $('rsSearch').addEventListener('input', rsDrawList);
 $('rsPaste').addEventListener('input', rsRefresh);
 $('bcResend').addEventListener('click', async () => {
   $('bcErr').textContent = '';
-  const body = { kind: 'resend_request', agent: S.agent, isTest: false, who: rsWho(), chosen: rsChosen() };
+  const body = { kind: 'resend_request', agent: S.agent, isTest: false, who: rsWho(), chosen: rsChosen(),
+                 areaId: $('rsArea').value, district: $('rsDistrict').value };
   const dry = await api('/api/inbox/broadcast', { method: 'POST', body: JSON.stringify({ ...body, dryRun: true }) });
   if (!dry.ok) { $('bcErr').textContent = dry.data?.message || 'Could not count the list.'; return; }
   const n = dry.data.count;
@@ -1793,6 +1857,133 @@ function watchBroadcast(id) {
   bcUpdateButtons();
   tickB();
 }
+
+// ===========================================================================
+// KARACHI AREAS - where each customer lives (areas.js on the server)
+//   chat header chip: tap to set / correct this customer's area
+//   "Areas" button: counts per district and area; tick "we deliver here"
+// ===========================================================================
+const AR = { list: [], forPhone: null };
+function placeLine(d) {
+  const parts = [];
+  const p = d?.place;
+  if (p?.society) parts.push(`🏘️ ${p.society}`);
+  else if (p?.gated === true) parts.push(`🏘️ society: ${p.society_text || '?'} (check)`);
+  else if (p?.gated === false) parts.push('🏠 not in a society');
+  const n = d?.network;
+  if (n && (n.joined || n.reward)) parts.push(`👥 brought ${n.joined} · ${n.ordered} ordered` + (n.reward ? ` · 🎁 ${n.reward}${n.draft ? ' (draft)' : ''}` : ''));
+  if (p?.referred_by) parts.push(`came via +${p.referred_by}`);
+  $('tPlace').textContent = parts.join('  ·  ');
+}
+function areaChip(a, typed) {
+  const b = $('tArea');
+  b.className = 'area-chip' + (a ? (a.served ? ' set' : ' out') : '');
+  b.textContent = a ? `📍 ${a.name}${a.served ? '' : ' · not served yet'}` : (typed ? `📍 Area? (wrote: ${typed.slice(0, 30)})` : '📍 Area?');
+}
+async function openAreas(forPhone = null) {
+  AR.forPhone = forPhone;
+  $('arErr').textContent = '';
+  $('arSearch').value = '';
+  $('arTitle').firstChild.textContent = forPhone ? 'Set area' : 'Areas';
+  $('arSub').textContent = forPhone ? `For +${forPhone}` : 'Where your customers live';
+  $('opShade').hidden = false;
+  $('arPanel').hidden = false;
+  const { ok, data } = await api('/api/inbox/areas');
+  if (!ok) { $('arErr').textContent = data?.message || 'Could not load areas.'; return; }
+  AR.list = data.areas;
+  const placed = AR.list.reduce((n, a) => n + a.people, 0);
+  $('arNote').textContent = forPhone
+    ? 'Tap her area. It is saved at once.'
+    : `${placed} customers placed in an area` + (data.waitingForTeam ? ` · ${data.waitingForTeam} waiting for the team to set` : '') +
+      (data.botOn ? ' · the bot asks new customers' : ' · the bot is off') + '. Tick ✓ next to an area when ASB starts delivering there.';
+  $('arNewDistrict').innerHTML = [...new Set(AR.list.map((a) => a.district))].map((d) => `<option>${d}</option>`).join('');
+  drawAreas();
+}
+function drawAreas() {
+  const q = $('arSearch').value.trim().toLowerCase();
+  const box = $('arList');
+  box.innerHTML = '';
+  const byD = {};
+  for (const a of AR.list) {
+    if (q && !a.name.toLowerCase().includes(q) && !a.district.toLowerCase().includes(q)) continue;
+    (byD[a.district] = byD[a.district] || []).push(a);
+  }
+  for (const [d, list] of Object.entries(byD)) {
+    const h = document.createElement('div');
+    h.className = 'ar-d';
+    h.innerHTML = `<span></span><span>${list.reduce((n, a) => n + a.people, 0)} people</span>`;
+    h.firstChild.textContent = d;
+    box.append(h);
+    if (!AR.forPhone && !q) list.sort((x, y) => y.people - x.people);
+    for (const a of list) {
+      const row = document.createElement(AR.forPhone ? 'button' : 'div');
+      row.className = 'ar-row';
+      const name = document.createElement('span');
+      name.textContent = a.name;
+      row.append(name);
+      if (a.served) { const s = document.createElement('span'); s.className = 'srv'; s.textContent = 'we deliver'; row.append(s); }
+      if (!a.served && a.people >= (a.unlock_target || 50)) {
+        const r2 = document.createElement('span'); r2.className = 'srv'; r2.style.color = r2.style.borderColor = 'var(--warn)';
+        r2.textContent = 'ready to unlock'; row.append(r2);
+      }
+      const n = document.createElement('span'); n.className = 'n';
+      n.textContent = a.served ? a.people : `${a.people}/${a.unlock_target || 50}`; row.append(n);
+      if (!AR.forPhone && a.served && a.people && !a.unlocked_announced_at && !/johar/i.test(a.name)) {
+        const ann = document.createElement('button');
+        ann.className = 'ghost'; ann.textContent = 'Announce'; ann.title = 'Tell everyone waiting here that the area is open';
+        ann.addEventListener('click', async () => {
+          const dry = await api(`/api/inbox/areas/${a.id}/announce`, { method: 'POST', body: JSON.stringify({ dryRun: true }) });
+          if (!dry.ok) { $('arErr').textContent = dry.data?.message || 'Could not count.'; return; }
+          if (!confirm(`Tell ${dry.data.count} people that ${a.name} is now open?\n\n"Mubarak ho! 🎉 ${a.name} unlock ho gaya hai. Apna Sasta Bazaar ab aap ke area mein deliver karta hai. Apna pehla order isi number par bhej dein."\n\nMeta charges for each message.`)) return;
+          const r = await api(`/api/inbox/areas/${a.id}/announce`, { method: 'POST', body: JSON.stringify({ confirmCount: dry.data.count, agent: S.agent }) });
+          if (!r.ok) { $('arErr').textContent = r.data?.message || 'Could not send.'; return; }
+          toast(`Sending to ${r.data.count} in ${a.name}`); a.unlocked_announced_at = new Date().toISOString(); drawAreas();
+        });
+        row.append(ann);
+      }
+      if (AR.forPhone) {
+        row.addEventListener('click', async () => {
+          const r = await api('/api/inbox/area', { method: 'POST', body: JSON.stringify({ phone: AR.forPhone, areaId: a.id, agent: S.agent }) });
+          if (!r.ok) { $('arErr').textContent = r.data?.message || 'Could not save.'; return; }
+          if (S.phone === AR.forPhone) areaChip(r.data.area);
+          const t = THREADS.get(AR.forPhone); if (t) t.area = r.data.area;
+          toast(`Area saved: ${a.name}`);
+          closeAreas();
+        });
+      } else {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = a.served; cb.title = 'We deliver here';
+        cb.addEventListener('change', async () => {
+          if (!confirm(cb.checked ? `Mark ${a.name} as an area ASB delivers to?` : `Mark ${a.name} as NOT served?`)) { cb.checked = !cb.checked; return; }
+          const r = await api(`/api/inbox/areas/${a.id}/served`, { method: 'POST', body: JSON.stringify({ served: cb.checked, agent: S.agent }) });
+          if (r.ok) { a.served = cb.checked; drawAreas(); } else { cb.checked = !cb.checked; $('arErr').textContent = 'Could not save.'; }
+        });
+        row.append(cb);
+      }
+      box.append(row);
+    }
+  }
+  if (!box.children.length) box.innerHTML = '<p class="op-hint">No area by that name. Add it below.</p>';
+}
+function closeAreas() {
+  $('arPanel').hidden = true;
+  if ($('orderPanel').hidden && $('bcPanel').hidden) $('opShade').hidden = true;
+}
+$('areasBtn').addEventListener('click', () => openAreas(null));
+$('tArea').addEventListener('click', () => { if (S.phone) openAreas(S.phone); });
+$('arClose').addEventListener('click', closeAreas);
+$('arSearch').addEventListener('input', drawAreas);
+$('opShade').addEventListener('click', () => { if (!$('arPanel').hidden) closeAreas(); });
+$('arAdd').addEventListener('click', async () => {
+  const name = $('arNewName').value.trim();
+  if (name.length < 3) { $('arErr').textContent = 'Write the area name.'; return; }
+  const r = await api('/api/inbox/areas/new', { method: 'POST', body: JSON.stringify({ name, district: $('arNewDistrict').value, agent: S.agent }) });
+  if (!r.ok) { $('arErr').textContent = r.data?.message || 'Could not add.'; return; }
+  $('arNewName').value = '';
+  toast(`Added: ${r.data.area.name}`);
+  await openAreas(AR.forPhone);
+  $('arSearch').value = r.data.area.name; drawAreas();
+});
 
 // ===========================================================================
 // POLL

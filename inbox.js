@@ -52,6 +52,7 @@ const schedule = require("./schedule");
 const orders = require("./orders");
 const notify = require("./notify");
 const broadcast = require("./broadcast");
+const areas = require("./areas");
 const T = require("./templates");
 const push = require("./push");
 
@@ -293,8 +294,16 @@ router.get("/api/inbox/thread/:phone", requireAuth, async (req, res) => {
       ).catch(() => ({ rows: [] })),
     ]);
 
+    const area = await areas.areaOf(db, phone).catch(() => null);
     res.json({
       phone,
+      area: area?.id ? { id: area.id, name: area.name, district: area.district, served: area.served, source: area.source } : null,
+      areaTyped: area && !area.id ? area.raw_text || null : null,
+      place: await db.query(
+        `SELECT l.gated, l.society_text, s.name AS society, l.ref_code, l.referred_by
+           FROM customer_locations l LEFT JOIN societies s ON s.id = l.society_id WHERE l.phone = $1`, [phone])
+        .then((r) => r.rows[0] || null).catch(() => null),
+      network: await areas.network(db, phone).catch(() => null),
       conversation: conv.rows[0] || { phone, window_open: false },
       messages: msgs.rows,
       orders: orders.rows,
@@ -800,6 +809,88 @@ router.post("/api/inbox/send-image", requireAuth, express.json({ limit: "8mb" })
 
 // What the panel needs before anything is chosen: this delivery's wording,
 // how many customers there are, how many said STOP, and the last few sends.
+// ---------------------------------------------------------------------------
+// Karachi areas (areas.js): the list with counts, set a customer's area, add an
+// area, and mark an area as served (ASB delivers there now).
+// ---------------------------------------------------------------------------
+router.get("/api/inbox/areas", requireAuth, async (_req, res) => {
+  try {
+    if (!(await areas.ready(db))) return res.status(503).json({ error: "not_migrated", message: "Run the database update first (migration 021)." });
+    const list = await areas.counts(db);
+    const unplaced = (await db.query(
+      `SELECT count(*)::int AS n FROM customer_locations WHERE area_id IS NULL AND bot_state = 'staff'`)).rows[0].n;
+    res.json({ areas: list, waitingForTeam: unplaced, botOn: areas.on() });
+  } catch (e) {
+    console.error("[inbox] areas failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+router.post("/api/inbox/area", requireAuth, express.json(), async (req, res) => {
+  const phone = normalizePhone(req.body?.phone);
+  const areaId = Number(req.body?.areaId);
+  if (!phone || !areaId) return res.status(400).json({ error: "bad_input", message: "Phone and area are needed." });
+  try {
+    await areas.setArea(db, phone, areaId, { by: String(req.body?.agent || "staff").slice(0, 40), source: "staff" });
+    const a = await areas.areaOf(db, phone);
+    res.json({ ok: true, area: { id: a.id, name: a.name, district: a.district, served: a.served, source: a.source } });
+  } catch (e) {
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+router.post("/api/inbox/areas/new", requireAuth, express.json(), async (req, res) => {
+  const name = String(req.body?.name || "").trim().slice(0, 80);
+  const district = String(req.body?.district || "").trim().slice(0, 40);
+  if (name.length < 3 || !district) return res.status(400).json({ error: "bad_input", message: "Area name and district are needed." });
+  try {
+    res.json({ ok: true, area: await areas.addArea(db, { district, name, by: String(req.body?.agent || "staff").slice(0, 40) }) });
+  } catch (e) {
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+router.post("/api/inbox/areas/:id/served", requireAuth, express.json(), async (req, res) => {
+  try {
+    const r = await db.query(`UPDATE karachi_areas SET served = $2, served_at = CASE WHEN $2 THEN COALESCE(served_at, now()) ELSE served_at END
+                                WHERE id = $1 RETURNING id, name, served`,
+      [Number(req.params.id), Boolean(req.body?.served)]);
+    if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
+    console.log(`[inbox] ${req.body?.agent || "staff"} marked ${r.rows[0].name} served=${r.rows[0].served}`);
+    res.json({ ok: true, area: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+// The founder opened an area: tell everyone waiting there ("Mubarak ho! ...
+// unlock ho gaya"). Needs the asb_area_unlocked_v1 template approved by Meta.
+// dryRun first (count), then confirmCount - like every other send.
+router.post("/api/inbox/areas/:id/announce", requireAuth, express.json(), async (req, res) => {
+  try {
+    const a = (await db.query(`SELECT * FROM karachi_areas WHERE id = $1`, [Number(req.params.id)])).rows[0];
+    if (!a) return res.status(404).json({ error: "not_found" });
+    if (!a.served) return res.status(409).json({ error: "not_served", message: `Tick ${a.name} as served first.` });
+    const phones = await areas.waitingIn(db, a.id);
+    if (req.body?.dryRun) return res.json({ ok: true, count: phones.length, area: a.name, announced: a.unlocked_announced_at });
+    if (Number(req.body?.confirmCount) !== phones.length) {
+      return res.status(409).json({ error: "count_changed", count: phones.length, message: `The list is now ${phones.length}. Check and confirm again.` });
+    }
+    if (!phones.length) return res.status(400).json({ error: "nobody", message: "Nobody is waiting in this area." });
+    if (broadcast.isRunning()) return res.status(409).json({ error: "busy", message: "Another send is still running." });
+    const agent = String(req.body?.agent || "asb").slice(0, 40);
+    const id = await broadcast.create(db, { agent, phones, kind: "area_unlocked", delivery: a.name });
+    const started = broadcast.start(db, id, logOutbound);
+    if (!started.ok) return res.status(409).json({ error: "busy", message: started.error });
+    await db.query(`UPDATE karachi_areas SET unlocked_announced_at = now() WHERE id = $1`, [a.id]);
+    console.log(`[inbox] ${agent} announced ${a.name} unlocked to ${phones.length} (#${id})`);
+    res.json({ ok: true, id, count: phones.length });
+  } catch (e) {
+    console.error("[inbox] announce failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
 // Who can get the "please message again" notice: everyone who ever wrote,
 // newest first, with counts for 7 / 14 / 30 days and ever.
 router.get("/api/inbox/broadcast/chat-people", requireAuth, async (_req, res) => {
@@ -870,7 +961,9 @@ router.post("/api/inbox/broadcast", requireAuth, express.json(), async (req, res
     let phones;
     if (kind === "resend_request" && !isTest) {
       // Never the whole customer base: only people chosen from the chat history.
-      const pick = await broadcast.pickFromChats(db, { who: String(b.who || ""), chosen: b.chosen });
+      const pick = await broadcast.pickFromChats(db, {
+        who: String(b.who || ""), chosen: b.chosen, areaId: b.areaId, district: b.district,
+      });
       phones = pick.phones;
       if (b.dryRun) return res.json({ ok: true, count: phones.length, leftOut: pick.leftOut });
       if (Number(b.confirmCount) !== phones.length) {

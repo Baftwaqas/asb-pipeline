@@ -1,0 +1,992 @@
+{
+ "version": "AREAS-1",
+ "note": "Karachi's 7 districts (common names; 2023 official names in districtAliases) and their main areas. lat/lng are approximate centre points, used only to SUGGEST an area from a location pin - the customer always confirms it. served: areas ASB delivers to today.",
+ "districtAliases": {
+  "Karachi East": [
+   "Gulshan District",
+   "District East"
+  ],
+  "Karachi Central": [
+   "Nazimabad District",
+   "District Central"
+  ],
+  "Karachi South": [
+   "Karachi District",
+   "District South"
+  ],
+  "Karachi West": [
+   "Orangi District",
+   "District West"
+  ],
+  "Korangi": [
+   "District Korangi"
+  ],
+  "Malir": [
+   "District Malir"
+  ],
+  "Keamari": [
+   "Kemari",
+   "District Keamari"
+  ]
+ },
+ "areas": [
+  [
+   "Karachi East",
+   "Gulistan-e-Johar",
+   24.918,
+   67.128,
+   [
+    "johar",
+    "jauhar",
+    "gulistan e johar",
+    "gulistan-e-jauhar",
+    "gulistane johar",
+    "johar block",
+    "johar mor",
+    "jauhar chowrangi",
+    "pehlwan goth",
+    "rabia city",
+    "kamran chowrangi",
+    "rado bakery"
+   ],
+   true
+  ],
+  [
+   "Karachi East",
+   "Gulshan-e-Iqbal",
+   24.922,
+   67.093,
+   [
+    "gulshan",
+    "gulshan e iqbal",
+    "gulshan-e-iqbal",
+    "gulshane iqbal",
+    "nipa",
+    "maskan",
+    "gulshan block"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Gulzar-e-Hijri",
+   24.97,
+   67.15,
+   [
+    "gulzar e hijri",
+    "gulzare hijri",
+    "scheme 33",
+    "scheme-33",
+    "sachal goth"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Safoora Goth",
+   24.942,
+   67.16,
+   [
+    "safoora",
+    "safura",
+    "safora goth",
+    "safoora chowrangi"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Abul Hassan Isphahani Road",
+   24.933,
+   67.105,
+   [
+    "isphahani road",
+    "abul hasan isphani",
+    "isfahani road"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Gulshan-e-Maymar",
+   25.018,
+   67.115,
+   [
+    "maymar",
+    "gulshan e maymar",
+    "memar"
+   ]
+  ],
+  [
+   "Karachi East",
+   "PECHS",
+   24.87,
+   67.064,
+   [
+    "p.e.c.h.s",
+    "pechs block",
+    "tariq road",
+    "shahrah e faisal pechs"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Bahadurabad",
+   24.882,
+   67.07,
+   [
+    "bahadur abad",
+    "bahadarabad"
+   ]
+  ],
+  [
+   "Karachi East",
+   "KDA Scheme 1",
+   24.885,
+   67.095,
+   [
+    "kda scheme",
+    "kda 1",
+    "kda scheme one"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Dhoraji Colony",
+   24.884,
+   67.077,
+   [
+    "dhoraji"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Jamshed Road",
+   24.878,
+   67.048,
+   [
+    "jamshed town",
+    "jamshed quarters",
+    "guru mandir"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Soldier Bazaar",
+   24.869,
+   67.033,
+   [
+    "soldier bazar"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Garden East",
+   24.874,
+   67.028,
+   []
+  ],
+  [
+   "Karachi East",
+   "Mehmoodabad",
+   24.854,
+   67.088,
+   [
+    "mehmood abad",
+    "mahmoodabad"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Manzoor Colony",
+   24.848,
+   67.08,
+   [
+    "manzoor"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Chanesar Goth",
+   24.858,
+   67.078,
+   [
+    "chaneser",
+    "chanesar"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Sohrab Goth",
+   24.955,
+   67.1,
+   [
+    "sohrab"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Gulshan-e-Jamal",
+   24.901,
+   67.115,
+   [
+    "gulshan e jamal"
+   ]
+  ],
+  [
+   "Karachi East",
+   "Rashid Minhas Road",
+   24.91,
+   67.087,
+   [
+    "rashid minhas",
+    "aladin park"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "North Nazimabad",
+   24.942,
+   67.04,
+   [
+    "north nazimabad",
+    "n nazimabad",
+    "nazimabad north",
+    "block h",
+    "hyderi",
+    "five star chowrangi"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Nazimabad",
+   24.91,
+   67.03,
+   [
+    "nazimabad",
+    "nazimabad no",
+    "golimar"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Federal B Area",
+   24.933,
+   67.075,
+   [
+    "fb area",
+    "f.b area",
+    "f b area",
+    "federal b area",
+    "gulberg",
+    "water pump",
+    "ancholi",
+    "aisha manzil"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Gulberg",
+   24.938,
+   67.068,
+   [
+    "gulberg town",
+    "yaseenabad"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Liaquatabad",
+   24.907,
+   67.045,
+   [
+    "liaqatabad",
+    "liaquat abad",
+    "lalukhet",
+    "laloo khet"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "New Karachi",
+   24.993,
+   67.065,
+   [
+    "new karachi",
+    "north karachi",
+    "nagan chowrangi"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "North Karachi",
+   24.985,
+   67.055,
+   [
+    "north karachi sector",
+    "sector 11",
+    "power house"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Buffer Zone",
+   24.96,
+   67.065,
+   [
+    "bufferzone",
+    "buffer zone sector"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Shadman Town",
+   24.965,
+   67.048,
+   [
+    "shadman"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Nagan Chowrangi",
+   24.968,
+   67.064,
+   [
+    "nagan"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Paposh Nagar",
+   24.918,
+   67.03,
+   [
+    "paposh"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Karimabad",
+   24.92,
+   67.06,
+   [
+    "karimabad"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Azizabad",
+   24.923,
+   67.062,
+   [
+    "aziz abad"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Samanabad",
+   24.94,
+   67.062,
+   [
+    "saman abad"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Sakhi Hassan",
+   24.952,
+   67.055,
+   [
+    "sakhi hasan"
+   ]
+  ],
+  [
+   "Karachi Central",
+   "Godhra",
+   24.998,
+   67.075,
+   [
+    "godhra colony"
+   ]
+  ],
+  [
+   "Karachi South",
+   "DHA (Defence)",
+   24.8,
+   67.065,
+   [
+    "dha",
+    "defence",
+    "defense",
+    "d.h.a",
+    "khayaban",
+    "phase 1",
+    "phase 2",
+    "phase 4",
+    "phase 5",
+    "phase 6",
+    "phase 7",
+    "phase 8",
+    "bukhari commercial",
+    "ittehad"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Clifton",
+   24.815,
+   67.03,
+   [
+    "clifton block",
+    "boat basin",
+    "teen talwar",
+    "do talwar",
+    "sea view"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Saddar",
+   24.855,
+   67.025,
+   [
+    "saddar",
+    "sadar",
+    "empress market"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Civil Lines",
+   24.848,
+   67.03,
+   [
+    "civil line"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Garden West",
+   24.877,
+   67.017,
+   [
+    "zoo"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Lyari",
+   24.865,
+   66.995,
+   [
+    "lyari",
+    "liyari",
+    "kharadar",
+    "mithadar",
+    "chakiwara"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Kharadar",
+   24.852,
+   66.998,
+   [
+    "khara dar"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Ranchore Line",
+   24.864,
+   67.01,
+   [
+    "ranchor line"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Aram Bagh",
+   24.858,
+   67.008,
+   [
+    "arambagh"
+   ]
+  ],
+  [
+   "Karachi South",
+   "II Chundrigar Road",
+   24.85,
+   67.008,
+   [
+    "chundrigar",
+    "i.i chundrigar"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Bath Island",
+   24.827,
+   67.035,
+   [
+    "bath island"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Cantt / Zamzama",
+   24.822,
+   67.042,
+   [
+    "zamzama",
+    "cantt",
+    "cantonment",
+    "kehkashan"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Punjab Colony",
+   24.82,
+   67.06,
+   [
+    "punjab colony"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Neelum Colony",
+   24.812,
+   67.05,
+   [
+    "neelam colony"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Delhi Colony",
+   24.816,
+   67.056,
+   [
+    "delhi colony"
+   ]
+  ],
+  [
+   "Karachi South",
+   "Gizri",
+   24.817,
+   67.065,
+   [
+    "gizri"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Orangi Town",
+   24.95,
+   66.995,
+   [
+    "orangi",
+    "orangi town"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Banaras",
+   24.933,
+   67.005,
+   [
+    "banaras chowk",
+    "pathan colony"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Qasba Colony",
+   24.94,
+   67.008,
+   [
+    "qasba",
+    "qasba colony"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Mominabad",
+   24.97,
+   66.99,
+   [
+    "momin abad"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Manghopir",
+   24.99,
+   67.03,
+   [
+    "mangopir",
+    "manghopir"
+   ]
+  ],
+  [
+   "Karachi West",
+   "SITE Area",
+   24.898,
+   66.998,
+   [
+    "site",
+    "s.i.t.e",
+    "site area",
+    "metroville"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Pak Colony",
+   24.893,
+   67.015,
+   [
+    "pak colony"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Frontier Colony",
+   24.912,
+   67.003,
+   [
+    "frontier colony"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Ittehad Town",
+   24.94,
+   66.955,
+   [
+    "ittehad town"
+   ]
+  ],
+  [
+   "Keamari",
+   "Keamari",
+   24.817,
+   66.977,
+   [
+    "kemari",
+    "keamari",
+    "kiamari"
+   ]
+  ],
+  [
+   "Keamari",
+   "Baldia Town",
+   24.917,
+   66.965,
+   [
+    "baldia",
+    "saeedabad"
+   ]
+  ],
+  [
+   "Keamari",
+   "Mauripur",
+   24.88,
+   66.945,
+   [
+    "mauripur",
+    "maripur",
+    "hawksbay",
+    "hawks bay"
+   ]
+  ],
+  [
+   "Keamari",
+   "Shershah",
+   24.88,
+   66.99,
+   [
+    "sher shah"
+   ]
+  ],
+  [
+   "Keamari",
+   "Machar Colony",
+   24.855,
+   66.97,
+   [
+    "machhar colony"
+   ]
+  ],
+  [
+   "Keamari",
+   "Manora",
+   24.8,
+   66.98,
+   [
+    "manora island"
+   ]
+  ],
+  [
+   "Keamari",
+   "Gulbai",
+   24.88,
+   66.97,
+   [
+    "gulbai"
+   ]
+  ],
+  [
+   "Korangi",
+   "Korangi",
+   24.835,
+   67.135,
+   [
+    "korangi",
+    "korangi crossing",
+    "korangi industrial area"
+   ]
+  ],
+  [
+   "Korangi",
+   "Landhi",
+   24.855,
+   67.2,
+   [
+    "landhi"
+   ]
+  ],
+  [
+   "Korangi",
+   "Shah Faisal Colony",
+   24.878,
+   67.155,
+   [
+    "shah faisal",
+    "shah faisal colony",
+    "shamsi society",
+    "rifah e aam"
+   ]
+  ],
+  [
+   "Korangi",
+   "Model Colony",
+   24.895,
+   67.195,
+   [
+    "model colony"
+   ]
+  ],
+  [
+   "Korangi",
+   "Drigh Road",
+   24.892,
+   67.125,
+   [
+    "drigh road",
+    "dig road",
+    "faisal cantt",
+    "kala board",
+    "awami colony"
+   ]
+  ],
+  [
+   "Korangi",
+   "Chakra Goth",
+   24.845,
+   67.13,
+   [
+    "chakra goth"
+   ]
+  ],
+  [
+   "Korangi",
+   "Zaman Town",
+   24.835,
+   67.155,
+   [
+    "zaman town"
+   ]
+  ],
+  [
+   "Korangi",
+   "Bilal Colony",
+   24.84,
+   67.145,
+   [
+    "bilal colony"
+   ]
+  ],
+  [
+   "Korangi",
+   "Natha Khan Goth",
+   24.881,
+   67.17,
+   [
+    "natha khan"
+   ]
+  ],
+  [
+   "Korangi",
+   "Defence View",
+   24.827,
+   67.08,
+   [
+    "defence view",
+    "qayyumabad",
+    "akhtar colony"
+   ]
+  ],
+  [
+   "Korangi",
+   "Mehran Town",
+   24.855,
+   67.165,
+   [
+    "mehran town"
+   ]
+  ],
+  [
+   "Malir",
+   "Malir",
+   24.895,
+   67.205,
+   [
+    "malir",
+    "malir city",
+    "malir halt",
+    "malir 15"
+   ]
+  ],
+  [
+   "Malir",
+   "Malir Cantt",
+   24.94,
+   67.2,
+   [
+    "malir cantt",
+    "malir cantonment",
+    "askari 5",
+    "falcon complex"
+   ]
+  ],
+  [
+   "Malir",
+   "Gadap",
+   25.06,
+   67.18,
+   [
+    "gadap"
+   ]
+  ],
+  [
+   "Malir",
+   "Bahria Town",
+   25.0,
+   67.31,
+   [
+    "bahria",
+    "bahria town",
+    "precinct"
+   ]
+  ],
+  [
+   "Malir",
+   "DHA City",
+   25.07,
+   67.36,
+   [
+    "dha city",
+    "dhacity"
+   ]
+  ],
+  [
+   "Malir",
+   "Ibrahim Hyderi",
+   24.8,
+   67.15,
+   [
+    "ibrahim hyderi"
+   ]
+  ],
+  [
+   "Malir",
+   "Bin Qasim / Port Qasim",
+   24.8,
+   67.33,
+   [
+    "bin qasim",
+    "port qasim",
+    "steel town",
+    "gulshan e hadeed"
+   ]
+  ],
+  [
+   "Malir",
+   "Shah Latif Town",
+   24.87,
+   67.3,
+   [
+    "shah latif"
+   ]
+  ],
+  [
+   "Malir",
+   "Quaidabad",
+   24.865,
+   67.23,
+   [
+    "qaidabad",
+    "quaid abad"
+   ]
+  ],
+  [
+   "Malir",
+   "Saudabad",
+   24.885,
+   67.21,
+   [
+    "saud abad"
+   ]
+  ],
+  [
+   "Malir",
+   "Jinnah Avenue / Model Colony Malir",
+   24.905,
+   67.19,
+   [
+    "jinnah avenue"
+   ]
+  ],
+  [
+   "Malir",
+   "Scheme 45 / Taiser Town",
+   25.04,
+   67.14,
+   [
+    "taiser town",
+    "scheme 45"
+   ]
+  ],
+  [
+   "Karachi West",
+   "Surjani Town",
+   25.03,
+   67.055,
+   [
+    "surjani",
+    "surjani town"
+   ]
+  ],
+  [
+   "Malir",
+   "Northern Bypass / Super Highway",
+   25.01,
+   67.21,
+   [
+    "super highway",
+    "northern bypass",
+    "sabzi mandi",
+    "new sabzi mandi"
+   ]
+  ]
+ ]
+}

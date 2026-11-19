@@ -108,7 +108,14 @@ async function chatPeople(db) {
 const WHO = { "7": 7, "14": 14, "30": 30, ever: null };
 
 /** Phones for the notice. who: "7" | "14" | "30" | "ever" | "choose". STOP numbers never. */
-async function pickFromChats(db, { who, chosen, now = new Date() }) {
+async function pickFromChats(db, { who, chosen, areaId = null, district = null, now = new Date() }) {
+  // By where they live (areas.js): one area, or a whole district.
+  if (who === "area" || who === "district") {
+    const A = require("./areas");
+    const phones = await A.phonesIn(db, who === "area" ? { areaId: Number(areaId) || -1 } : { district: String(district || "") });
+    const stop = new Set((await db.query(`SELECT phone FROM marketing_opt_outs WHERE phone = ANY($1)`, [phones])).rows.map((r) => r.phone));
+    return { phones: phones.filter((p) => !stop.has(p)), leftOut: phones.filter((p) => stop.has(p)).length };
+  }
   const people = await chatPeople(db);
   const allowed = (p) => !p.opted_out;
   if (who === "choose") {
@@ -118,7 +125,7 @@ async function pickFromChats(db, { who, chosen, now = new Date() }) {
     for (const r of optedOut) stop.add(r.phone);
     return { phones: [...out].filter((p) => !stop.has(p)), leftOut: [...out].filter((p) => stop.has(p)).length };
   }
-  if (!(who in WHO)) throw new Error("who must be 7, 14, 30, ever or choose");
+  if (!(who in WHO)) throw new Error("who must be 7, 14, 30, ever, choose, area or district");
   const days = WHO[who];
   const since = days ? new Date(now.getTime() - days * 86400000) : null;
   const inRange = people.filter((p) => !since || new Date(p.last_at) >= since);
@@ -164,7 +171,7 @@ function parsePhones(text) {
 // ---------------------------------------------------------------------------
 // Which approved message a broadcast sends: the rate list (default, with the
 // poster) or the "please send again" notice (no picture, no wording to fill).
-const KINDS = { rate_list: "rateList", resend_request: "resendRequest" };
+const KINDS = { rate_list: "rateList", resend_request: "resendRequest", area_unlocked: "areaUnlocked" };
 function templateFor(name) {
   return Object.values(T.TEMPLATES).find((t) => t.name === name) || T.TEMPLATES.rateList;
 }
@@ -242,8 +249,10 @@ async function run(db, id, logOutbound) {
 
   const t = templateFor(b.template);
   const isRateList = t === T.TEMPLATES.rateList;
-  const params = isRateList ? T.rateListParams(b.delivery, b.cutoff) : [];
-  const preview = isRateList ? T.rateListText(b.delivery, b.cutoff) : t.body;
+  // area_unlocked keeps the area's name in the delivery column ({{1}}).
+  const isUnlock = t === T.TEMPLATES.areaUnlocked;
+  const params = isRateList ? T.rateListParams(b.delivery, b.cutoff) : isUnlock ? T.areaUnlockedParams(b.delivery) : [];
+  const preview = isRateList ? T.rateListText(b.delivery, b.cutoff) : isUnlock ? t.body.replace("{{1}}", b.delivery) : t.body;
   let sameError = { text: null, count: 0 };
 
   for (;;) {

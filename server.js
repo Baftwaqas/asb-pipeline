@@ -41,6 +41,7 @@ const groceryReceipts = require("./grocery/receipts");
 const grocerySwitches = require("./grocery/switches");
 const { parseOrderJson, UnsafeIntegerError } = require("./grocery/orderjson");
 const wa = require("./whatsapp");
+const areas = require("./areas");
 const notify = require("./notify");
 const broadcast = require("./broadcast");
 const communityIntake = require("./community/intake");
@@ -129,6 +130,48 @@ async function persistOrder(order, phone) {
 // for button taps and list selections - which arrive as structured
 // objects, not text, and used to be stored as the useless "(button)".
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// The area bot (areas.js): verify the customer's delivery location. Every
+// message it sends is logged in the inbox under agent "area bot".
+// ------------------------------------------------------------
+async function askArea(msg) {
+  const phone = normalizePhone(msg.from);
+  if (!phone || !areas.on()) return null;
+  const { logOutbound } = require("./inbox");
+  const log = (body) => (r) => logOutbound({ phone, body, agent: "area bot", wamid: r.wamid, ok: r.ok, payload: r.data })
+    .then(() => r);
+  const send = {
+    text: (to, body) => wa.sendText(to, body).then(log(body)),
+    buttons: (to, body, buttons) => wa.sendButtons(to, body, buttons).then(log(`${body}\n[${buttons.map((b) => b.title).join("] [")}]`)),
+    location: (to, body) => wa.sendLocationRequest(to, body).then(log(`${body}\n[Send location]`)),
+  };
+  const r = await areas.onInbound(db, { phone, msg, send, onMilestone: areaMilestone });
+  if (r) console.log(`[areas] +${phone}: ${r.did}${r.area ? " " + r.area : ""}`);
+  return r;
+}
+
+// An area we don't serve crossed 25 / 40 / 50 people. The team hears at the
+// target (the founder decides to open it). The waiting people get the progress
+// news only once the asb_area_progress_v1 template is approved (AREA_NEWS=on).
+async function areaMilestone(m) {
+  console.log(`[areas] ${m.area} reached ${m.count}/${m.target}`);
+  if (m.reached) {
+    push.notifyAll(db, { title: `${m.area}: ${m.count} log jud gaye!`, body: `${m.area} ready to unlock (${m.count}/${m.target}). Open Areas in the inbox to decide.`, url: "/inbox" })
+      .catch((e) => console.error("[areas] alert failed:", e.message));
+  }
+  if (String(process.env.AREA_NEWS || "").toLowerCase() !== "on") return;
+  const T = require("./templates");
+  const t = T.TEMPLATES.areaProgress;
+  const remaining = Math.max(0, m.target - m.count);
+  const { logOutbound } = require("./inbox");
+  for (const phone of await areas.waitingIn(db, m.areaId)) {
+    const r = await wa.sendTemplate(phone, t.name, T.areaProgressParams(m.area, m.count, remaining), { lang: t.language });
+    await logOutbound({ phone, body: t.body.replace("{{1}}", m.area).replace("{{2}}", m.count).replace("{{3}}", remaining),
+      agent: "area news", template: t.name, wamid: r.wamid, ok: r.ok, payload: r.data });
+    await new Promise((res) => setTimeout(res, 250));
+  }
+}
+
 async function saveInbound(msg, contact) {
   const from = normalizePhone(msg.from);
   const type = msg.type || "unknown";
@@ -431,6 +474,9 @@ app.post("/webhooks/whatsapp", async (req, res) => {
           try {
             await saveInbound(msg, contacts[i] || contacts[0]);
             handled++;
+            // Where does she live? (areas.js, switch AREA_BOT). After the save,
+            // so the team always sees the message; never allowed to fail it.
+            await askArea(msg).catch((e) => console.error("[areas] bot failed:", e.message));
             // Blue ticks: cheap, free, and tells the customer a human
             // is on the other end. Never allowed to fail the webhook.
             wa.markRead(msg.id).catch(() => {});
