@@ -171,7 +171,7 @@ function parsePhones(text) {
 // ---------------------------------------------------------------------------
 // Which approved message a broadcast sends: the rate list (default, with the
 // poster) or the "please send again" notice (no picture, no wording to fill).
-const KINDS = { rate_list: "rateList", resend_request: "resendRequest" };
+const KINDS = { rate_list: "rateList", resend_request: "resendRequest", area_unlocked: "areaUnlocked" };
 function templateFor(name) {
   return Object.values(T.TEMPLATES).find((t) => t.name === name) || T.TEMPLATES.rateList;
 }
@@ -249,8 +249,10 @@ async function run(db, id, logOutbound) {
 
   const t = templateFor(b.template);
   const isRateList = t === T.TEMPLATES.rateList;
-  const params = isRateList ? T.rateListParams(b.delivery, b.cutoff) : [];
-  const preview = isRateList ? T.rateListText(b.delivery, b.cutoff) : t.body;
+  // area_unlocked keeps the area's name in the delivery column ({{1}}).
+  const isUnlock = t === T.TEMPLATES.areaUnlocked;
+  const params = isRateList ? T.rateListParams(b.delivery, b.cutoff) : isUnlock ? T.areaUnlockedParams(b.delivery) : [];
+  const preview = isRateList ? T.rateListText(b.delivery, b.cutoff) : isUnlock ? t.body.replace("{{1}}", b.delivery) : t.body;
   let sameError = { text: null, count: 0 };
 
   for (;;) {

@@ -299,6 +299,11 @@ router.get("/api/inbox/thread/:phone", requireAuth, async (req, res) => {
       phone,
       area: area?.id ? { id: area.id, name: area.name, district: area.district, served: area.served, source: area.source } : null,
       areaTyped: area && !area.id ? area.raw_text || null : null,
+      place: await db.query(
+        `SELECT l.gated, l.society_text, s.name AS society, l.ref_code, l.referred_by
+           FROM customer_locations l LEFT JOIN societies s ON s.id = l.society_id WHERE l.phone = $1`, [phone])
+        .then((r) => r.rows[0] || null).catch(() => null),
+      network: await areas.network(db, phone).catch(() => null),
       conversation: conv.rows[0] || { phone, window_open: false },
       messages: msgs.rows,
       orders: orders.rows,
@@ -847,12 +852,41 @@ router.post("/api/inbox/areas/new", requireAuth, express.json(), async (req, res
 
 router.post("/api/inbox/areas/:id/served", requireAuth, express.json(), async (req, res) => {
   try {
-    const r = await db.query(`UPDATE karachi_areas SET served = $2 WHERE id = $1 RETURNING id, name, served`,
+    const r = await db.query(`UPDATE karachi_areas SET served = $2, served_at = CASE WHEN $2 THEN COALESCE(served_at, now()) ELSE served_at END
+                                WHERE id = $1 RETURNING id, name, served`,
       [Number(req.params.id), Boolean(req.body?.served)]);
     if (!r.rows[0]) return res.status(404).json({ error: "not_found" });
     console.log(`[inbox] ${req.body?.agent || "staff"} marked ${r.rows[0].name} served=${r.rows[0].served}`);
     res.json({ ok: true, area: r.rows[0] });
   } catch (e) {
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
+// The founder opened an area: tell everyone waiting there ("Mubarak ho! ...
+// unlock ho gaya"). Needs the asb_area_unlocked_v1 template approved by Meta.
+// dryRun first (count), then confirmCount - like every other send.
+router.post("/api/inbox/areas/:id/announce", requireAuth, express.json(), async (req, res) => {
+  try {
+    const a = (await db.query(`SELECT * FROM karachi_areas WHERE id = $1`, [Number(req.params.id)])).rows[0];
+    if (!a) return res.status(404).json({ error: "not_found" });
+    if (!a.served) return res.status(409).json({ error: "not_served", message: `Tick ${a.name} as served first.` });
+    const phones = await areas.waitingIn(db, a.id);
+    if (req.body?.dryRun) return res.json({ ok: true, count: phones.length, area: a.name, announced: a.unlocked_announced_at });
+    if (Number(req.body?.confirmCount) !== phones.length) {
+      return res.status(409).json({ error: "count_changed", count: phones.length, message: `The list is now ${phones.length}. Check and confirm again.` });
+    }
+    if (!phones.length) return res.status(400).json({ error: "nobody", message: "Nobody is waiting in this area." });
+    if (broadcast.isRunning()) return res.status(409).json({ error: "busy", message: "Another send is still running." });
+    const agent = String(req.body?.agent || "asb").slice(0, 40);
+    const id = await broadcast.create(db, { agent, phones, kind: "area_unlocked", delivery: a.name });
+    const started = broadcast.start(db, id, logOutbound);
+    if (!started.ok) return res.status(409).json({ error: "busy", message: started.error });
+    await db.query(`UPDATE karachi_areas SET unlocked_announced_at = now() WHERE id = $1`, [a.id]);
+    console.log(`[inbox] ${agent} announced ${a.name} unlocked to ${phones.length} (#${id})`);
+    res.json({ ok: true, id, count: phones.length });
+  } catch (e) {
+    console.error("[inbox] announce failed:", e.message);
     res.status(500).json({ error: "server", message: e.message });
   }
 });

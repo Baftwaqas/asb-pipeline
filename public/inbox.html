@@ -423,6 +423,7 @@
           <h3 id="tName">—</h3>
           <small id="tPhone"></small>
           <button class="area-chip" id="tArea" title="Where she lives - tap to set or change">📍 Area?</button>
+          <small id="tPlace" style="display:block;color:var(--ink-2);font-size:11.5px;margin-top:2px"></small>
         </div>
         <span class="win" id="tWin">—</span>
         <button class="add-order" id="addOrderBtn" title="She ordered in this chat — enter it so she gets the same bill as a Shopify order">+ Order</button>
@@ -823,6 +824,7 @@ async function openThread(phone, keepScroll = false) {
     $('tCtx').hidden = true;
     const cached = THREADS.get(phone);
     areaChip(cached?.area || null, cached?.areaTyped || null);
+    placeLine(cached);
     if (cached) renderMsgs(cached.messages || [], false);
     else $('msgs').innerHTML = '<p style="padding:22px 16px;color:var(--ink-2);font-size:13.5px">Loading…</p>';
     // Clear the unread badge on screen now; the server clears it when it serves the chat.
@@ -839,6 +841,7 @@ async function openThread(phone, keepScroll = false) {
   S.thread = data;
   THREADS.set(phone, data);
   areaChip(data.area, data.areaTyped);
+  placeLine(data);
   if (THREADS.size > 40) THREADS.delete(THREADS.keys().next().value);
 
   const c = data.conversation || {};
@@ -1861,6 +1864,17 @@ function watchBroadcast(id) {
 //   "Areas" button: counts per district and area; tick "we deliver here"
 // ===========================================================================
 const AR = { list: [], forPhone: null };
+function placeLine(d) {
+  const parts = [];
+  const p = d?.place;
+  if (p?.society) parts.push(`🏘️ ${p.society}`);
+  else if (p?.gated === true) parts.push(`🏘️ society: ${p.society_text || '?'} (check)`);
+  else if (p?.gated === false) parts.push('🏠 not in a society');
+  const n = d?.network;
+  if (n && (n.joined || n.reward)) parts.push(`👥 brought ${n.joined} · ${n.ordered} ordered` + (n.reward ? ` · 🎁 ${n.reward}${n.draft ? ' (draft)' : ''}` : ''));
+  if (p?.referred_by) parts.push(`came via +${p.referred_by}`);
+  $('tPlace').textContent = parts.join('  ·  ');
+}
 function areaChip(a, typed) {
   const b = $('tArea');
   b.className = 'area-chip' + (a ? (a.served ? ' set' : ' out') : '');
@@ -1908,7 +1922,25 @@ function drawAreas() {
       name.textContent = a.name;
       row.append(name);
       if (a.served) { const s = document.createElement('span'); s.className = 'srv'; s.textContent = 'we deliver'; row.append(s); }
-      const n = document.createElement('span'); n.className = 'n'; n.textContent = a.people; row.append(n);
+      if (!a.served && a.people >= (a.unlock_target || 50)) {
+        const r2 = document.createElement('span'); r2.className = 'srv'; r2.style.color = r2.style.borderColor = 'var(--warn)';
+        r2.textContent = 'ready to unlock'; row.append(r2);
+      }
+      const n = document.createElement('span'); n.className = 'n';
+      n.textContent = a.served ? a.people : `${a.people}/${a.unlock_target || 50}`; row.append(n);
+      if (!AR.forPhone && a.served && a.people && !a.unlocked_announced_at && !/johar/i.test(a.name)) {
+        const ann = document.createElement('button');
+        ann.className = 'ghost'; ann.textContent = 'Announce'; ann.title = 'Tell everyone waiting here that the area is open';
+        ann.addEventListener('click', async () => {
+          const dry = await api(`/api/inbox/areas/${a.id}/announce`, { method: 'POST', body: JSON.stringify({ dryRun: true }) });
+          if (!dry.ok) { $('arErr').textContent = dry.data?.message || 'Could not count.'; return; }
+          if (!confirm(`Tell ${dry.data.count} people that ${a.name} is now open?\n\n"Mubarak ho! 🎉 ${a.name} unlock ho gaya hai. Apna Sasta Bazaar ab aap ke area mein deliver karta hai. Apna pehla order isi number par bhej dein."\n\nMeta charges for each message.`)) return;
+          const r = await api(`/api/inbox/areas/${a.id}/announce`, { method: 'POST', body: JSON.stringify({ confirmCount: dry.data.count, agent: S.agent }) });
+          if (!r.ok) { $('arErr').textContent = r.data?.message || 'Could not send.'; return; }
+          toast(`Sending to ${r.data.count} in ${a.name}`); a.unlocked_announced_at = new Date().toISOString(); drawAreas();
+        });
+        row.append(ann);
+      }
       if (AR.forPhone) {
         row.addEventListener('click', async () => {
           const r = await api('/api/inbox/area', { method: 'POST', body: JSON.stringify({ phone: AR.forPhone, areaId: a.id, agent: S.agent }) });

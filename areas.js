@@ -27,7 +27,14 @@
 "use strict";
 
 const path = require("path");
+const crypto = require("crypto");
 const LIST = require(path.join(__dirname, "data", "karachi-areas.json"));
+const REWARDS = require(path.join(__dirname, "data", "referral-rewards.json"));
+
+// Areas outside ours open once this many people want them (founder, 19 Nov).
+// The team is alerted at the target; the founder decides to open the area.
+const UNLOCK_AT = 50;
+const MILESTONES = [25, 40, 50];
 
 // ---------------------------------------------------------------------------
 // The words customers read. Pakistani Roman Urdu. Founder-approved idea
@@ -42,16 +49,37 @@ const TEXT = {
   confirm: (a) => `Shukriya! Kya aap ka area *${a.name}* (${a.district}) hai?`,
   served: (a) =>
     `Bohat khoob! ✅ Hum *${a.name}* mein deliver karte hain. Apna order isi number par bhej dein.`,
-  notServed: (a) =>
+  // Gulistan-e-Johar (and any area we serve): society / gated community or not
+  gatedAsk: "Ek aur sawal: kya aap kisi *society ya gated community* mein rehte hain?",
+  societyAsk: (examples) =>
+    "Apni society ka naam likh dein" + (examples.length ? ` (jaise ${examples.join(", ")})` : "") + ".",
+  societyConfirm: (soc) => `Kya aap ki society *${soc.name}* hai?`,
+  servedSociety: (a, soc) =>
+    `Bohat khoob! ✅ Hum *${soc.name}* (${a.name}) mein deliver karte hain. Apna order isi number par bhej dein.`,
+  societyUnknown: (a) =>
+    `Shukriya! Hamari team aap ki society check kar legi. ✅ Hum *${a.name}* mein deliver karte hain. Apna order isi number par bhej dein.`,
+  // Outside our areas: where the area stands, and the link to bring neighbours
+  notServed: (a, count, link) =>
     `Shukriya! Abhi hum *${a.name}* mein deliver nahi karte, lekin jaise hi shuru karenge ` +
-    "aap ko sab se pehle batayenge. 🙏",
+    "aap ko sab se pehle batayenge. 🙏\n\n" +
+    `*${a.name}* mein abhi tak *${count}/${a.unlock_target || UNLOCK_AT}* log jud chuke hain. ` +
+    `Sirf *${Math.max(0, (a.unlock_target || UNLOCK_AT) - count)} aur* chahiye, phir hum aap ke area ko unlock kar denge!\n\n` +
+    (link
+      ? `Apne padosiyon aur building ke group mein ye link bhejein:\n${link}\n\n`
+      : "Apne padosiyon ko bhi isi number par message karne ka kahein.\n\n") +
+    "Jitne zyada log aap ke link se judenge aur order karenge, utne bare inaam: discount aur free items! 🎁",
   again:
     "Maazrat, area samajh nahi aaya. Apne area ka naam likh dein (jaise Gulshan-e-Iqbal, DHA, Nazimabad) " +
     "ya *Send location* se apni location bhej dein.",
   staff: "Shukriya! Hamari team aap ka area dekh kar jald jawab degi.",
+  shareText: (a, code) => `Assalam-o-Alaikum! Mujhe bhi ${a.name} mein Apna Sasta Bazaar chahiye. (code ${code})`,
 };
 const YES = { id: "area:yes", title: "Ji haan" };
 const NO = { id: "area:no", title: "Nahi" };
+const GATED_YES = { id: "gated:yes", title: "Ji haan, society" };
+const GATED_NO = { id: "gated:no", title: "Nahi" };
+const SOC_YES = { id: "soc:yes", title: "Ji haan" };
+const SOC_NO = { id: "soc:no", title: "Nahi" };
 
 const on = (env = process.env) => String(env.AREA_BOT || "").toLowerCase() === "on";
 
@@ -191,7 +219,8 @@ async function counts(db) {
         WHERE c.phone ~ '^92[0-9]{10}$'
           AND NOT EXISTS (SELECT 1 FROM customer_locations l2 WHERE l2.phone = c.phone AND l2.area_id IS NOT NULL)
      )
-     SELECT a.id, a.district, a.name, a.served, count(p.phone)::int AS people
+     SELECT a.id, a.district, a.name, a.served, a.unlock_target, a.unlocked_announced_at,
+            count(p.phone)::int AS people
        FROM karachi_areas a LEFT JOIN placed p ON p.area_id = a.id
       GROUP BY a.id ORDER BY a.district, a.name`);
   return rows;
@@ -217,33 +246,106 @@ async function phonesIn(db, { areaId = null, district = null }) {
 }
 
 // ---------------------------------------------------------------------------
-// The bot. Called for every inbound customer message AFTER it is saved (so the
-// team still sees everything). Returns what it did, or null. Never throws into
-// the webhook; never asks the same person twice.
-//   send: { text(phone, body), buttons(phone, body, buttons), location(phone, body) }
-//         each returns { ok, wamid } and is also logged in the inbox by the caller.
+// Sharing and unlocking
 // ---------------------------------------------------------------------------
-async function onInbound(db, { phone, msg, send, env = process.env }) {
+/** People who confirmed this area (each phone once). */
+async function areaCount(db, areaId) {
+  return (await db.query(`SELECT count(*)::int AS n FROM customer_locations WHERE area_id = $1`, [areaId])).rows[0].n;
+}
+
+/** A short code for a person's share link; made once, kept. */
+async function refCodeFor(db, phone) {
+  const cur = (await db.query(`SELECT ref_code FROM customer_locations WHERE phone = $1`, [phone])).rows[0]?.ref_code;
+  if (cur) return cur;
+  for (let i = 0; i < 5; i++) {
+    const code = crypto.randomBytes(4).toString("base64").replace(/[^A-Za-z0-9]/g, "").slice(0, 5).toUpperCase().padEnd(5, "X");
+    const r = await db.query(
+      `UPDATE customer_locations SET ref_code = $2 WHERE phone = $1 AND ref_code IS NULL
+         AND NOT EXISTS (SELECT 1 FROM customer_locations WHERE ref_code = $2) RETURNING ref_code`, [phone, code]);
+    if (r.rows[0]) return code;
+  }
+  return null;
+}
+
+/** wa.me link that opens WhatsApp to ASB with a ready message and the code. Needs ASB_WHATSAPP_NUMBER. */
+function shareLink(area, code, env = process.env) {
+  const num = String(env.ASB_WHATSAPP_NUMBER || "").replace(/\D/g, "");
+  if (!num || !code) return null;
+  return `https://wa.me/${num}?text=${encodeURIComponent(TEXT.shareText(area, code))}`;
+}
+
+/** "(code AB12C)" in a message -> the phone that shared the link. */
+async function referrerFrom(db, text) {
+  const m = /\(code\s+([A-Z0-9]{5})\)/i.exec(String(text || ""));
+  if (!m) return null;
+  return (await db.query(`SELECT phone FROM customer_locations WHERE ref_code = $1`, [m[1].toUpperCase()])).rows[0]?.phone || null;
+}
+
+/**
+ * Someone's network: how many joined through their link, how many of those
+ * have ordered (an order on record, or a WhatsApp catalogue cart), and the
+ * best reward tier reached. Rewards are a DRAFT until the founder approves.
+ */
+async function network(db, phone) {
+  const { rows } = await db.query(
+    `SELECT l.phone,
+            (EXISTS (SELECT 1 FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = l.phone)
+             OR EXISTS (SELECT 1 FROM whatsapp_messages m WHERE m.phone = l.phone AND m.direction = 'inbound' AND m.msg_type = 'order')) AS ordered
+       FROM customer_locations l WHERE l.referred_by = $1 AND l.area_id IS NOT NULL`, [phone]);
+  const joined = rows.length, ordered = rows.filter((r) => r.ordered).length;
+  const reached = REWARDS.tiers.filter((t) => joined >= t.joined && ordered >= t.ordered);
+  const next = REWARDS.tiers.find((t) => !(joined >= t.joined && ordered >= t.ordered)) || null;
+  return { joined, ordered, reward: reached.at(-1)?.reward || null, next, draft: !REWARDS.approved };
+}
+
+/**
+ * After someone joins an area we don't serve: has it just crossed 25 / 40 / 50?
+ * Each milestone once per area. Returns the milestone crossed (or null); the
+ * caller tells the waiting people and, at the target, the team.
+ */
+async function milestone(db, area) {
+  const n = await areaCount(db, area.id);
+  const target = area.unlock_target || UNLOCK_AT;
+  const marks = MILESTONES.map((m) => Math.round((m / UNLOCK_AT) * target));
+  const hit = marks.filter((m) => n >= m).at(-1);
+  if (!hit) return null;
+  const r = await db.query(
+    `UPDATE karachi_areas SET milestones_sent = array_append(milestones_sent, $2)
+      WHERE id = $1 AND NOT ($2 = ANY(milestones_sent)) RETURNING id`, [area.id, hit]);
+  return r.rows[0] ? { area: area.name, count: n, target, mark: hit, reached: n >= target } : null;
+}
+
+/** Phones waiting in an area (confirmed it), STOP excluded - for progress / unlock news. */
+async function waitingIn(db, areaId) {
+  return (await db.query(
+    `SELECT l.phone FROM customer_locations l
+       LEFT JOIN marketing_opt_outs o ON o.phone = l.phone
+      WHERE l.area_id = $1 AND o.phone IS NULL`, [areaId])).rows.map((r) => r.phone);
+}
+
+// ---------------------------------------------------------------------------
+// The bot. Called for every inbound customer message AFTER it is saved (so the
+// team still sees everything). Returns what it did, or null. Never asks the
+// same person twice.
+//   send: { text(phone, body), buttons(phone, body, buttons), location(phone, body) }
+//   onMilestone(info): optional - an area crossed 25 / 40 / 50 (server tells people / the team)
+// ---------------------------------------------------------------------------
+async function onInbound(db, { phone, msg, send, env = process.env, onMilestone = null }) {
   if (!on(env) || !(await ready(db))) return null;
   const areasList = await all(db);
-  const known = await areaOf(db, phone);
-  if (known?.id) return null;                       // area already known
-
-  const st = (await db.query(`SELECT * FROM customer_locations WHERE phone = $1`, [phone])).rows[0];
-  const state = st?.bot_state || "none";
+  const st0 = (await db.query(`SELECT * FROM customer_locations WHERE phone = $1`, [phone])).rows[0];
+  const state = st0?.bot_state || "none";
   if (state === "done" || state === "staff") return null;
+  if (state === "none") {
+    const known = await areaOf(db, phone);
+    if (known?.id) return null;                       // e.g. an ASB society customer
+  }
+  const st = st0 || {};
 
   const reply = msg?.interactive?.button_reply?.id || msg?.button?.payload || null;
   const typed = msg?.type === "text" ? msg.text?.body || "" : (msg?.interactive?.button_reply?.title || "");
-
-  // First message from someone we know nothing about: ask, once.
-  if (state === "none") {
-    await db.query(
-      `INSERT INTO customer_locations (phone, bot_state, asked_at) VALUES ($1, 'asked', now())
-       ON CONFLICT (phone) DO UPDATE SET bot_state = 'asked', asked_at = now()`, [phone]);
-    await send.location(phone, TEXT.ask);
-    return { did: "asked" };
-  }
+  const yesWord = /^\s*(ji\s*haan|haan|han|ji|yes|jee|g|sahi|theek)\b/i;
+  const noWord = /^\s*(nahi|nahin|na|no|ghalat|galat)\b/i;
 
   const suggest = async (area, raw, lat = null, lng = null) => {
     await db.query(
@@ -266,22 +368,91 @@ async function onInbound(db, { phone, msg, send, env = process.env }) {
     await send.location(phone, TEXT.again);
     return { did: "again" };
   };
+  const welcomeServed = async (area, soc = null, unknownSociety = false) => {
+    await db.query(`UPDATE customer_locations SET bot_state = 'done', pending_society = NULL WHERE phone = $1`, [phone]);
+    await send.text(phone, soc ? TEXT.servedSociety(area, soc) : unknownSociety ? TEXT.societyUnknown(area) : TEXT.served(area));
+    return { did: "served", area: area.name, society: soc?.name || null };
+  };
+
+  // First message from someone we know nothing about.
+  if (state === "none") {
+    const ref = await referrerFrom(db, typed);
+    await db.query(
+      `INSERT INTO customer_locations (phone, bot_state, asked_at, referred_by) VALUES ($1, 'asked', now(), $2)
+       ON CONFLICT (phone) DO UPDATE SET bot_state = 'asked', asked_at = now(),
+              referred_by = COALESCE(customer_locations.referred_by, EXCLUDED.referred_by)`, [phone, ref]);
+    // Came through a neighbour's link ("...mein Apna Sasta Bazaar chahiye (code X)"): the area is in the message.
+    const fromLink = ref ? matchText(areasList, typed.replace(/apna sasta bazaar/ig, "")) : null;
+    if (fromLink) { st.tries = 0; return suggest(fromLink, typed); }
+    await send.location(phone, TEXT.ask);
+    return { did: "asked", referred: Boolean(ref) };
+  }
 
   if (state === "confirming") {
-    const yes = reply === YES.id || /^\s*(ji\s*haan|haan|han|ji|yes|jee|g|sahi|theek)\b/i.test(typed);
-    const no = reply === NO.id || /^\s*(nahi|nahin|na|no|ghalat|galat)\b/i.test(typed);
+    const yes = reply === YES.id || yesWord.test(typed);
+    const no = reply === NO.id || noWord.test(typed);
     if (yes && st.pending_area) {
       await setArea(db, phone, st.pending_area, { source: "bot", by: "bot" });
       const area = areasList.find((a) => Number(a.id) === Number(st.pending_area));
-      await send.text(phone, area.served ? TEXT.served(area) : TEXT.notServed(area));
-      return { did: area.served ? "served" : "waitlist", area: area.name };
+      if (area.served) {
+        // Gulistan-e-Johar (or any area we serve): society / gated community?
+        await db.query(`UPDATE customer_locations SET bot_state = 'gated' WHERE phone = $1`, [phone]);
+        await send.buttons(phone, TEXT.gatedAsk, [GATED_YES, GATED_NO]);
+        return { did: "gated?", area: area.name };
+      }
+      const code = await refCodeFor(db, phone);
+      const count = await areaCount(db, area.id);
+      await send.text(phone, TEXT.notServed(area, count, shareLink(area, code, env)));
+      const m = await milestone(db, area);
+      if (m && onMilestone) await onMilestone({ ...m, areaId: area.id });
+      return { did: "waitlist", area: area.name, count, milestone: m };
     }
     if (!no) {
-      // They typed another area name instead of yes/no: try that.
       const other = matchText(areasList, typed);
       if (other) return suggest(other, typed);
     }
     return miss(null);
+  }
+
+  // Served area: society or not.
+  const myArea = st.area_id ? areasList.find((a) => Number(a.id) === Number(st.area_id)) : null;
+  if (state === "gated" && myArea) {
+    if (reply === GATED_NO.id || noWord.test(typed)) {
+      await db.query(`UPDATE customer_locations SET gated = FALSE WHERE phone = $1`, [phone]);
+      return welcomeServed(myArea);
+    }
+    if (reply === GATED_YES.id || yesWord.test(typed)) {
+      await db.query(`UPDATE customer_locations SET gated = TRUE, bot_state = 'society' WHERE phone = $1`, [phone]);
+      const ex = (await db.query(`SELECT name FROM societies WHERE is_active ORDER BY id LIMIT 3`)).rows.map((r) => r.name);
+      await send.text(phone, TEXT.societyAsk(ex));
+      return { did: "society?" };
+    }
+    // they typed a society name straight away
+    if (typed.trim().length >= 3) {
+      await db.query(`UPDATE customer_locations SET gated = TRUE, bot_state = 'society' WHERE phone = $1`, [phone]);
+      st.bot_state = "society";
+    } else return null;
+  }
+  if ((st.bot_state === "society" || state === "society") && myArea) {
+    const socs = (await db.query(`SELECT id, name, code FROM societies WHERE is_active`)).rows
+      .map((x) => ({ ...x, aliases: [x.code] }));
+    const soc = matchText(socs, typed);
+    if (soc) {
+      await db.query(`UPDATE customer_locations SET bot_state = 'society_confirm', pending_society = $2, society_text = $3 WHERE phone = $1`,
+        [phone, soc.id, typed.slice(0, 200)]);
+      await send.buttons(phone, TEXT.societyConfirm(soc), [SOC_YES, SOC_NO]);
+      return { did: "society_confirm", society: soc.name };
+    }
+    await db.query(`UPDATE customer_locations SET society_text = $2 WHERE phone = $1`, [phone, typed.slice(0, 200)]);
+    return welcomeServed(myArea, null, true);
+  }
+  if (state === "society_confirm" && myArea) {
+    if ((reply === SOC_YES.id || yesWord.test(typed)) && st.pending_society) {
+      await db.query(`UPDATE customer_locations SET society_id = pending_society WHERE phone = $1`, [phone]);
+      const soc = (await db.query(`SELECT id, name FROM societies WHERE id = $1`, [st.pending_society])).rows[0];
+      return welcomeServed(myArea, soc);
+    }
+    return welcomeServed(myArea, null, true);   // not that one: the team checks what she typed
   }
 
   // state 'asked': a pin, or words.
@@ -301,6 +472,7 @@ async function onInbound(db, { phone, msg, send, env = process.env }) {
 }
 
 module.exports = {
-  TEXT, LIST, on, ready, loadList, all, norm, matchText, matchPoint, km,
+  TEXT, LIST, REWARDS, UNLOCK_AT, on, ready, loadList, all, norm, matchText, matchPoint, km,
   areaOf, setArea, addArea, counts, phonesIn, onInbound,
+  areaCount, refCodeFor, shareLink, referrerFrom, network, milestone, waitingIn,
 };

@@ -29,6 +29,7 @@ before(async () => {
   const url = await H.createDatabase("asb_t_areas", ROOT);
   H.setEnv(url);
   process.env.AREA_BOT = "on";
+  process.env.ASB_WHATSAPP_NUMBER = "923000000099";
   process.env.INBOX_PASSWORD = "local-test-only";
   process.env.INBOX_COOKIE_SECRET = "local-test-only-secret";
   sent = H.stubOutside(ROOT);
@@ -92,15 +93,21 @@ test("new customer in Gulistan-e-Johar: asked to verify, types her area, confirm
   assert.equal((await loc(p)).area_id, null, "nothing saved before she says yes");
   await tap(p, "area:yes", "Ji haan");
   await settle(p, 3);
-  assert.match(to(p)[2].text, /deliver karte hain/);
   assert.equal((await loc(p)).name, "Gulistan-e-Johar");
+  // Johar: society / gated community?
+  assert.equal(to(p)[2].kind, "buttons");
+  assert.match(to(p)[2].text, /society ya gated community/);
+  await tap(p, "gated:no", "Nahi");
+  await settle(p, 4);
+  assert.match(to(p)[3].text, /deliver karte hain/);
+  assert.equal((await loc(p)).gated, false);
   // never asked again
   await say(p, "2 kg tamatar");
   await new Promise((r) => setTimeout(r, 200));
-  assert.equal(to(p).length, 3);
+  assert.equal(to(p).length, 4);
   // the bot's messages show in the chat for the team
   const logged = (await db.query(`SELECT count(*)::int AS n FROM whatsapp_messages WHERE phone = $1 AND agent = 'area bot'`, [p])).rows[0].n;
-  assert.equal(logged, 3);
+  assert.equal(logged, 4);
 });
 
 test("outside our areas: a pin, she confirms, and hears we will tell her first", async () => {
@@ -113,6 +120,8 @@ test("outside our areas: a pin, she confirms, and hears we will tell her first",
   await say(p, "ji haan");
   await settle(p, 3);
   assert.match(to(p)[2].text, /deliver nahi karte, lekin jaise hi shuru karenge aap ko sab se pehle batayenge/);
+  assert.match(to(p)[2].text, /North Nazimabad\* mein abhi tak \*1\/50\* log jud chuke hain\. Sirf \*49 aur\*/);
+  assert.match(to(p)[2].text, /https:\/\/wa\.me\/923000000099\?text=.*code%20[A-Z0-9]{5}/);
   const l = await loc(p);
   assert.equal(l.name, "North Nazimabad");
   assert.equal(l.source, "bot");
@@ -147,6 +156,7 @@ test("society customers count as their area without being asked; switch off = si
   await new Promise((r) => setTimeout(r, 200));
   assert.equal(to("923007000005").length, 0);
   process.env.AREA_BOT = "on";
+  process.env.ASB_WHATSAPP_NUMBER = "923000000099";
   process.env.INBOX_PASSWORD = "local-test-only";
   process.env.INBOX_COOKIE_SECRET = "local-test-only-secret";
 });
@@ -191,4 +201,94 @@ test("the team: sets an area from the chat, adds a new area, marks an area serve
   const after = (await api("/api/inbox/areas")).areas;
   assert.equal(after.find((a) => a.name === "Clifton").people, 1);
   assert.ok(after.find((a) => a.name === "Naval Colony"));
+});
+
+test("Johar society: she names it, confirms, and it is saved; an unknown name is kept for the team", async () => {
+  await db.query(`INSERT INTO societies (code, name, area) VALUES ('RH1', 'Rufi Heights', 'Gulistan-e-Johar'), ('SC2', 'Saima Classic', 'Gulistan-e-Johar')`);
+  const p = "923007000020";
+  await say(p, "salam"); await settle(p, 1);
+  await say(p, "gulistan e johar"); await settle(p, 2);
+  await tap(p, "area:yes", "Ji haan"); await settle(p, 3);
+  await tap(p, "gated:yes", "Ji haan, society"); await settle(p, 4);
+  assert.match(to(p)[3].text, /society ka naam likh dein/);
+  await say(p, "rufi height block b"); await settle(p, 5);
+  assert.match(to(p)[4].text, /Rufi Heights/);
+  await tap(p, "soc:yes", "Ji haan"); await settle(p, 6);
+  assert.match(to(p)[5].text, /Rufi Heights\* \(Gulistan-e-Johar\)/);
+  const l = (await db.query(`SELECT l.gated, s.name FROM customer_locations l JOIN societies s ON s.id = l.society_id WHERE phone = $1`, [p])).rows[0];
+  assert.deepEqual([l.gated, l.name], [true, "Rufi Heights"]);
+
+  const q = "923007000021";
+  await say(q, "salam"); await settle(q, 1);
+  await say(q, "johar"); await settle(q, 2);
+  await tap(q, "area:yes", "Ji haan"); await settle(q, 3);
+  await say(q, "Al Habib Residency"); await settle(q, 4);     // typed a name straight away
+  assert.match(to(q)[3].text, /team aap ki society check kar legi/);
+  const m = await loc(q);
+  assert.equal(m.gated, true);
+  assert.equal(m.society_text, "Al Habib Residency");
+});
+
+test("share link: a neighbour arrives with the code, is counted for the person who shared it", async () => {
+  const sharer = "923007000002";   // North Nazimabad, from the earlier test
+  const code = (await loc(sharer)).ref_code;
+  assert.match(code, /^[A-Z0-9]{5}$/);
+  const n1 = "923007000030";
+  await say(n1, `Assalam-o-Alaikum! Mujhe bhi North Nazimabad mein Apna Sasta Bazaar chahiye. (code ${code})`);
+  await settle(n1, 1);
+  assert.equal(to(n1)[0].kind, "buttons", "no need to ask: the area is in the message");
+  assert.match(to(n1)[0].text, /North Nazimabad/);
+  await tap(n1, "area:yes", "Ji haan"); await settle(n1, 2);
+  assert.match(to(n1)[1].text, /2\/50/);
+  assert.equal((await loc(n1)).referred_by, sharer);
+  const net = await A.network(db, sharer);
+  assert.deepEqual([net.joined, net.ordered, net.reward], [1, 0, null]);
+});
+
+test("rewards follow people who joined AND people who ordered (draft tiers)", async () => {
+  const boss = "923007000040";
+  await db.query(`INSERT INTO customer_locations (phone, area_id, bot_state, ref_code) SELECT $1, id, 'done', 'BOSS1' FROM karachi_areas WHERE name = 'PECHS'`, [boss]);
+  for (let i = 0; i < 5; i++) {
+    await db.query(`INSERT INTO customer_locations (phone, area_id, bot_state, referred_by) SELECT $1, id, 'done', $2 FROM karachi_areas WHERE name = 'PECHS'`,
+      [`92300704100${i}`, boss]);
+  }
+  let net = await A.network(db, boss);
+  assert.deepEqual([net.joined, net.ordered, net.reward], [5, 0, null]);
+  for (const i of [0, 1]) {
+    await db.query(`INSERT INTO whatsapp_messages (wamid, phone, direction, body_preview, msg_type, status, received_at)
+                    VALUES ($1, $2, 'inbound', 'cart', 'order', 'delivered', now())`, [`wamid.ord${i}`, `92300704100${i}`]);
+  }
+  net = await A.network(db, boss);
+  assert.deepEqual([net.joined, net.ordered], [5, 2]);
+  assert.equal(net.reward, A.REWARDS.tiers[1].reward);
+  assert.equal(net.next.joined, 10);
+  assert.equal(net.draft, true);
+});
+
+test("milestones: each once; at the target the team is alerted; the founder opens and announces", async () => {
+  const area = (await db.query(`UPDATE karachi_areas SET unlock_target = 4 WHERE name = 'Bahadurabad' RETURNING *`)).rows[0];
+  const hits = [];
+  for (let i = 0; i < 5; i++) {
+    await db.query(`INSERT INTO customer_locations (phone, area_id, bot_state) VALUES ($1, $2, 'done')`, [`92300705000${i}`, area.id]);
+    const m = await A.milestone(db, { ...area });
+    if (m) hits.push([m.mark, m.reached]);
+  }
+  assert.deepEqual(hits, [[2, false], [3, false], [4, true]]);
+
+  const r = await fetch(`${base}/api/inbox/login`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: "local-test-only", name: "Waqas" }) });
+  const cookie = (r.headers.get("set-cookie") || "").split(";")[0];
+  const post = async (u, body) => (await fetch(`${base}${u}`, { method: "POST", headers: { cookie, "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+  assert.equal((await post(`/api/inbox/areas/${area.id}/announce`, { dryRun: true })).error, "not_served");
+  await post(`/api/inbox/areas/${area.id}/served`, { served: true });
+  const dry = await post(`/api/inbox/areas/${area.id}/announce`, { dryRun: true });
+  assert.equal(dry.count, 5);
+  sent.length = 0;
+  const go = await post(`/api/inbox/areas/${area.id}/announce`, { confirmCount: 5, agent: "Waqas" });
+  assert.equal(go.count, 5);
+  await H.waitFor(async () => (await broadcast.status(db, go.id)).status === "done");
+  const t = sent.filter((x) => x.kind === "template");
+  assert.equal(t.length, 5);
+  assert.equal(t[0].name, "asb_area_unlocked_v1");
+  assert.equal(t[0].params[0].value, "Bahadurabad");
 });

@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS karachi_areas (
   lat         DOUBLE PRECISION,
   lng         DOUBLE PRECISION,
   served      BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Unlock (founder, 19 Nov): an area opens once enough people want it. At the
+  -- target the team is alerted; the founder decides to open (served = true).
+  unlock_target INT NOT NULL DEFAULT 50 CHECK (unlock_target > 0),
+  milestones_sent INT[] NOT NULL DEFAULT '{}',          -- 25 / 40 / 50 already announced
+  served_at   TIMESTAMPTZ,
+  unlocked_announced_at TIMESTAMPTZ,
   added_by    TEXT NOT NULL DEFAULT 'list',          -- 'list' | staff name
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -41,7 +47,15 @@ CREATE TABLE IF NOT EXISTS customer_locations (
   -- bot: 'asked' (waiting for a pin or a name), 'confirming' (asked "is it X?"),
   -- 'done', 'staff' (gave up after two tries - a person should set it)
   bot_state    TEXT NOT NULL DEFAULT 'none'
-               CHECK (bot_state IN ('none', 'asked', 'confirming', 'done', 'staff')),
+               CHECK (bot_state IN ('none', 'asked', 'confirming', 'gated', 'society', 'society_confirm', 'done', 'staff')),
+  -- Gulistan-e-Johar: gated community / society, or not (NULL = not asked yet)
+  gated        BOOLEAN,
+  society_id   BIGINT REFERENCES societies(id),
+  society_text TEXT,                                   -- typed, not in our list: the team checks
+  pending_society BIGINT REFERENCES societies(id),
+  -- Sharing: every person gets a code for their link; who brought whom.
+  ref_code     TEXT UNIQUE,
+  referred_by  TEXT,                                   -- phone of the person whose link they used
   pending_area BIGINT REFERENCES karachi_areas(id),
   tries        SMALLINT NOT NULL DEFAULT 0,
   asked_at     TIMESTAMPTZ,
@@ -49,6 +63,7 @@ CREATE TABLE IF NOT EXISTS customer_locations (
   set_by       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_customer_locations_area ON customer_locations (area_id);
+CREATE INDEX IF NOT EXISTS idx_customer_locations_ref ON customer_locations (referred_by);
 
 CREATE OR REPLACE FUNCTION asb021_areas_ready() RETURNS boolean LANGUAGE sql AS
 $$ SELECT to_regclass('karachi_areas') IS NOT NULL AND to_regclass('customer_locations') IS NOT NULL $$;

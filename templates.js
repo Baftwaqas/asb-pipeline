@@ -107,7 +107,40 @@ const TEMPLATES = {
       "aur jawab nahi mila, to meharbani se dobara bhej dein.",
     footer: "Apna Sasta Bazaar",
   },
+
+  // Karachi areas (founder, 19 Nov 2026): news for people waiting in an area we
+  // do not serve yet. NOT YET SUBMITTED to Meta - wording for founder approval.
+  areaProgress: {
+    name: "asb_area_progress_v1",
+    language: LANG,
+    category: "MARKETING",
+    body:
+      "Khushkhabri! 🎉 {{1}} mein ab tak {{2}} log Apna Sasta Bazaar ke liye jud chuke hain. " +
+      "Sirf {{3}} aur chahiye, phir hum aap ke area mein delivery shuru kar denge. Apne padosiyon ko bhi bataein!",
+    footer: "Apna Sasta Bazaar",
+    example: ["Gulshan-e-Iqbal", "25", "25"],
+  },
+  areaUnlocked: {
+    name: "asb_area_unlocked_v1",
+    language: LANG,
+    category: "MARKETING",
+    body:
+      "Mubarak ho! 🎉 {{1}} unlock ho gaya hai. Apna Sasta Bazaar ab aap ke area mein deliver karta hai. " +
+      "Apna pehla order isi number par bhej dein.",
+    footer: "Apna Sasta Bazaar",
+    example: ["Gulshan-e-Iqbal"],
+  },
 };
+
+/** Fill-ins for the two area templates, in {{1}}.. order. */
+function areaProgressParams(area, count, remaining) {
+  return [
+    { name: "area", value: safe(area) },
+    { name: "count", value: safe(String(count)) },
+    { name: "remaining", value: safe(String(remaining)) },
+  ];
+}
+function areaUnlockedParams(area) { return [{ name: "area", value: safe(area) }]; }
 
 // ---------------------------------------------------------------------------
 // The component list Meta wants when a template is SUBMITTED.
@@ -196,6 +229,8 @@ function rateListText(delivery, cutoff) {
 }
 
 module.exports = {
+  areaProgressParams,
+  areaUnlockedParams,
   TEMPLATES,
   LANG,
   definition,
