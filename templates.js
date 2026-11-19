@@ -109,7 +109,7 @@ const TEMPLATES = {
   },
 
   // Karachi areas (founder, 19 Nov 2026): news for people waiting in an area we
-  // do not serve yet. NOT YET SUBMITTED to Meta - wording for founder approval.
+  // do not serve yet. Wording approved by the founder 19 Nov; submitted to Meta from WhatsApp Manager.
   areaProgress: {
     name: "asb_area_progress_v1",
     language: LANG,

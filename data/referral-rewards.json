@@ -1,11 +1,27 @@
 {
-  "version": "REWARDS-DRAFT-1",
-  "approved": false,
-  "note": "DRAFT for the founder (19 Nov 2026). A reward is earned by how many people joined through a customer's link (confirmed their area) AND how many of them actually ordered. Delivery is already free, so rewards are discounts and free items. Rewards are shown to the team in the chat and applied when billing; nothing is applied automatically.",
+  "version": "REWARDS-1",
+  "approved": true,
+  "note": "Approved by the founder on 19 Nov 2026. A reward is earned by how many people joined through a customer's link (confirmed their area) AND how many of them actually ordered. Delivery is already free, so rewards are discounts and free items. Rewards are shown to the team in the chat and applied when billing; nothing is applied automatically.",
   "tiers": [
-    { "joined": 3,  "ordered": 1,  "reward": "Rs 100 off the next order" },
-    { "joined": 5,  "ordered": 2,  "reward": "1 free item of the week (up to Rs 150)" },
-    { "joined": 10, "ordered": 5,  "reward": "Rs 500 off the next order" },
-    { "joined": 25, "ordered": 10, "reward": "Area Champion: 5% off every order for a month + a free special basket" }
+    {
+      "joined": 3,
+      "ordered": 1,
+      "reward": "Rs 100 off the next order"
+    },
+    {
+      "joined": 5,
+      "ordered": 2,
+      "reward": "1 free item of the week (up to Rs 150)"
+    },
+    {
+      "joined": 10,
+      "ordered": 5,
+      "reward": "Rs 500 off the next order"
+    },
+    {
+      "joined": 25,
+      "ordered": 10,
+      "reward": "Area Champion: 5% off every order for a month + a free special basket"
+    }
   ]
 }
