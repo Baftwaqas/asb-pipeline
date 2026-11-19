@@ -161,12 +161,15 @@ function km(a, b) {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
 }
+// Big areas have extra points across their blocks (data file, extraPoints).
 function matchPoint(areasList, lat, lng) {
   let best = null, d = Infinity;
   for (const a of areasList) {
-    if (a.lat == null) continue;
-    const x = km({ lat, lng }, a);
-    if (x < d) { d = x; best = a; }
+    const pts = [...(a.lat == null ? [] : [[a.lat, a.lng]]), ...((LIST.extraPoints || {})[a.name] || [])];
+    for (const [plat, plng] of pts) {
+      const x = km({ lat, lng }, { lat: plat, lng: plng });
+      if (x < d) { d = x; best = a; }
+    }
   }
   return d <= 8 ? best : null;
 }

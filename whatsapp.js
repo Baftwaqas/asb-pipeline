@@ -389,6 +389,33 @@ async function sendButtons(toPhone, bodyText, buttons) {
 }
 
 // ---------------------------------------------------------------------------
+// sendList — a menu: one button opens a list of up to 10 rows (title max 24,
+// description max 72 characters). A choice comes back as an "interactive"
+// message with list_reply.id. 24-hour window only.
+// ---------------------------------------------------------------------------
+async function sendList(toPhone, bodyText, buttonText, rows, sectionTitle = "Chunein") {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: String(bodyText).slice(0, 1024) },
+      action: {
+        button: String(buttonText).slice(0, 20),
+        sections: [{
+          title: String(sectionTitle).slice(0, 24),
+          rows: rows.slice(0, 10).map((r) => ({
+            id: String(r.id).slice(0, 200), title: String(r.title).slice(0, 24),
+            ...(r.description ? { description: String(r.description).slice(0, 72) } : {}),
+          })),
+        }],
+      },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // sendLocationRequest — a message with WhatsApp's own "Send location" button.
 // The customer's pin comes back as a "location" message. 24-hour window only.
 // ---------------------------------------------------------------------------
@@ -408,6 +435,7 @@ async function sendLocationRequest(toPhone, bodyText) {
 module.exports = {
   postMessage,
   sendButtons,
+  sendList,
   sendLocationRequest,
   SEND_TIMEOUT_MS,
   sendTemplate,
