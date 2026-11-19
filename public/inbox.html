@@ -516,6 +516,26 @@
       <p class="op-err" id="bcProgressErr"></p>
     </div>
 
+    <div id="rsBox" hidden style="border-top:1px solid var(--line,#ddd);margin-top:14px;padding-top:12px">
+      <label class="op-label">"Please message again" notice: who gets it</label>
+      <div class="bc-bubble" style="margin-bottom:10px">Assalam-o-Alaikum! Aaj subah hamare system mein masla tha. Agar aap ne message kiya tha aur jawab nahi mila, to meharbani se dobara bhej dein.<br><br>Apna Sasta Bazaar</div>
+      <div id="rsWho" style="display:grid;gap:6px;font-size:14px">
+        <label><input type="radio" name="rsWho" value="7"> Messaged in the last 7 days <b id="rsC7"></b></label>
+        <label><input type="radio" name="rsWho" value="14"> Messaged in the last 14 days <b id="rsC14"></b></label>
+        <label><input type="radio" name="rsWho" value="30"> Messaged in the last 30 days <b id="rsC30"></b></label>
+        <label><input type="radio" name="rsWho" value="ever"> Everyone who has ever messaged <b id="rsCever"></b></label>
+        <label><input type="radio" name="rsWho" value="choose"> Let me choose <b id="rsCchoose"></b></label>
+      </div>
+      <div id="rsChoose" hidden style="margin-top:8px">
+        <input class="field" id="rsSearch" placeholder="Search name or number">
+        <div id="rsList" style="max-height:260px;overflow:auto;border:1px solid var(--line,#ddd);border-radius:10px;padding:4px 8px;font-size:13.5px"></div>
+        <label class="op-label" for="rsPaste">Or paste numbers</label>
+        <textarea class="field" id="rsPaste" placeholder="0300 1234567, 0321-7654321 …"></textarea>
+      </div>
+      <p class="op-hint">People who replied STOP are always left out. You see the exact number before anything is sent.</p>
+      <button class="btn" id="bcResend" disabled>Send notice</button>
+    </div>
+
     <p class="op-hint">Meta charges for every rate-list message (a marketing message — roughly Rs 13 each at recent rates). Replies to customers who wrote to you are free.</p>
     <div class="bc-recent" id="bcRecent"></div>
   </div>
@@ -529,6 +549,7 @@
       <button class="btn" id="bcSend" disabled>Send to everyone</button>
       <button class="btn alt" id="bcStop" hidden>Stop sending</button>
     </div>
+    <button class="btn alt" id="bcResendOpen" style="margin-top:8px">"Please message again" notice…</button>
   </div>
 </aside>
 
@@ -1488,6 +1509,7 @@ function bcUpdateButtons() {
   const ready = Boolean(B.mediaId) && $('bcDelivery').value.trim() && $('bcCutoff').value.trim();
   $('bcSend').disabled = !ready || busy;
   $('bcTest').disabled = !ready || busy;
+  if (typeof rsRefresh === 'function' && $('rsBox') && !$('rsBox').hidden) rsRefresh();
   // The exact number is worked out by the server and shown on the confirm
   // step (a pasted number already on the list is not counted twice).
   $('bcSend').textContent = B.one ? `Send to +${B.one}` : `Send to everyone (about ${bcTotal()})`;
@@ -1658,6 +1680,65 @@ async function startBroadcast(isTest) {
   watchBroadcast(data.id);
 }
 $('bcTest').addEventListener('click', () => startBroadcast(true));
+
+// The "please send your message again" notice (approved template, no poster).
+// For after a system problem. Chosen from the chat history - 7 / 14 / 30 days,
+// ever, or ticked one by one - never the whole customer base.
+const RS = { people: [], ticked: new Set() };
+function rsWho() { return (document.querySelector('input[name=rsWho]:checked') || {}).value || ''; }
+function rsChosen() { return [...RS.ticked, $('rsPaste').value].filter(Boolean); }
+function rsRefresh() {
+  const who = rsWho();
+  $('rsChoose').hidden = who !== 'choose';
+  const n = RS.ticked.size + parsePhones($('rsPaste').value).filter((p) => !RS.ticked.has(p)).length;
+  $('rsCchoose').textContent = who === 'choose' ? `(${n} chosen)` : '';
+  $('bcResend').disabled = Boolean(B.timer) || !who || (who === 'choose' && !n);
+}
+function rsDrawList() {
+  const q = $('rsSearch').value.trim().toLowerCase();
+  const box = $('rsList');
+  box.innerHTML = '';
+  for (const p of RS.people) {
+    if (q && !(`${p.name || ''} ${p.phone}`.toLowerCase().includes(q))) continue;
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:5px 0;' + (p.opted_out ? 'opacity:.45' : '');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.disabled = p.opted_out; cb.checked = RS.ticked.has(p.phone);
+    cb.addEventListener('change', () => { cb.checked ? RS.ticked.add(p.phone) : RS.ticked.delete(p.phone); rsRefresh(); });
+    const t = document.createElement('span');
+    const last = p.last_at ? new Date(p.last_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    t.textContent = `${p.name || '+' + p.phone} · +${p.phone} · ${last}${p.opted_out ? ' · STOP' : ''}`;
+    row.append(cb, t);
+    box.append(row);
+  }
+}
+$('bcResendOpen').addEventListener('click', async () => {
+  $('rsBox').hidden = !$('rsBox').hidden;
+  if ($('rsBox').hidden) return;
+  const { ok, data } = await api('/api/inbox/broadcast/chat-people');
+  if (!ok) { $('bcErr').textContent = data?.message || 'Could not load the chat list.'; return; }
+  RS.people = data.people || [];
+  for (const k of ['7', '14', '30', 'ever']) $('rsC' + k).textContent = `(${data.counts[k]})`;
+  rsDrawList(); rsRefresh();
+  $('rsBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+document.querySelectorAll('input[name=rsWho]').forEach((r) => r.addEventListener('change', rsRefresh));
+$('rsSearch').addEventListener('input', rsDrawList);
+$('rsPaste').addEventListener('input', rsRefresh);
+$('bcResend').addEventListener('click', async () => {
+  $('bcErr').textContent = '';
+  const body = { kind: 'resend_request', agent: S.agent, isTest: false, who: rsWho(), chosen: rsChosen() };
+  const dry = await api('/api/inbox/broadcast', { method: 'POST', body: JSON.stringify({ ...body, dryRun: true }) });
+  if (!dry.ok) { $('bcErr').textContent = dry.data?.message || 'Could not count the list.'; return; }
+  const n = dry.data.count;
+  if (!confirm(`Send this to ${n} people now?\n\n"Assalam-o-Alaikum! Aaj subah hamare system mein masla tha. ` +
+    `Agar aap ne message kiya tha aur jawab nahi mila, to meharbani se dobara bhej dein."\n\n` +
+    `Meta charges for each message. Once sent it cannot be taken back.`)) return;
+  body.confirmCount = n;
+  const { ok, data } = await api('/api/inbox/broadcast', { method: 'POST', body: JSON.stringify(body) });
+  if (!ok) { $('bcErr').textContent = data?.message || 'Could not start.'; return; }
+  watchBroadcast(data.id);
+});
 $('bcSend').addEventListener('click', () => startBroadcast(Boolean(B.one)));
 $('bcStop').addEventListener('click', async () => {
   if (B.id) await api(`/api/inbox/broadcast/${B.id}/stop`, { method: 'POST' });

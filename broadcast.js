@@ -82,6 +82,58 @@ async function audience(db) {
   return rows;
 }
 
+// ---------------------------------------------------------------------------
+// Everyone who has ever messaged the business number, newest first, with the
+// name we know and when they last wrote. The "please message again" notice is
+// chosen from this list (last 7 / 14 / 30 days, ever, or ticked one by one) -
+// never the whole customer base by default.
+// ---------------------------------------------------------------------------
+async function chatPeople(db) {
+  const { rows } = await db.query(
+    `SELECT m.phone,
+            COALESCE(c.name, (SELECT profile_name FROM whatsapp_messages x
+                               WHERE x.phone = m.phone AND x.profile_name IS NOT NULL
+                               ORDER BY x.received_at DESC LIMIT 1)) AS name,
+            max(m.received_at) AS last_at,
+            (o.phone IS NOT NULL) AS opted_out
+       FROM whatsapp_messages m
+       LEFT JOIN customers c ON c.phone = m.phone
+       LEFT JOIN marketing_opt_outs o ON o.phone = m.phone
+      WHERE m.direction = 'inbound' AND m.phone ~ '^92[0-9]{10}$'
+      GROUP BY m.phone, c.name, o.phone
+      ORDER BY max(m.received_at) DESC`);
+  return rows;
+}
+
+const WHO = { "7": 7, "14": 14, "30": 30, ever: null };
+
+/** Phones for the notice. who: "7" | "14" | "30" | "ever" | "choose". STOP numbers never. */
+async function pickFromChats(db, { who, chosen, now = new Date() }) {
+  const people = await chatPeople(db);
+  const allowed = (p) => !p.opted_out;
+  if (who === "choose") {
+    const out = new Set(Array.isArray(chosen) ? chosen.flatMap((x) => parsePhones(x)) : parsePhones(chosen));
+    const stop = new Set(people.filter((p) => p.opted_out).map((p) => p.phone));
+    const optedOut = (await db.query(`SELECT phone FROM marketing_opt_outs WHERE phone = ANY($1)`, [[...out]])).rows;
+    for (const r of optedOut) stop.add(r.phone);
+    return { phones: [...out].filter((p) => !stop.has(p)), leftOut: [...out].filter((p) => stop.has(p)).length };
+  }
+  if (!(who in WHO)) throw new Error("who must be 7, 14, 30, ever or choose");
+  const days = WHO[who];
+  const since = days ? new Date(now.getTime() - days * 86400000) : null;
+  const inRange = people.filter((p) => !since || new Date(p.last_at) >= since);
+  return { phones: inRange.filter(allowed).map((p) => p.phone), leftOut: inRange.filter((p) => !allowed(p)).length };
+}
+
+function chatCounts(people, now = new Date()) {
+  const out = {};
+  for (const [k, days] of Object.entries(WHO)) {
+    const since = days ? new Date(now.getTime() - days * 86400000) : null;
+    out[k] = people.filter((p) => !p.opted_out && (!since || new Date(p.last_at) >= since)).length;
+  }
+  return out;
+}
+
 /** "0300-1234567, +92 300 7654321\n3001112223" -> ['923001234567', ...] */
 // Numbers arrive written every way: "0300 1234567", "+92 300-1234567",
 // one per line, comma separated, or a spreadsheet column. Split on commas,
@@ -110,13 +162,21 @@ function parsePhones(text) {
 // ---------------------------------------------------------------------------
 // Create a broadcast and its recipient list. Does not send.
 // ---------------------------------------------------------------------------
-async function create(db, { agent, mediaId, mediaMime, delivery, cutoff, phones, isTest }) {
+// Which approved message a broadcast sends: the rate list (default, with the
+// poster) or the "please send again" notice (no picture, no wording to fill).
+const KINDS = { rate_list: "rateList", resend_request: "resendRequest" };
+function templateFor(name) {
+  return Object.values(T.TEMPLATES).find((t) => t.name === name) || T.TEMPLATES.rateList;
+}
+
+async function create(db, { agent, mediaId, mediaMime, delivery, cutoff, phones, isTest, kind = "rate_list" }) {
+  const tpl = T.TEMPLATES[KINDS[kind] || "rateList"];
   const unique = [...new Set(phones)];
   return db.tx(async (client) => {
     const b = await client.query(
       `INSERT INTO broadcasts (created_by, template, media_id, media_mime, delivery, cutoff, is_test)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [agent || null, T.TEMPLATES.rateList.name, mediaId, mediaMime || null, delivery, cutoff, Boolean(isTest)]
+      [agent || null, tpl.name, mediaId || null, mediaMime || null, delivery || null, cutoff || null, Boolean(isTest)]
     );
     const id = b.rows[0].id;
     // One statement for the whole list; opted-out numbers go in as 'skipped'
@@ -143,7 +203,7 @@ async function create(db, { agent, mediaId, mediaMime, delivery, cutoff, phones,
 async function status(db, id) {
   const { rows } = await db.query(
     `SELECT id, created_at, created_by, status, is_test, total, sent, failed, skipped,
-            delivery, cutoff, media_id, started_at, finished_at, last_error,
+            delivery, cutoff, media_id, template, started_at, finished_at, last_error,
             (SELECT count(*) FROM broadcast_recipients r
               WHERE r.broadcast_id = b.id AND r.status = 'pending')::int AS pending
        FROM broadcasts b WHERE id = $1`, [id]);
@@ -180,9 +240,10 @@ async function run(db, id, logOutbound) {
     `UPDATE broadcasts SET status = 'sending', started_at = COALESCE(started_at, now()) WHERE id = $1`, [id]);
   console.log(`[broadcast] ${id} sending to ${b.pending} customer(s)`);
 
-  const t = T.TEMPLATES.rateList;
-  const params = T.rateListParams(b.delivery, b.cutoff);
-  const preview = T.rateListText(b.delivery, b.cutoff);
+  const t = templateFor(b.template);
+  const isRateList = t === T.TEMPLATES.rateList;
+  const params = isRateList ? T.rateListParams(b.delivery, b.cutoff) : [];
+  const preview = isRateList ? T.rateListText(b.delivery, b.cutoff) : t.body;
   let sameError = { text: null, count: 0 };
 
   for (;;) {
@@ -196,7 +257,7 @@ async function run(db, id, logOutbound) {
     const phone = next.rows[0]?.phone;
     if (!phone) break;
 
-    const r = await wa.sendTemplate(phone, t.name, params, { lang: t.language, headerImageId: b.media_id });
+    const r = await wa.sendTemplate(phone, t.name, params, { lang: t.language, headerImageId: isRateList ? b.media_id : null });
     const msg = r.data?.error?.message || "refused";
     const err = r.ok ? null : (/^\(#\d+\)/.test(msg) ? msg : `(#${r.code || "?"}) ${msg}`).slice(0, 300);
 
@@ -213,7 +274,7 @@ async function run(db, id, logOutbound) {
       await logOutbound({
         phone, body: preview, agent: `broadcast #${id}`, template: t.name,
         wamid: r.wamid, ok: r.ok, payload: r.data,
-        mediaId: b.media_id, mediaMime: b.media_mime || "image/jpeg",
+        mediaId: isRateList ? b.media_id : null, mediaMime: isRateList ? (b.media_mime || "image/jpeg") : null,
       });
     }
 
@@ -263,6 +324,6 @@ async function resumeAll(db, logOutbound) {
 }
 
 module.exports = {
-  handleOptWords, audience, parsePhones, create, start, stop, status, recent, resumeAll,
+  handleOptWords, audience, chatPeople, pickFromChats, chatCounts, parsePhones, create, start, stop, status, recent, resumeAll,
   isRunning: () => running,
 };

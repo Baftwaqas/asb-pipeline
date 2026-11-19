@@ -783,6 +783,18 @@ router.post("/api/inbox/send-image", requireAuth, express.json({ limit: "8mb" })
 
 // What the panel needs before anything is chosen: this delivery's wording,
 // how many customers there are, how many said STOP, and the last few sends.
+// Who can get the "please message again" notice: everyone who ever wrote,
+// newest first, with counts for 7 / 14 / 30 days and ever.
+router.get("/api/inbox/broadcast/chat-people", requireAuth, async (_req, res) => {
+  try {
+    const people = await broadcast.chatPeople(db);
+    res.json({ counts: broadcast.chatCounts(people), people: people.slice(0, 3000) });
+  } catch (e) {
+    console.error("[inbox] chat-people failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
 router.get("/api/inbox/broadcast/setup", requireAuth, async (_req, res) => {
   try {
     const slot = schedule.deliveryFor(new Date());
@@ -825,8 +837,13 @@ router.post("/api/inbox/broadcast", requireAuth, express.json(), async (req, res
   const delivery = String(b.delivery || "").trim().slice(0, 60);
   const cutoff = String(b.cutoff || "").trim().slice(0, 60);
   const isTest = Boolean(b.isTest);
-  if (!mediaId) return res.status(400).json({ error: "no_poster", message: "Choose the poster first." });
-  if (!delivery || !cutoff) return res.status(400).json({ error: "no_wording", message: "Delivery day and booking cut-off are needed." });
+  // kind "resend_request": the approved "please send your message again" notice -
+  // no poster, no delivery wording. Anything else is the weekly rate list.
+  const kind = b.kind === "resend_request" ? "resend_request" : "rate_list";
+  if (kind === "rate_list") {
+    if (!mediaId) return res.status(400).json({ error: "no_poster", message: "Choose the poster first." });
+    if (!delivery || !cutoff) return res.status(400).json({ error: "no_wording", message: "Delivery day and booking cut-off are needed." });
+  }
 
   if (broadcast.isRunning()) {
     return res.status(409).json({ error: "busy", message: "Another rate list is still sending. Wait for it to finish or stop it." });
@@ -834,7 +851,18 @@ router.post("/api/inbox/broadcast", requireAuth, express.json(), async (req, res
 
   try {
     let phones;
-    if (isTest) {
+    if (kind === "resend_request" && !isTest) {
+      // Never the whole customer base: only people chosen from the chat history.
+      const pick = await broadcast.pickFromChats(db, { who: String(b.who || ""), chosen: b.chosen });
+      phones = pick.phones;
+      if (b.dryRun) return res.json({ ok: true, count: phones.length, leftOut: pick.leftOut });
+      if (Number(b.confirmCount) !== phones.length) {
+        return res.status(409).json({
+          error: "count_changed", count: phones.length,
+          message: `The list is now ${phones.length} numbers, not ${b.confirmCount}. Check and confirm again.`,
+        });
+      }
+    } else if (isTest) {
       phones = broadcast.parsePhones(b.testPhone);
       if (phones.length !== 1) return res.status(400).json({ error: "bad_phone", message: "Enter one mobile number for the test." });
     } else {
@@ -858,11 +886,11 @@ router.post("/api/inbox/broadcast", requireAuth, express.json(), async (req, res
     if (!phones.length) return res.status(400).json({ error: "nobody", message: "There is nobody to send to." });
 
     const id = await broadcast.create(db, {
-      agent, mediaId, mediaMime: String(b.mime || "image/jpeg"), delivery, cutoff, phones, isTest,
+      agent, mediaId, mediaMime: String(b.mime || "image/jpeg"), delivery, cutoff, phones, isTest, kind,
     });
     const started = broadcast.start(db, id, logOutbound);
     if (!started.ok) return res.status(409).json({ error: "busy", message: started.error });
-    console.log(`[inbox] ${agent} started ${isTest ? "a TEST" : "a"} rate-list broadcast #${id} to ${phones.length}`);
+    console.log(`[inbox] ${agent} started ${isTest ? "a TEST" : "a"} ${kind} broadcast #${id} to ${phones.length}`);
     res.json({ ok: true, id, count: phones.length });
   } catch (e) {
     console.error("[inbox] broadcast failed:", e.message);
