@@ -42,6 +42,7 @@ const grocerySwitches = require("./grocery/switches");
 const { parseOrderJson, UnsafeIntegerError } = require("./grocery/orderjson");
 const wa = require("./whatsapp");
 const areas = require("./areas");
+const ratelist = require("./ratelist");
 const notify = require("./notify");
 const broadcast = require("./broadcast");
 const communityIntake = require("./community/intake");
@@ -147,6 +148,21 @@ async function askArea(msg) {
   };
   const r = await areas.onInbound(db, { phone, msg, send, onMilestone: areaMilestone });
   if (r) console.log(`[areas] +${phone}: ${r.did}${r.area ? " " + r.area : ""}`);
+  return r;
+}
+
+// "Rate list?" -> a menu, and each choice -> that part of today's prices.
+async function answerRateList(msg) {
+  const phone = normalizePhone(msg.from);
+  if (!phone || !ratelist.on()) return null;
+  const { logOutbound } = require("./inbox");
+  const log = (body) => (r) => logOutbound({ phone, body, agent: "rate list bot", wamid: r.wamid, ok: r.ok, payload: r.data }).then(() => r);
+  const send = {
+    text: (to, body) => wa.sendText(to, body).then(log(body)),
+    list: (to, body, button, rows) => wa.sendList(to, body, button, rows).then(log(`${body}\n[${button}: ${rows.map((x) => x.title).join(" / ")}]`)),
+  };
+  const r = await ratelist.onInbound(db, { phone, msg, send });
+  if (r) console.log(`[ratelist] +${phone}: ${r.did}${r.part ? " " + r.part : ""}`);
   return r;
 }
 
@@ -476,7 +492,10 @@ app.post("/webhooks/whatsapp", async (req, res) => {
             handled++;
             // Where does she live? (areas.js, switch AREA_BOT). After the save,
             // so the team always sees the message; never allowed to fail it.
-            await askArea(msg).catch((e) => console.error("[areas] bot failed:", e.message));
+            const asked = await askArea(msg).catch((e) => { console.error("[areas] bot failed:", e.message); return null; });
+            // "Rate list?" -> the menu (ratelist.js, switch RATELIST_BOT), unless
+            // the area bot just answered this same message.
+            if (!asked) await answerRateList(msg).catch((e) => console.error("[ratelist] bot failed:", e.message));
             // Blue ticks: cheap, free, and tells the customer a human
             // is on the other end. Never allowed to fail the webhook.
             wa.markRead(msg.id).catch(() => {});

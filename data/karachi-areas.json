@@ -1,5 +1,5 @@
 {
- "version": "AREAS-1",
+ "version": "AREAS-2",
  "note": "Karachi's 7 districts (common names; 2023 official names in districtAliases) and their main areas. lat/lng are approximate centre points, used only to SUGGEST an area from a location pin - the customer always confirms it. served: areas ASB delivers to today.",
  "districtAliases": {
   "Karachi East": [
@@ -988,5 +988,82 @@
     "new sabzi mandi"
    ]
   ]
- ]
+ ],
+ "extraPoints": {
+  "_note": "Big areas get several points across their blocks, so a pin anywhere in them matches (19 Nov: a pin in Johar near Safoora was matched to Safoora Goth).",
+  "Gulistan-e-Johar": [
+   [
+    24.925,
+    67.165
+   ],
+   [
+    24.915,
+    67.15
+   ],
+   [
+    24.93,
+    67.14
+   ],
+   [
+    24.906,
+    67.135
+   ],
+   [
+    24.92,
+    67.118
+   ],
+   [
+    24.91,
+    67.16
+   ]
+  ],
+  "Gulshan-e-Iqbal": [
+   [
+    24.91,
+    67.08
+   ],
+   [
+    24.93,
+    67.1
+   ],
+   [
+    24.915,
+    67.105
+   ]
+  ],
+  "DHA (Defence)": [
+   [
+    24.825,
+    67.07
+   ],
+   [
+    24.79,
+    67.085
+   ],
+   [
+    24.81,
+    67.045
+   ]
+  ],
+  "North Nazimabad": [
+   [
+    24.95,
+    67.045
+   ],
+   [
+    24.93,
+    67.035
+   ]
+  ],
+  "Federal B Area": [
+   [
+    24.92,
+    67.08
+   ],
+   [
+    24.945,
+    67.07
+   ]
+  ]
+ }
 }

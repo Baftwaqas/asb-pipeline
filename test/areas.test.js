@@ -292,3 +292,9 @@ test("milestones: each once; at the target the team is alerted; the founder open
   assert.equal(t[0].name, "asb_area_unlocked_v1");
   assert.equal(t[0].params[0].value, "Bahadurabad");
 });
+
+test("a pin in Johar near Safoora is Johar (several points for big areas, 19 Nov)", async () => {
+  const list = await A.all(db);
+  assert.equal(A.matchPoint(list, 24.9246701, 67.1657938).name, "Gulistan-e-Johar");
+  assert.equal(A.matchPoint(list, 24.9185, 67.1290).name, "Gulistan-e-Johar");
+});

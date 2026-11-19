@@ -18,6 +18,7 @@
 "use strict";
 
 const webpush = require("web-push");
+const IPV4 = new (require("https").Agent)({ family: 4, keepAlive: true });
 
 const SUBJECT = process.env.VAPID_SUBJECT || "mailto:sasta@apnasastabazaar.com";
 let keys = null;          // { publicKey, privateKey } once loaded
@@ -85,7 +86,10 @@ async function sendOne(db, row, payload) {
     await webpush.sendNotification(
       { endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } },
       JSON.stringify(payload),
-      { TTL: 60 * 60 * 6, urgency: "high", topic: payload.topic }
+      // IPv4 only: an empty-message error on every send (19 Nov) is what Node
+      // gives when every address of the push service fails, typically IPv6
+      // routes that do not work from the host.
+      { TTL: 60 * 60 * 6, urgency: "high", topic: payload.topic, agent: IPV4 }
     );
     await db.query(`UPDATE push_subscriptions SET last_ok_at = now(), failures = 0 WHERE endpoint = $1`, [row.endpoint]);
     return true;
@@ -96,7 +100,16 @@ async function sendOne(db, row, payload) {
     if (e.statusCode === 404 || e.statusCode === 410) {
       await unsubscribe(db, row.endpoint);
     } else {
-      console.error("[push] send failed:", e.statusCode || "", e.body || e.message);
+      // Say WHY (19 Nov: every failure logged as an empty line). A network
+      // error has no status and often an empty message; its code and the
+      // push service's host are what tell us what is wrong.
+      let host = "?";
+      try { host = new URL(row.endpoint).host; } catch (_) {}
+      const inner = (e.errors || []).map((x) => x.code || x.message).filter(Boolean).join(",");
+      console.error("[push] send failed:", JSON.stringify({
+        host, status: e.statusCode || null, code: e.code || null, name: e.name || null,
+        message: e.body || e.message || null, inner: inner || null,
+      }));
       await db.query(
         `UPDATE push_subscriptions SET failures = failures + 1 WHERE endpoint = $1`, [row.endpoint]);
       await db.query(`DELETE FROM push_subscriptions WHERE endpoint = $1 AND failures >= 20`, [row.endpoint]);
