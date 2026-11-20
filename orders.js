@@ -84,14 +84,55 @@ async function lockHousehold(client, customerId) {
 // ---------------------------------------------------------------------------
 // The household's live bag for this delivery, if there is one.
 // ---------------------------------------------------------------------------
-async function findOpenOrder(client, customerId, cycleId) {
+async function findOpenOrder(client, customerId, cycleId, billLabel = null) {
+  // Migration 024: separate bills on one number carry a label; the household's
+  // main bag has none. Before 024 is applied there is only the main bag.
+  if (!(await hasBillLabel(client))) {
+    if (billLabel) throw userError("Alag bill ke liye database update (migration 024) abhi baqi hai");
+    const { rows } = await client.query(
+      `SELECT id, order_number FROM orders
+        WHERE customer_id = $1 AND cycle_id = $2 AND status <> 'cancelled'
+        ORDER BY id LIMIT 1`,
+      [customerId, cycleId]
+    );
+    return rows[0] || null;
+  }
   const { rows } = await client.query(
     `SELECT id, order_number FROM orders
       WHERE customer_id = $1 AND cycle_id = $2 AND status <> 'cancelled'
+        AND COALESCE(lower(btrim(bill_label)), '') = COALESCE(lower(btrim($3::text)), '')
       ORDER BY id LIMIT 1`,
-    [customerId, cycleId]
+    [customerId, cycleId, billLabel ? String(billLabel) : null]
   );
   return rows[0] || null;
+}
+
+// Is migration 024 (orders.bill_label) applied? Cached once true; re-checked a minute later if not.
+let labelCol = { ok: false, at: 0 };
+async function hasBillLabel(client) {
+  if (labelCol.ok || Date.now() - labelCol.at < 60000) return labelCol.ok;
+  const r = await client.query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'orders' AND column_name = 'bill_label'`);
+  labelCol = { ok: r.rowCount > 0, at: Date.now() };
+  return labelCol.ok;
+}
+
+/**
+ * The live orders on this number for the delivery an order placed now would
+ * go to: the main bag first, then separate bills. Read only.
+ */
+async function liveOrdersFor(db, phone, orderedAt) {
+  const slot = schedule.deliveryFor(orderedAt || new Date());
+  const label = (await hasBillLabel(db)) ? "o.bill_label" : "NULL::text";
+  const { rows } = await db.query(
+    `SELECT o.id, o.order_number, ${label} AS bill_label, o.ceiling_total::float AS total, cy.delivery_date
+       FROM orders o
+       JOIN customers c ON c.id = o.customer_id
+       JOIN cycles cy ON cy.id = o.cycle_id
+      WHERE c.phone = $1 AND cy.code = $2 AND o.status <> 'cancelled'
+      ORDER BY (${label} IS NOT NULL), o.id`,
+    [phone, slot.code]);
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +145,8 @@ async function loadOrderForBill(db, orderId) {
             o.ceiling_total, o.billed_total, o.market_total,
             o.community_total, o.savings_total, o.grand_total,
             COALESCE(c.name, 'Customer') AS customer_name,
-            cy.delivery_date, o.placed_at
+            cy.delivery_date, o.placed_at,
+            to_jsonb(o) ->> 'bill_label' AS bill_label
        FROM orders o
        JOIN cycles cy ON cy.id = o.cycle_id
        LEFT JOIN customers c ON c.id = o.customer_id
@@ -146,7 +188,8 @@ async function loadOrderForBill(db, orderId) {
 //
 // Runs inside the caller's transaction. Returns the saved order id.
 // ---------------------------------------------------------------------------
-async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy, sourceWamid }) {
+async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy, sourceWamid, billLabel = null }) {
+  billLabel = billLabel ? String(billLabel).replace(/\s+/g, " ").trim().slice(0, 40) || null : null;
   const cycle = await resolveCycle(client, orderedAt);
   const customer = await upsertCustomer(client, { phone, name });
 
@@ -181,17 +224,23 @@ async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy
   }
 
   await lockHousehold(client, customer.id);
-  let orderRow = await findOpenOrder(client, customer.id, cycle.id);
+  let orderRow = await findOpenOrder(client, customer.id, cycle.id, billLabel);
   const merged = Boolean(orderRow);
 
   if (!orderRow) {
-    const ins = await client.query(
-      `INSERT INTO orders (customer_id, cycle_id, society_id, channel, status,
-                           placed_at, entered_by, source_wamid)
-       VALUES ($1, $2, $3, 'whatsapp', 'confirmed', $4, $5, $6)
-       RETURNING id, order_number`,
-      [customer.id, cycle.id, customer.society_id, orderedAt, enteredBy || null, sourceWamid || null]
-    );
+    const ins = billLabel
+      ? await client.query(
+        `INSERT INTO orders (customer_id, cycle_id, society_id, channel, status,
+                             placed_at, entered_by, source_wamid, bill_label)
+         VALUES ($1, $2, $3, 'whatsapp', 'confirmed', $4, $5, $6, $7)
+         RETURNING id, order_number`,
+        [customer.id, cycle.id, customer.society_id, orderedAt, enteredBy || null, sourceWamid || null, billLabel])
+      : await client.query(
+        `INSERT INTO orders (customer_id, cycle_id, society_id, channel, status,
+                             placed_at, entered_by, source_wamid)
+         VALUES ($1, $2, $3, 'whatsapp', 'confirmed', $4, $5, $6)
+         RETURNING id, order_number`,
+        [customer.id, cycle.id, customer.society_id, orderedAt, enteredBy || null, sourceWamid || null]);
     orderRow = ins.rows[0];
   }
 
@@ -240,6 +289,8 @@ module.exports = {
   resolveCycle,
   upsertCustomer,
   findOpenOrder,
+  liveOrdersFor,
+  hasBillLabel,
   lockHousehold,
   loadOrderForBill,
   saveInboxOrder,

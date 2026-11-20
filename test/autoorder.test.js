@@ -299,3 +299,89 @@ test("only things we don't sell: 'abhi hamare paas nahi', recorded, and the foun
     delete process.env.GROQ_API_KEY;
   }
 });
+
+test("same delivery day: she is asked first - ➕ Usi mein shamil (told it joined) or 🧾 Alag bill (her own bill, same number)", async () => {
+  delete process.env.GROQ_API_KEY;
+  const p = "923009000013";
+  // first order
+  await cart(p, [{ product_retailer_id: "RT1", quantity: 2 }]);
+  await wait(p, 1);
+  await tap(p, to(p)[0].buttons[0].id, "✅ Theek hai");
+  await wait(p, 2);
+  assert.match(to(p)[1].text, /Aap ka order mil gaya/);
+  const first = /\*(ASB-\d+)\*/.exec(to(p)[1].text)[1];
+
+  // second order, same delivery: asked before anything is saved
+  await cart(p, [{ product_retailer_id: "RT3", quantity: 6 }]);
+  await wait(p, 3);
+  await tap(p, to(p)[2].buttons[0].id, "✅ Theek hai");
+  await wait(p, 4);
+  const ask = to(p)[3];
+  assert.equal(ask.kind, "buttons");
+  assert.match(ask.text, new RegExp(`order \\*${first}\\* pehle se hai`));
+  assert.deepEqual(ask.buttons.map((b) => b.title), ["➕ Usi mein shamil", "🧾 Alag bill"]);
+  const n = async () => (await db.query(
+    `SELECT count(*)::int AS n FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1 AND o.status <> 'cancelled'`, [p])).rows[0].n;
+  assert.equal(await n(), 1);
+
+  // ➕ joins the first order, and she is told so
+  await tap(p, ask.buttons[0].id, "➕ Usi mein shamil");
+  await wait(p, 5);
+  assert.match(to(p)[4].text, new RegExp(`^✅ Ye items aap ke order \\*${first}\\* mein shamil kar diye`));
+  assert.equal(await n(), 1);
+
+  // third order: 🧾 Alag bill -> her name -> a separate order and bill on the same number
+  await cart(p, [{ product_retailer_id: "RT2", quantity: 1 }]);
+  await wait(p, 6);
+  await tap(p, to(p)[5].buttons[0].id, "✅ Theek hai");
+  await wait(p, 7);
+  await tap(p, to(p)[6].buttons[1].id, "🧾 Alag bill");
+  await wait(p, 8);
+  assert.match(to(p)[7].text, /alag bill kis naam se/);
+  await say(p, "Ayesha — padosan");
+  await wait(p, 9);
+  const billMsg = to(p)[8].text;
+  assert.match(billMsg, /Aap ka order mil gaya/);
+  assert.match(billMsg, /Alag bill: \*Ayesha — padosan\*/);
+  assert.doesNotMatch(billMsg, /mein shamil kar diye/);
+  assert.equal(await n(), 2);
+  const labels = (await db.query(
+    `SELECT o.bill_label FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1 ORDER BY o.id`, [p])).rows.map((r) => r.bill_label);
+  assert.deepEqual(labels, [null, "Ayesha — padosan"]);
+});
+
+test("an order is on her screen and she types the missing item: it is ADDED, nothing she ordered is lost", async () => {
+  Object.assign(process.env, { ORDER_AI_PROVIDER: "groq", GROQ_API_KEY: "test-only", GROQ_MODEL: "test-model" });
+  const realFetch = global.fetch;
+  let prompt = "", reply = null;
+  global.fetch = async (url, init) => {
+    if (String(url).includes("api.groq.com")) {
+      const b = JSON.parse(init.body); prompt = b.messages[0].content + "\n" + b.messages[1].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const p = "923009000014";
+    await say(p, "order");
+    await wait(p, 1);
+    await tap(p, "order:write");
+    await wait(p, 2);
+    reply = { items: [{ sku: "T1", qty: 1, unit: "kg", said: "1 kg tamatar" }], unknown: [], unclear: ["lehsan"] };
+    await say(p, "1 kg tamatar, lehsan");
+    await wait(p, 3);
+    assert.match(to(p)[2].text, /samajh nahi aaya[\s\S]*lehsan/);
+    // she answers with just the missing item
+    reply = { items: [{ sku: "T1", qty: 1, unit: "kg", said: "1 kg tamatar" }, { sku: "T2", qty: 500, unit: "g", said: "2 pao" }], unknown: [], unclear: [] };
+    await say(p, "2 pao mirch");
+    await wait(p, 4);
+    assert.match(prompt, /EDIT MODE/);
+    assert.match(prompt, /CURRENT ORDER[\s\S]*T1 \| Tamatar \| 1 kg/);
+    const c = to(p)[3].text;
+    assert.match(c, /Tamatar — 1 kg/);
+    assert.match(c, /Pakora Mirch — aadha kg/);
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.GROQ_API_KEY;
+  }
+});

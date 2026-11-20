@@ -243,6 +243,7 @@ function orderConfirmation(order) {
   const rich = [
     `Assalam-o-Alaikum ${name} 🌿`,
     `Aap ka order mil gaya — *${order.order_number}*`,
+    ...(order.bill_label ? [`Alag bill: *${order.bill_label}*`] : []),
     ...(ordered ? [`Order diya: ${ordered}`] : []),
     ...(delivery ? [`Delivery: *${delivery}*`] : []),
     ``,

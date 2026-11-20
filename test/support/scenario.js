@@ -85,6 +85,10 @@ async function main() {
   await q("customers", `SELECT * FROM customers ORDER BY id`);
   await q("cycles", `SELECT * FROM cycles ORDER BY id`);
   await q("orders", `SELECT * FROM orders ORDER BY id`);
+  // Migration 024 added orders.bill_label (separate bills on one number). It is
+  // NULL on every grocery/inbox order here; an empty new column is not a
+  // behaviour change, so it is left out of the comparison only when NULL.
+  dump.orders = dump.orders.map((o) => { if (o.bill_label == null) { const { bill_label, ...rest } = o; return rest; } return o; });
   await q("order_items", `SELECT * FROM order_items ORDER BY id`);
   await q("cycle_prices", `SELECT * FROM cycle_prices ORDER BY id`);
   await q("procurement", `SELECT * FROM v_cycle_procurement ORDER BY cycle_id, product_id`);

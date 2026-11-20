@@ -57,6 +57,13 @@ const T = {
     "Bas jo badalna hai woh likh dein, jaise:\n_tamatar 2 kg kar dein, kele hata dein, 1 kg piyaz aur_",
   adjusted: (xs) => xs.map((x) => `_${x.name}: ${x.gotText} rakha (ye is se kam ya adhoora nahi milta)._`).join("\n"),
   askUnit: (xs) => xs.map((x) => `_${x.name} ${x.unit} ke hisaab se milta hai${x.said ? ` ("${x.said}")` : ""}. Kitne ${x.unit} chahiye? *Badlein* daba kar likh dein._`).join("\n"),
+  sameDay: (o, delivery, more) =>
+    `Aap ka ${delivery} ka order *${o.order_number}* pehle se hai (${bill.money(o.total)}).` +
+    (more ? `\n_Is number par ${more} alag bill bhi hain._` : "") +
+    `\n\nYe naye items usi order mein shamil karun, ya inka *alag bill* banaun?`,
+  askLabel: "Theek hai! Ye alag bill kis naam se banaun?\n_Jaise: Ayesha — padosan_",
+  badLabel: "Naam thora chhota likh dein (40 huroof tak), jaise: _Ayesha — padosan_",
+  mergedNote: (num) => `✅ Ye items aap ke order *${num}* mein shamil kar diye. Poora order neeche 👇`,
   emptied: "Order se sab items nikal diye gaye. Naye order ke liye *order* likh dein.",
   aiBusy: "Shukriya! 🙏 Aap ka order mil gaya hai. Hamari team thori dair mein confirm kar degi.",
   editNotUnderstood: "Maazrat, ye tabdeeli samajh nahi aayi. Dobara likh dein, jaise: _tamatar 2 kg kar dein_",
@@ -74,6 +81,8 @@ const B = {
   write: { id: "order:write", title: "✍️ Likh kar" },
   ok: (id) => ({ id: `order:ok:${id}`, title: "✅ Theek hai" }),
   edit: (id) => ({ id: `order:edit:${id}`, title: "✏️ Badlein" }),
+  merge: (id) => ({ id: `order:merge:${id}`, title: "➕ Usi mein shamil" }),
+  split: (id) => ({ id: `order:split:${id}`, title: "🧾 Alag bill" }),
 };
 
 async function ready(db) {
@@ -198,14 +207,14 @@ async function cartLines(db, order) {
 // ---------------------------------------------------------------------------
 // Confirm -> a real order (same path as the inbox), exactly once.
 // ---------------------------------------------------------------------------
-async function confirm(db, { phone, draftId, name, now }) {
+async function confirm(db, { phone, draftId, name, now, billLabel = null }) {
   return db.tx(async (client) => {
     const d = (await client.query(
       `SELECT * FROM order_drafts WHERE id = $1 AND phone = $2 FOR UPDATE`, [draftId, phone])).rows[0];
     if (!d) return { stale: true };
     if (d.status !== "shown") return { stale: true, status: d.status, orderId: d.order_id };
     const saved = await orders.saveInboxOrder(client, {
-      phone, name, orderedAt: now, lines: d.lines, enteredBy: "order bot", sourceWamid: null,
+      phone, name, orderedAt: now, lines: d.lines, enteredBy: "order bot", sourceWamid: null, billLabel,
     });
     await client.query(`UPDATE order_drafts SET status = 'confirmed', order_id = $2, decided_at = now() WHERE id = $1`,
       [draftId, saved.orderId]);
@@ -229,9 +238,30 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     return showDraft(db, { phone, source: "cart", lines, send, now });
   }
 
-  const m = /^order:(ok|edit):(\d+)$/.exec(id);
+  const m = /^order:(ok|edit|merge|split):(\d+)$/.exec(id);
   if (m) {
     const draftId = Number(m[2]);
+    // Theek hai, but she already has an order for that delivery: ask before mixing them.
+    if (m[1] === "ok") {
+      const d = (await db.query(`SELECT status FROM order_drafts WHERE id = $1 AND phone = $2`, [draftId, phone])).rows[0];
+      if (d?.status === "shown") {
+        const live = await orders.liveOrdersFor(db, phone, now);
+        const main = live.find((o) => !o.bill_label) || live[0];
+        if (main) {
+          const delivery = bill.deliveryPhrase(main.delivery_date);
+          const more = live.filter((o) => o.id !== main.id).length;
+          await send.buttons(phone, T.sameDay(main, delivery, more), [B.merge(draftId), B.split(draftId)]);
+          return { did: "same_day_ask", draft: draftId, existing: main.order_number };
+        }
+      }
+    }
+    if (m[1] === "split") {
+      const r = await db.query(
+        `UPDATE order_drafts SET note = 'awaiting_label' WHERE id = $1 AND phone = $2 AND status = 'shown' RETURNING id`, [draftId, phone]);
+      if (!r.rowCount) { await send.text(phone, T.old); return { did: "stale", draft: draftId }; }
+      await send.text(phone, T.askLabel);
+      return { did: "label_ask", draft: draftId };
+    }
     if (m[1] === "edit") {
       const r = await db.query(`UPDATE order_drafts SET status = 'changed', decided_at = now() WHERE id = $1 AND phone = $2 AND status = 'shown' RETURNING id`, [draftId, phone]);
       if (!r.rowCount) { await send.text(phone, T.old); return { did: "stale", draft: draftId }; }
@@ -243,17 +273,16 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       await send.buttons(phone, T.changed, [B.list, B.write]);
       return { did: "changed", draft: draftId };
     }
-    try {
-      const r = await confirm(db, { phone, draftId, name: contactName, now });
-      if (r.stale) { await send.text(phone, r.status === "confirmed" ? T.stale : T.old); return { did: "stale", draft: draftId }; }
-      const forBill = await orders.loadOrderForBill(db, r.orderId);
-      forBill.ordered_at = now;
-      await send.text(phone, bill.orderConfirmation(forBill).rich);
-      return { did: "ordered", draft: draftId, orderId: r.orderId, orderNumber: forBill.order_number, merged: Boolean(r.merged) };
-    } catch (e) {
-      await db.query(`UPDATE order_drafts SET status = 'failed', note = $2, decided_at = now() WHERE id = $1`, [draftId, String(e.message).slice(0, 300)]);
-      await send.text(phone, T.failed(e.userFacing ? e.message : "system mein masla aa gaya."));
-      return { did: "failed", draft: draftId, error: e.message };
+    return placeOrder(db, { phone, draftId, contactName, now, send });
+  }
+
+  // 🧾 Alag bill: the name she types for the separate bill.
+  if (msg?.type === "text") {
+    const waiting = await awaitingLabel(db, phone);
+    if (waiting) {
+      const label = String(msg.text?.body || "").replace(/\s+/g, " ").trim();
+      if (!label || label.length > 40) { await send.text(phone, T.badLabel); return { did: "bad_label", draft: waiting.id }; }
+      return placeOrder(db, { phone, draftId: waiting.id, contactName, now, send, billLabel: label });
     }
   }
 
@@ -286,7 +315,10 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
   // A typed order ("2kg aloo, aadha kilo adrak") -> the AI reader -> the same confirmation.
   // She tapped ✏️ Badlein and now types only the change ("tamatar 2 kg kar dein, kele hata dein").
   if (typedText && ai.configured(env)) {
-    const editing = await editingDraft(db, phone);
+    // Also: an order is on her screen waiting for Theek hai, and she types more items
+    // ("2 pao lehson" after "lehsan samajh nahi aaya") - that ADDS to it, never replaces it.
+    const editing = (await editingDraft(db, phone)) ||
+      (typed.looksLikeOrder(typedText) ? await pendingDraft(db, phone) : null);
     if (editing) {
       let r;
       try {
@@ -303,6 +335,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
         await send.text(phone, T.emptied);
         return { did: "emptied", draft: editing.id };
       }
+      if (editing.pending && sameLines(r.lines, editing.lines) && !notes.length) return null;   // nothing changed: leave it
       return showDraft(db, { phone, source: editing.source, lines: r.lines, send, now, notes });
     }
   }
@@ -374,6 +407,38 @@ async function notesFor(db, r) {
   return notes;
 }
 
+/** Confirm a draft into an order and send the confirmation (with a note when it joined an earlier order). */
+async function placeOrder(db, { phone, draftId, contactName, now, send, billLabel = null }) {
+  try {
+    const r = await confirm(db, { phone, draftId, name: contactName, now, billLabel });
+    if (r.stale) { await send.text(phone, r.status === "confirmed" ? T.stale : T.old); return { did: "stale", draft: draftId }; }
+    const forBill = await orders.loadOrderForBill(db, r.orderId);
+    forBill.ordered_at = now;
+    const text = bill.orderConfirmation(forBill).rich;
+    await send.text(phone, r.merged ? `${T.mergedNote(forBill.order_number)}\n\n${text}` : text);
+    return { did: "ordered", draft: draftId, orderId: r.orderId, orderNumber: forBill.order_number,
+             merged: Boolean(r.merged), billLabel: forBill.bill_label || null };
+  } catch (e) {
+    await db.query(`UPDATE order_drafts SET status = 'failed', note = $2, decided_at = now() WHERE id = $1`, [draftId, String(e.message).slice(0, 300)]);
+    await send.text(phone, T.failed(e.userFacing ? e.message : "system mein masla aa gaya."));
+    return { did: "failed", draft: draftId, error: e.message };
+  }
+}
+
+/** A draft waiting for its separate-bill name: the bot's last message (last hour) asked for it. */
+async function awaitingLabel(db, phone) {
+  const last = (await db.query(
+    `SELECT body_preview FROM whatsapp_messages
+      WHERE phone = $1 AND direction = 'outbound' AND agent = 'order bot'
+        AND COALESCE(sent_at, received_at) > now() - interval '1 hour'
+      ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
+  const body = String(last?.body_preview || "");
+  if (!body.startsWith("Theek hai! Ye alag bill") && !body.startsWith("Naam thora chhota")) return null;
+  return (await db.query(
+    `SELECT id FROM order_drafts WHERE phone = $1 AND status = 'shown' AND note = 'awaiting_label'
+      ORDER BY id DESC LIMIT 1`, [phone])).rows[0] || null;
+}
+
 /** The draft she is changing: the bot's last message (last hour) asked for the change, and that draft is 'changed'. */
 async function editingDraft(db, phone) {
   const last = (await db.query(
@@ -390,6 +455,30 @@ async function editingDraft(db, phone) {
   if (!d) return null;
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
   return lines?.length ? { id: d.id, source: d.source, lines } : null;
+}
+
+/**
+ * The order on her screen right now, still waiting for Theek hai: her newest
+ * draft is 'shown' (not waiting for a bill name), under an hour old, and the
+ * bot has said nothing since showing it.
+ */
+async function pendingDraft(db, phone) {
+  const d = (await db.query(
+    `SELECT id, source, lines, status, note, created_at FROM order_drafts
+      WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
+  if (!d || d.status !== "shown" || d.note || new Date(d.created_at) < new Date(Date.now() - 3600e3)) return null;
+  const later = (await db.query(
+    `SELECT 1 FROM whatsapp_messages
+      WHERE phone = $1 AND direction = 'outbound' AND agent = 'order bot'
+        AND COALESCE(sent_at, received_at) > $2::timestamptz + interval '60 seconds' LIMIT 1`, [phone, d.created_at])).rowCount;
+  if (later) return null;
+  const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
+  return lines?.length ? { id: d.id, source: d.source, lines, pending: true } : null;
+}
+
+function sameLines(a, b) {
+  const key = (xs) => xs.map((l) => `${l.sku}:${Math.round(Number(l.packs) * 1e4)}`).sort().join("|");
+  return key(a || []) === key(b || []);
 }
 
 /** Did the bot just say "apni list likh dein" (last hour)? */

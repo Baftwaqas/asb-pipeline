@@ -283,6 +283,7 @@ router.get("/api/inbox/thread/:phone", requireAuth, async (req, res) => {
       // single most common inbound message, and the answer is in this table.
       db.query(
         `SELECT o.order_number, o.status, o.ceiling_total, o.grand_total,
+                to_jsonb(o) ->> 'bill_label' AS bill_label,
                 c.code AS cycle_code, c.delivery_date
            FROM orders o
            JOIN customers cu ON cu.id = o.customer_id
