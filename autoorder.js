@@ -49,11 +49,14 @@ const T = {
     "Theek hai! Apni list likh dein, jaise:\n_2 kg aloo, aadha kilo adrak, dhania 2 gaddi_\n\n" +
     "Hamari team foran confirm kar degi.",
   notUnderstood: "Maazrat, ye list samajh nahi aayi. Hamari team abhi dekh kar confirm kar degi.",
-  unknown: (xs) => `_Ye hamare paas nahi: ${xs.join(", ")}_`,
+  unknown: (xs) => `_Ye abhi hamare paas nahi: ${xs.join(", ")}. Hum ne note kar liya hai. 📝_`,
+  onlyUnknown: (xs) => `Maazrat, ye abhi hamare paas nahi: ${xs.join(", ")}. Hum ne note kar liya hai. 📝\n\nKuch aur chahiye to likh dein, ya *order* likh kar list dekh lein.`,
   unclear: (xs) => `_Ye samajh nahi aaya, dobara likh dein (jaise "1 darjan kele"): ${xs.join(", ")}_`,
   editAsk:
     "Koi baat nahi! Poora order dobara likhne ki zaroorat nahi. 🙂\n" +
     "Bas jo badalna hai woh likh dein, jaise:\n_tamatar 2 kg kar dein, kele hata dein, 1 kg piyaz aur_",
+  adjusted: (xs) => xs.map((x) => `_${x.name}: ${x.gotText} rakha (ye is se kam ya adhoora nahi milta)._`).join("\n"),
+  askUnit: (xs) => xs.map((x) => `_${x.name} ${x.unit} ke hisaab se milta hai${x.said ? ` ("${x.said}")` : ""}. Kitne ${x.unit} chahiye? *Badlein* daba kar likh dein._`).join("\n"),
   emptied: "Order se sab items nikal diye gaye. Naye order ke liye *order* likh dein.",
   editNotUnderstood: "Maazrat, ye tabdeeli samajh nahi aayi. Dobara likh dein, jaise: _tamatar 2 kg kar dein_",
   confirmHead: "Aap ka order:",
@@ -81,7 +84,7 @@ async function ready(db) {
 // ---------------------------------------------------------------------------
 async function forSale(db) {
   return (await db.query(
-    `SELECT sku, name_en, name_ur, category, unit::text AS unit, min_qty, asb_price, market_price, meta_retailer_id
+    `SELECT sku, name_en, name_ur, name_roman, category, unit::text AS unit, min_qty, asb_price, market_price, meta_retailer_id
        FROM products
       WHERE is_active AND asb_price > 0 AND category <> 'community-excluded' AND sku NOT LIKE 'ASB-COM-%'
       ORDER BY name_en`)).rows.map((p) => ({ ...p, asb_price: Number(p.asb_price), market_price: p.market_price == null ? null : Number(p.market_price) }));
@@ -104,6 +107,21 @@ function listSections(products) {
 // ---------------------------------------------------------------------------
 // Drafts
 // ---------------------------------------------------------------------------
+/** "pao", "300 g", "aadha darjan" in the order she checks (the bill keeps its own exact wording). */
+function spoken(packs, unit, size) {
+  const total = Number(packs) * (Number(size) > 0 ? Number(size) : 1);
+  if (unit === "kg" && total > 0 && total < 1) {
+    const g = Math.round(total * 1000);
+    return ({ 250: "pao", 500: "aadha kg", 750: "pauna kg" })[g] || `${g} g`;
+  }
+  if (unit === "dozen" && total % 1 !== 0) {
+    const pcs = Math.round(total * 12);
+    if (pcs === 6) return "aadha darjan";
+    if (pcs < 12) return `${pcs} adad`;
+  }
+  return bill.qtyPhrase(packs, unit, size);
+}
+
 /** The text she checks. Prices: today's ASB price per pack. */
 function draftText(lines, products, deliveryDate) {
   const by = new Map(products.map((p) => [p.sku, p]));
@@ -114,7 +132,7 @@ function draftText(lines, products, deliveryDate) {
     if (!p) continue;
     const amt = p.asb_price * l.packs;
     total += amt;
-    rows.push(`• ${p.name_en} — ${bill.qtyPhrase(l.packs, p.unit, p.min_qty)} — ${bill.money(amt)}`);
+    rows.push(`• ${p.name_en} — ${spoken(l.packs, p.unit, p.min_qty)} — ${bill.money(amt)}`);
   }
   return [T.confirmHead, ...rows, ``, `Total: *${bill.money(total)}* (zyada se zyada)`, T.confirmFoot(bill.deliveryPhrase(deliveryDate))].join("\n");
 }
@@ -276,9 +294,8 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
         return { did: "ai_failed", error: e.code || e.message };
       }
       if (r.why && r.why.length) console.log(`[order-bot] edit: ${r.lines.length} lines, unclear because: ${r.why.join("; ")}`);
-      const notes = [];
-      if (r.unknown.length) notes.push(T.unknown(r.unknown));
-      if (r.unclear.length) notes.push(T.unclear(r.unclear));
+      await recordMissing(db, phone, r.unknown, typedText, "edit");
+      const notes = await notesFor(db, r);
       if (!r.lines.length) {
         if (notes.length) { await send.text(phone, T.editNotUnderstood); return { did: "edit_not_understood" }; }
         await send.text(phone, T.emptied);
@@ -298,16 +315,59 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       return { did: "ai_failed", error: e.code || e.message };   // the team sees the message as before
     }
     if (r.why && r.why.length) console.log(`[order-bot] typed: ${r.lines.length} read, unclear because: ${r.why.join("; ")}`);
+    await recordMissing(db, phone, r.unknown, typedText, "typed");
     if (!r.lines.length) {
+      if (r.unknown.length && (justAsked || !r.unclear.length)) {
+        await send.text(phone, T.onlyUnknown(r.unknown));
+        return { did: "only_unknown", unknown: r.unknown.length };
+      }
       if (justAsked) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
       return null;
     }
-    const notes = [];
-    if (r.unknown.length) notes.push(T.unknown(r.unknown));
-    if (r.unclear.length) notes.push(T.unclear(r.unclear));
+    const notes = await notesFor(db, r);
     return showDraft(db, { phone, source: "typed", lines: r.lines, send, now, notes });
   }
   return null;
+}
+
+/** Items we do not sell, kept for the founder's weekly "most asked" list. Never fails the order. */
+async function recordMissing(db, phone, items, said, source) {
+  if (!items?.length) return;
+  try {
+    if (!(await db.query(`SELECT to_regclass('missing_items') IS NOT NULL AS ok`)).rows[0].ok) return;
+    for (const raw of items.slice(0, 10)) {
+      const item = String(raw).toLowerCase().replace(/\s+/g, " ").trim().slice(0, 120);
+      if (!item) continue;
+      await db.query(`INSERT INTO missing_items (phone, item, said, source) VALUES ($1, $2, $3, $4)`,
+        [phone, item, String(said || "").slice(0, 500), source]);
+    }
+  } catch (e) {
+    console.error("[order-bot] could not record missing items:", e.message);
+  }
+}
+
+/** The founder's list: most-asked missing items over the last N days. */
+async function missingReport(db, days = 7) {
+  if (!(await db.query(`SELECT to_regclass('missing_items') IS NOT NULL AS ok`)).rows[0].ok) return null;
+  return (await db.query(
+    `SELECT item, count(*)::int AS asks, count(DISTINCT phone)::int AS people, max(created_at) AS last
+       FROM missing_items WHERE created_at > now() - make_interval(days => $1)
+      GROUP BY item ORDER BY people DESC, asks DESC, last DESC LIMIT 100`, [days])).rows;
+}
+
+/** What to tell her above the order: not stocked, not understood, rounded to a pack, or "kitne kilo?". */
+async function notesFor(db, r) {
+  const notes = [];
+  if (r.unknown?.length) notes.push(T.unknown(r.unknown));
+  if (r.askUnit?.length) notes.push(T.askUnit(r.askUnit));
+  if (r.unclear?.length) notes.push(T.unclear(r.unclear));
+  if (r.adjusted?.length) {
+    notes.push(T.adjusted(r.adjusted.map((x) => ({
+      name: x.name,
+      gotText: spoken(x.packs, x.unit, x.size),
+    }))));
+  }
+  return notes;
 }
 
 /** The draft she is changing: the bot's last message (last hour) asked for the change, and that draft is 'changed'. */
@@ -350,4 +410,5 @@ async function sendList(db, { phone, send, catalogId }) {
   return { did: "list", items: sections.reduce((n, s) => n + s.product_items.length, 0) };
 }
 
-module.exports = { on, isAsk, T, B, ready, forSale, listSections, draftText, lastOrder, cartLines, confirm, onInbound };
+module.exports = {
+  missingReport, spoken, on, isAsk, T, B, ready, forSale, listSections, draftText, lastOrder, cartLines, confirm, onInbound };

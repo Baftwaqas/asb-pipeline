@@ -14,16 +14,69 @@ test("dozen is understood in English and Urdu spellings", () => {
 
 test("pieces and dozens convert when they divide evenly", () => {
   assert.equal(packsFor(banana, 12, "pcs"), 1);
-  assert.equal(packsFor(banana, 7, "pcs"), null);
+  assert.equal(packsFor(banana, 6, "pcs"), 0.5);
   assert.equal(packsFor(egg, 1, "dozen"), 12);
 });
 
 test("kilo spellings still work", () => {
   assert.equal(packsFor(aloo, 2, "kilo"), 2);
-  assert.equal(packsFor(aloo, 500, "gram"), 1);
+  assert.equal(packsFor(aloo, 500, "gram"), 0.5);
   assert.equal(packsFor(aloo, 2, "dozen"), null);
 });
 
 test("the AI is told fruit names", () => {
-  assert.match(SYSTEM, /kalay = banana/);
+  assert.match(SYSTEM, /kalay\/kelly = banana/);
+});
+
+const { read } = require("../typedorder");
+const fakeAi = (reply) => async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] }), { status: 200 });
+const env = { ORDER_AI_PROVIDER: "groq", GROQ_API_KEY: "test-only", GROQ_MODEL: "m" };
+const products = [
+  { sku: "HP", name_en: "Hara Payaz", unit: "kg", min_qty: 1 },
+  { sku: "TM", name_en: "Tamatar", unit: "kg", min_qty: 0.5 },
+  { sku: "KL", name_en: "Kela", unit: "kg", min_qty: 1 },
+];
+
+test("any quantity (founder, 20 Nov): half a pack is half a pack, priced pro rata, nothing to report", async () => {
+  const r = await read("adha kilo hara piyaz, aik pao tamatar", products, { env, fetchImpl: fakeAi({ items: [
+    { sku: "HP", qty: 0.5, unit: "kg", said: "adha kilo hara piyaz" },
+    { sku: "TM", qty: 1, unit: "pao", said: "aik pao tamatar" },
+  ], unknown: [], unclear: [] }) });
+  assert.deepEqual(r.lines, [{ sku: "HP", packs: 0.5 }, { sku: "TM", packs: 0.5 }]);
+  assert.deepEqual(r.adjusted, []);
+});
+
+test("counted things stay whole, and that is reported", async () => {
+  const kinno = [{ sku: "KN", name_en: "Kinno", unit: "pcs", min_qty: 1 }];
+  const r = await read("dhai kinno", kinno, { env, fetchImpl: fakeAi({ items: [{ sku: "KN", qty: 2.5, unit: "piece", said: "dhai kinno" }] }) });
+  assert.deepEqual(r.lines, [{ sku: "KN", packs: 3 }]);
+  assert.deepEqual(r.adjusted.map((x) => x.sku), ["KN"]);
+});
+
+test("exact amounts are not reported", async () => {
+  const r = await read("1 kg tamatar", products, { env, fetchImpl: fakeAi({ items: [{ sku: "TM", qty: 1, unit: "kg", said: "1 kg tamatar" }] }) });
+  assert.deepEqual(r.adjusted, []);
+});
+
+test("pieces of something sold by the kilo: ask 'kitne kilo?'", async () => {
+  const r = await read("12 kele", products, { env, fetchImpl: fakeAi({ items: [{ sku: "KL", qty: 12, unit: "piece", said: "12 kele" }] }) });
+  assert.deepEqual(r.lines, []);
+  assert.deepEqual(r.askUnit, [{ name: "Kela", unit: "kilo", said: "12 kele" }]);
+});
+
+test("kalay is banana, not kala tarbooz", () => {
+  assert.match(SYSTEM, /never kala tarbooz/);
+});
+
+test("the order she checks says a pao and aadha darjan, not 0.25 kg", () => {
+  const { spoken } = require("../autoorder");
+  assert.equal(spoken(0.25, "kg", 1), "pao");
+  assert.equal(spoken(0.3, "kg", 1), "300 g");
+  assert.equal(spoken(0.5, "dozen", 1), "aadha darjan");
+  assert.equal(spoken(2, "kg", 1), "2 kg");
+});
+
+test("the order-reader check is behind the inbox login", async () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "..", "inbox.js"), "utf8");
+  assert.match(src, /router\.post\("\/api\/inbox\/order-ai\/read", requireAuth,/);
 });
