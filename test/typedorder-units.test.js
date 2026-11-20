@@ -14,13 +14,13 @@ test("dozen is understood in English and Urdu spellings", () => {
 
 test("pieces and dozens convert when they divide evenly", () => {
   assert.equal(packsFor(banana, 12, "pcs"), 1);
-  assert.equal(packsFor(banana, 7, "pcs"), null);
+  assert.equal(packsFor(banana, 6, "pcs"), 0.5);
   assert.equal(packsFor(egg, 1, "dozen"), 12);
 });
 
 test("kilo spellings still work", () => {
   assert.equal(packsFor(aloo, 2, "kilo"), 2);
-  assert.equal(packsFor(aloo, 500, "gram"), 1);
+  assert.equal(packsFor(aloo, 500, "gram"), 0.5);
   assert.equal(packsFor(aloo, 2, "dozen"), null);
 });
 
@@ -37,13 +37,20 @@ const products = [
   { sku: "KL", name_en: "Kela", unit: "kg", min_qty: 1 },
 ];
 
-test("rounding up to a pack is reported, never silent", async () => {
-  const r = await read("adha kilo hara piyaz, aik pao tamatar, 1 kg tamatar", products, { env, fetchImpl: fakeAi({ items: [
+test("any quantity (founder, 20 Nov): half a pack is half a pack, priced pro rata, nothing to report", async () => {
+  const r = await read("adha kilo hara piyaz, aik pao tamatar", products, { env, fetchImpl: fakeAi({ items: [
     { sku: "HP", qty: 0.5, unit: "kg", said: "adha kilo hara piyaz" },
     { sku: "TM", qty: 1, unit: "pao", said: "aik pao tamatar" },
   ], unknown: [], unclear: [] }) });
-  assert.deepEqual(r.lines, [{ sku: "HP", packs: 1 }, { sku: "TM", packs: 1 }]);
-  assert.deepEqual(r.adjusted.map((x) => x.sku), ["HP", "TM"]);
+  assert.deepEqual(r.lines, [{ sku: "HP", packs: 0.5 }, { sku: "TM", packs: 0.5 }]);
+  assert.deepEqual(r.adjusted, []);
+});
+
+test("counted things stay whole, and that is reported", async () => {
+  const kinno = [{ sku: "KN", name_en: "Kinno", unit: "pcs", min_qty: 1 }];
+  const r = await read("dhai kinno", kinno, { env, fetchImpl: fakeAi({ items: [{ sku: "KN", qty: 2.5, unit: "piece", said: "dhai kinno" }] }) });
+  assert.deepEqual(r.lines, [{ sku: "KN", packs: 3 }]);
+  assert.deepEqual(r.adjusted.map((x) => x.sku), ["KN"]);
 });
 
 test("exact amounts are not reported", async () => {
@@ -59,4 +66,12 @@ test("pieces of something sold by the kilo: ask 'kitne kilo?'", async () => {
 
 test("kalay is banana, not kala tarbooz", () => {
   assert.match(SYSTEM, /never kala tarbooz/);
+});
+
+test("the order she checks says a pao and aadha darjan, not 0.25 kg", () => {
+  const { spoken } = require("../autoorder");
+  assert.equal(spoken(0.25, "kg", 1), "pao");
+  assert.equal(spoken(0.3, "kg", 1), "300 g");
+  assert.equal(spoken(0.5, "dozen", 1), "aadha darjan");
+  assert.equal(spoken(2, "kg", 1), "2 kg");
 });

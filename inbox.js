@@ -813,6 +813,19 @@ router.post("/api/inbox/send-image", requireAuth, express.json({ limit: "8mb" })
 // Karachi areas (areas.js): the list with counts, set a customer's area, add an
 // area, and mark an area as served (ASB delivers there now).
 // ---------------------------------------------------------------------------
+// Items customers asked the order bot for that ASB does not sell (missing_items, migration 023).
+router.get("/api/inbox/missing-items", requireAuth, async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+    const rows = await require("./autoorder").missingReport(db, days);
+    if (!rows) return res.status(503).json({ error: "not_migrated", message: "Run the database update first (migration 023)." });
+    res.json({ days, items: rows });
+  } catch (e) {
+    console.error("[inbox] missing items failed:", e.message);
+    res.status(500).json({ error: "server", message: e.message });
+  }
+});
+
 router.get("/api/inbox/areas", requireAuth, async (_req, res) => {
   try {
     if (!(await areas.ready(db))) return res.status(503).json({ error: "not_migrated", message: "Run the database update first (migration 021)." });

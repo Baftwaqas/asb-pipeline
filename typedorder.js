@@ -48,16 +48,37 @@ function wantedIn(product, qty, unit) {
   if (COUNT[u] && COUNT[u] === pu) return q;
   if (u === pu || (ALIAS[pu] || pu) === u) return q;
   if (u === "darjan" && pu === "pcs") return q * PER.darjan;                       // "1 dozen" sold per piece
-  if (u === "piece" && pu === "dozen" && q % PER.darjan === 0) return q / PER.darjan; // "12 kele" sold per dozen
+  if (u === "piece" && pu === "dozen") return q / PER.darjan;   // "12 kele" = 1 dozen, "6 kele" = half
   return null;
 }
 
-/** "2 kg" of a 500 g pack -> 4 packs; "2 gaddi" of a 1-gaddi pack -> 2. Null when the units cannot meet. */
-function packsFor(product, qty, unit) {
+/**
+ * Packs for what she asked. ANY QUANTITY (founder, 20 Nov 2026): a pao of a
+ * half-kilo tomato pack is half a pack, priced pro rata. Weights are kept to
+ * the gram; counted things (adad, gaddi, packet) to a whole one, a dozen to a
+ * whole piece. Returns { packs, rounded } or null when the units cannot meet.
+ */
+function packsExact(product, qty, unit) {
   const wanted = wantedIn(product, qty, unit);
   if (wanted == null) return null;
   const size = Number(product.min_qty) > 0 ? Number(product.min_qty) : 1;
-  return Math.max(1, Math.round(wanted / size));
+  const pu = String(product.unit || "").toLowerCase();
+  let base;   // in the product's unit, after keeping it sensible
+  if (pu === "kg") base = Math.round(wanted * 1000) / 1000;
+  else if (pu === "g") base = Math.round(wanted);
+  else if (pu === "pao") base = Math.round(wanted * 1000) / 1000;
+  else if (pu === "dozen") base = Math.round(wanted * PER.darjan) / PER.darjan;
+  else base = Math.round(wanted);                               // pcs, bundle, packet
+  const smallest = pu === "dozen" ? 1 / PER.darjan : (["kg", "pao"].includes(pu) ? 0.05 : (pu === "g" ? 50 : 1));
+  if (base < smallest) base = smallest;
+  const packs = Math.round((base / size) * 1e6) / 1e6;
+  return { packs, rounded: Math.abs(base - wanted) > 1e-6 * Math.max(1, wanted) };
+}
+
+/** Old name kept for callers: packs only. */
+function packsFor(product, qty, unit) {
+  const r = packsExact(product, qty, unit);
+  return r ? r.packs : null;
 }
 
 const UNIT_WORD = { kg: "kilo", g: "gram", pao: "pao", dozen: "darjan", pcs: "adad (piece)", bundle: "gaddi", packet: "packet" };
@@ -81,7 +102,7 @@ const SYSTEM =
   "khajoor = dates, aam = mango, nashpati = pear. Customers write in English, Roman Urdu or Urdu script; match " +
   "by meaning. dozen = darjan. If the customer's unit differs from how it is sold, still copy their qty and unit. " +
   "If the same item is sold in more than one way (e.g. per kg and per dozen), choose the one that matches the " +
-  "customer's unit. If an item is not in the list, put the customer's words in unknown. " +
+  "customer's unit. If an item is not in the list, put just its name (no quantity, e.g. chicken) in unknown. " +
   "If an item has no quantity, put it in unclear. Never invent a sku.";
 
 const EDIT_RULES =
@@ -130,8 +151,8 @@ async function read(text, products, { env = process.env, fetchImpl = fetch, curr
       continue;
     }
     const size = Number(p.min_qty) > 0 ? Number(p.min_qty) : 1;
-    const packs = Math.max(1, Math.round(wanted / size));
-    if (Math.abs(packs * size - wanted) > 1e-6 * Math.max(1, wanted)) adjusted.push({ sku: p.sku, name: p.name_en, packs, size, unit: p.unit });
+    const { packs, rounded } = packsExact(p, it.qty, it.unit);
+    if (rounded) adjusted.push({ sku: p.sku, name: p.name_en, packs, size, unit: p.unit });
     merged.set(p.sku, (merged.get(p.sku) || 0) + packs);
   }
   return {
@@ -144,4 +165,4 @@ async function read(text, products, { env = process.env, fetchImpl = fetch, curr
   };
 }
 
-module.exports = { looksLikeOrder, packsFor, wantedIn, unitWord, catalogueText, read, SYSTEM };
+module.exports = { looksLikeOrder, packsFor, packsExact, wantedIn, unitWord, catalogueText, read, SYSTEM };

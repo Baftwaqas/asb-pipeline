@@ -111,10 +111,12 @@ test("typed order -> the AI reads it -> the same confirmation -> Theek hai -> a 
     await wait(p, 3);
     const c = to(p)[2];
     assert.equal(c.kind, "buttons");
-    assert.match(c.text, /Ye hamare paas nahi: 2 kg chicken/);
+    assert.match(c.text, /Ye abhi hamare paas nahi: 2 kg chicken\. Hum ne note kar liya hai/);
+    const miss = (await db.query(`SELECT item, source FROM missing_items WHERE phone = $1`, [p])).rows;
+    assert.deepEqual(miss, [{ item: "2 kg chicken", source: "typed" }]);
     assert.match(c.text, /samajh nahi aaya[\s\S]*thoda dhania[\s\S]*1 kg made up/);
     assert.match(c.text, /Tamatar — 1 kg — Rs 198/);
-    assert.doesNotMatch(c.text, /pack mein milta hai/);
+    assert.doesNotMatch(c.text, /adhoora nahi milta/);
     assert.match(c.text, /Pakora Mirch — aadha kg — Rs 30/);
     await tap(p, c.buttons[0].id, "✅ Theek hai");
     await wait(p, 4);
@@ -140,7 +142,7 @@ test("typed order -> the AI reads it -> the same confirmation -> Theek hai -> a 
 test("pack arithmetic is done in code, not by the AI", () => {
   const TD = require(path.join(ROOT, "typedorder.js"));
   assert.equal(TD.packsFor({ unit: "kg", min_qty: 0.5 }, 2, "kg"), 4);
-  assert.equal(TD.packsFor({ unit: "kg", min_qty: 1 }, 0.5, "kg"), 1);       // never below one pack
+  assert.equal(TD.packsFor({ unit: "kg", min_qty: 1 }, 0.5, "kg"), 0.5);     // any quantity: half a pack
   assert.equal(TD.packsFor({ unit: "g", min_qty: 250 }, 1, "pao"), 1);
   assert.equal(TD.packsFor({ unit: "g", min_qty: 250 }, 1, "kg"), 4);
   assert.equal(TD.packsFor({ unit: "bundle", min_qty: 1 }, 2, "gaddi"), 2);
@@ -267,6 +269,31 @@ test("'Badlein' with the AI: she types only the change, the rest of her order st
     await say(p, "sab hata dein");
     await wait(p, 7);
     assert.match(to(p)[6].text, /sab items nikal diye/);
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.GROQ_API_KEY;
+  }
+});
+
+test("only things we don't sell: 'abhi hamare paas nahi', recorded, and the founder sees the most-asked list", async () => {
+  Object.assign(process.env, { ORDER_AI_PROVIDER: "groq", GROQ_API_KEY: "test-only", GROQ_MODEL: "test-model" });
+  const realFetch = global.fetch;
+  global.fetch = async (url, init) => String(url).includes("api.groq.com")
+    ? new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ items: [], unknown: ["Chicken", "doodh"], unclear: [] }) } }] }), { status: 200 })
+    : realFetch(url, init);
+  try {
+    const p = "923009000012";
+    await say(p, "order");
+    await wait(p, 1);
+    await tap(p, "order:write");
+    await wait(p, 2);
+    await say(p, "2 kg chicken aur 1 litre doodh");
+    await wait(p, 3);
+    assert.match(to(p)[2].text, /abhi hamare paas nahi: Chicken, doodh\. Hum ne note kar liya hai/);
+    const rep = await O.missingReport(db, 7);
+    const chicken = rep.find((r) => r.item === "chicken");
+    assert.equal(chicken.people, 1);
+    assert.ok(rep.find((r) => r.item === "doodh"));
   } finally {
     global.fetch = realFetch;
     delete process.env.GROQ_API_KEY;
