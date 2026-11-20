@@ -263,6 +263,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     } catch (e) {
       return { did: "ai_failed", error: e.code || e.message };   // the team sees the message as before
     }
+    if (r.why && r.why.length) console.log(`[order-bot] typed: ${r.lines.length} read, unclear because: ${r.why.join("; ")}`);
     if (!r.lines.length) {
       if (justAsked) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
       return null;
