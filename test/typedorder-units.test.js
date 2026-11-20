@@ -75,3 +75,8 @@ test("the order she checks says a pao and aadha darjan, not 0.25 kg", () => {
   assert.equal(spoken(0.5, "dozen", 1), "aadha darjan");
   assert.equal(spoken(2, "kg", 1), "2 kg");
 });
+
+test("the order-reader check is behind the inbox login", async () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "..", "inbox.js"), "utf8");
+  assert.match(src, /router\.post\("\/api\/inbox\/order-ai\/read", requireAuth,/);
+});

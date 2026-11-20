@@ -813,6 +813,40 @@ router.post("/api/inbox/send-image", requireAuth, express.json({ limit: "8mb" })
 // Karachi areas (areas.js): the list with counts, set a customer's area, add an
 // area, and mark an area as served (ASB delivers there now).
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Order-reader check (founder, 20 Nov 2026): what would the bot understand
+// from this text? READ ONLY - nothing is sent to anyone, nothing is saved.
+// Used to measure the reader on real past orders before customers see it.
+// Optional effort (low|medium|high) tries another setting for this call only.
+// ---------------------------------------------------------------------------
+router.post("/api/inbox/order-ai/read", requireAuth, express.json({ limit: "20kb" }), async (req, res) => {
+  const ai = require("./ai");
+  const typed = require("./typedorder");
+  const text = String(req.body?.text || "").slice(0, 800);
+  if (!text.trim()) return res.status(400).json({ error: "no_text" });
+  if (!ai.configured(process.env)) return res.status(503).json({ error: "ai_off", message: "The order AI is not configured." });
+  const effort = ["low", "medium", "high"].includes(req.body?.effort) ? req.body.effort : undefined;
+  const env = { ...process.env, ORDER_AI_TIMEOUT_MS: "30000", ...(effort ? { ORDER_AI_REASONING_EFFORT: effort } : {}) };
+  try {
+    const products = await require("./autoorder").forSale(db);
+    const by = new Map(products.map((p) => [p.sku, p]));
+    const t0 = Date.now();
+    const r = await typed.read(text, products, { env });
+    res.json({
+      ms: Date.now() - t0,
+      effort: env.ORDER_AI_REASONING_EFFORT || "low",
+      lines: r.lines.map((l) => {
+        const p = by.get(l.sku);
+        const size = Number(p?.min_qty) > 0 ? Number(p.min_qty) : 1;
+        return { sku: l.sku, name: p?.name_en, qty: +(l.packs * size).toFixed(3), unit: p?.unit };
+      }),
+      unknown: r.unknown, unclear: r.unclear, askUnit: r.askUnit, adjusted: r.adjusted, why: r.why,
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.code || "ai_failed", message: e.message });
+  }
+});
+
 // Items customers asked the order bot for that ASB does not sell (missing_items, migration 023).
 router.get("/api/inbox/missing-items", requireAuth, async (req, res) => {
   try {
