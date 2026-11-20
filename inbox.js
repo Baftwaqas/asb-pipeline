@@ -824,10 +824,24 @@ router.post("/api/inbox/order-ai/read", requireAuth, express.json({ limit: "20kb
   const typed = require("./typedorder");
   const text = String(req.body?.text || "").slice(0, 800);
   if (!text.trim()) return res.status(400).json({ error: "no_text" });
-  if (!ai.configured(process.env)) return res.status(503).json({ error: "ai_off", message: "The order AI is not configured." });
   const effort = ["low", "medium", "high"].includes(req.body?.effort) ? req.body.effort : undefined;
   const env = { ...process.env, ORDER_AI_TIMEOUT_MS: "30000", ...(effort ? { ORDER_AI_REASONING_EFFORT: effort } : {}) };
+  // Compare models on the same orders without changing what customers get:
+  // provider + model for THIS call only; the key must already be in Render.
+  const COMPARE = {
+    groq: /^(openai\/gpt-oss-(120b|20b)|qwen\/[\w.-]+|llama-[\w.-]+|meta-llama\/[\w.-]+|moonshotai\/[\w.-]+)$/,
+    anthropic: /^claude-[a-z0-9.-]+$/,
+    openai: /^(gpt|o\d)[a-z0-9.-]*$/,
+  };
+  const prov = String(req.body?.provider || "");
+  if (prov) {
+    const model = String(req.body?.model || "");
+    if (!COMPARE[prov] || !COMPARE[prov].test(model)) return res.status(400).json({ error: "bad_model" });
+    env.ORDER_AI_PROVIDER = prov;
+    env[ai.PROVIDERS[prov].modelVar] = model;
+  }
   try {
+    if (!ai.configured(env)) return res.status(503).json({ error: "ai_off", message: "That AI has no key in Render yet." });
     const products = await require("./autoorder").forSale(db);
     const by = new Map(products.map((p) => [p.sku, p]));
     const t0 = Date.now();
@@ -835,6 +849,7 @@ router.post("/api/inbox/order-ai/read", requireAuth, express.json({ limit: "20kb
     res.json({
       ms: Date.now() - t0,
       effort: env.ORDER_AI_REASONING_EFFORT || "low",
+      provider: ai.providerName(env), model: env[ai.PROVIDERS[ai.providerName(env)].modelVar],
       lines: r.lines.map((l) => {
         const p = by.get(l.sku);
         const size = Number(p?.min_qty) > 0 ? Number(p.min_qty) : 1;

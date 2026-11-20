@@ -98,3 +98,23 @@ test("one retry after a short 'too many requests'", async () => {
   try { assert.equal(await ai.complete({ system: "s", user: "u", env, fetchImpl: f }), "ok"); } finally { console.error = realErr; }
   assert.equal(n, 2);
 });
+
+test("the compare option only accepts known model names, per call", () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "..", "inbox.js"), "utf8");
+  assert.match(src, /anthropic: \/\^claude-\[a-z0-9.-\]\+\$\//);
+  assert.match(src, /error: "bad_model"/);
+});
+
+test("openai: no temperature, max_completion_tokens, reasoning effort", async () => {
+  const ai = require("../ai");
+  let sent;
+  const f = async (url, init) => { sent = { url, body: JSON.parse(init.body), auth: init.headers.Authorization };
+    return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 }); };
+  const out = await ai.complete({ system: "s", user: "u", fetchImpl: f,
+    env: { ORDER_AI_PROVIDER: "openai", OPENAI_API_KEY: "test-only", OPENAI_MODEL: "gpt-6-luna" } });
+  assert.equal(out, "ok");
+  assert.equal(sent.url, "https://api.openai.com/v1/chat/completions");
+  assert.equal(sent.body.temperature, undefined);
+  assert.ok(sent.body.max_completion_tokens >= 3000);
+  assert.equal(sent.body.reasoning_effort, "low");
+});
