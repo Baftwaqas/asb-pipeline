@@ -25,7 +25,7 @@ test("kilo spellings still work", () => {
 });
 
 test("the AI is told fruit names", () => {
-  assert.match(SYSTEM, /kalay = banana/);
+  assert.match(SYSTEM, /kalay\/kelly = banana/);
 });
 
 const { read } = require("../typedorder");

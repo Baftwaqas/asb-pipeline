@@ -75,7 +75,8 @@ const SYSTEM =
   "kg, g, pao, gaddi, darjan, piece, packet (aadha kilo = 0.5 kg, sawa kilo = 1.25 kg, dhai kilo = 2.5 kg, " +
   "ek pao = 1 pao). Common names: aloo/aaloo/aroo = potato, payaz/piyaz = onion, tamatar = tomato, adrak = ginger, " +
   "lehsan = garlic, hari mirch = green chilli, dhania = coriander, podina = mint, palak = spinach, bhindi = okra, " +
-  "lauki/loki = bottle gourd, gobi = cauliflower, kela/kele/kelay/kalay = banana, seb = apple, " +
+  "lauki/loki = bottle gourd, gobi = cauliflower, kela/kele/kelay/kalay/kelly = banana (sold by the dozen; 12 pieces = 1 dozen; never kala tarbooz), " +
+  "kala tarbooz = black watermelon (only when the customer says tarbooz), seb = apple, " +
   "kinnu/kino = kinnow, malta = orange, amrood = guava, anaar = pomegranate, angoor = grapes, papita = papaya, " +
   "khajoor = dates, aam = mango, nashpati = pear. Customers write in English, Roman Urdu or Urdu script; match " +
   "by meaning. dozen = darjan. If the customer's unit differs from how it is sold, still copy their qty and unit. " +
