@@ -56,3 +56,7 @@ test("pieces of something sold by the kilo: ask 'kitne kilo?'", async () => {
   assert.deepEqual(r.lines, []);
   assert.deepEqual(r.askUnit, [{ name: "Kela", unit: "kilo", said: "12 kele" }]);
 });
+
+test("kalay is banana, not kala tarbooz", () => {
+  assert.match(SYSTEM, /never kala tarbooz/);
+});
