@@ -37,6 +37,8 @@ const MENU = [
   { id: "ratelist:veg2", title: "🥬 Sabziyaan M–Z", description: "Har sabzi, M se Z tak" },
   { id: "ratelist:fruit", title: "🍎 Phal", description: "Har phal" },
 ];
+// With the order bot on, the menu ends with "order karein" (autoorder.js answers it).
+const ORDER_ROW = { id: "ratelist:order", title: "🛒 Order karein", description: "List se chunein ya pichla order dobara" };
 
 const MENU_TEXT =
   "Assalam-o-Alaikum! 🌿 Aaj ka rate list haazir hai.\n\n" +
@@ -94,7 +96,9 @@ async function part(db, key) {
     if (cur.length + l.length > 3500) { out.push(cur); cur = ""; }
     cur += l;
   }
-  cur += "\nOrder ke liye isi number par apni list bhej dein. Doosra hissa dekhne ke liye *rate list* likh dein.";
+  cur += String(process.env.ORDER_BOT || "").toLowerCase() === "on"
+    ? "\nOrder ke liye *order* likh dein. Doosra hissa dekhne ke liye *rate list* likh dein."
+    : "\nOrder ke liye isi number par apni list bhej dein. Doosra hissa dekhne ke liye *rate list* likh dein.";
   out.push(cur);
   return out;
 }
@@ -107,7 +111,7 @@ async function part(db, key) {
 async function onInbound(db, { phone, msg, send, env = process.env }) {
   if (!on(env)) return null;
   const chosen = msg?.interactive?.list_reply?.id || "";
-  if (chosen.startsWith("ratelist:")) {
+  if (chosen.startsWith("ratelist:") && chosen !== ORDER_ROW.id) {
     const texts = await part(db, chosen.slice("ratelist:".length));
     if (!texts) return null;
     for (const t of texts) await send.text(phone, t);
@@ -115,7 +119,8 @@ async function onInbound(db, { phone, msg, send, env = process.env }) {
   }
   const typed = msg?.type === "text" ? msg.text?.body : msg?.type === "button" ? msg.button?.text : null;
   if (!isAsk(typed)) return null;
-  await send.list(phone, MENU_TEXT, "Rate list dekhein", MENU);
+  const withOrder = String(env.ORDER_BOT || "").toLowerCase() === "on";
+  await send.list(phone, MENU_TEXT, "Rate list dekhein", withOrder ? [...MENU, ORDER_ROW] : MENU);
   return { did: "menu" };
 }
 

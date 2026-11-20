@@ -416,6 +416,45 @@ async function sendList(toPhone, bodyText, buttonText, rows, sectionTitle = "Chu
 }
 
 // ---------------------------------------------------------------------------
+// sendProductList — WhatsApp's own product list from the Meta catalogue: she
+// ticks items (+ / -), then sends a cart, which comes back as an "order"
+// message. Up to 30 products in up to 10 sections. 24-hour window only.
+// ---------------------------------------------------------------------------
+async function sendProductList(toPhone, headerText, bodyText, catalogId, sections) {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "interactive",
+    interactive: {
+      type: "product_list",
+      header: { type: "text", text: String(headerText).slice(0, 60) },
+      body: { text: String(bodyText).slice(0, 1024) },
+      action: {
+        catalog_id: String(catalogId),
+        sections: sections.slice(0, 10).map((s) => ({
+          title: String(s.title).slice(0, 24),
+          product_items: s.product_items.slice(0, 30),
+        })),
+      },
+    },
+  });
+}
+
+// sendCatalog — a "View catalogue" button that opens the whole catalogue.
+async function sendCatalog(toPhone, bodyText) {
+  return postMessage({
+    messaging_product: "whatsapp",
+    to: toPhone,
+    type: "interactive",
+    interactive: {
+      type: "catalog_message",
+      body: { text: String(bodyText).slice(0, 1024) },
+      action: { name: "catalog_message" },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // sendLocationRequest — a message with WhatsApp's own "Send location" button.
 // The customer's pin comes back as a "location" message. 24-hour window only.
 // ---------------------------------------------------------------------------
@@ -436,6 +475,8 @@ module.exports = {
   postMessage,
   sendButtons,
   sendList,
+  sendProductList,
+  sendCatalog,
   sendLocationRequest,
   SEND_TIMEOUT_MS,
   sendTemplate,
