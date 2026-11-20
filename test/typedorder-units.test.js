@@ -98,3 +98,9 @@ test("one retry after a short 'too many requests'", async () => {
   try { assert.equal(await ai.complete({ system: "s", user: "u", env, fetchImpl: f }), "ok"); } finally { console.error = realErr; }
   assert.equal(n, 2);
 });
+
+test("the compare option only accepts known model names, per call", () => {
+  const src = require("fs").readFileSync(require("path").join(__dirname, "..", "inbox.js"), "utf8");
+  assert.match(src, /anthropic: \/\^claude-\[a-z0-9.-\]\+\$\//);
+  assert.match(src, /error: "bad_model"/);
+});

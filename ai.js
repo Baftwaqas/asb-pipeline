@@ -73,7 +73,7 @@ async function completeOnce({ system, user, env = process.env, fetchImpl = fetch
     res = await fetchImpl(p.url, {
       method: "POST", signal: ctl.signal,
       headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model, max_tokens: maxTokens, temperature: 0, system, messages: [{ role: "user", content: user }] }),
+      body: JSON.stringify({ model, max_tokens: Math.max(maxTokens, 1500), temperature: 0, system, messages: [{ role: "user", content: user }] }),
     });
     body = await res.json().catch(() => ({}));
     if (!res.ok) throw Object.assign(new Error("provider status " + res.status), { code: "provider_error_" + res.status });
