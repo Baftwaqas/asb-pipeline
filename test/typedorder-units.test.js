@@ -119,8 +119,9 @@ test("openai: no temperature, max_completion_tokens, reasoning effort", async ()
   assert.equal(sent.body.reasoning_effort, "low");
 });
 
-test("the AI is told: plain chicken = Mix Boti, mg = grams, moti mirch is not shimla, ditto marks", () => {
-  assert.match(SYSTEM, /Plain 'chicken'.*Chicken Mix Boti/);
+test("the AI is told: kinds are asked (chicken too), mg = grams, moti mirch is not shimla, ditto marks", () => {
+  assert.match(SYSTEM, /TYPES: .*do not pick one: put it in choose/);
+  assert.match(SYSTEM, /chicken\/murghi -> Mix Boti \/ Boneless/);
   assert.match(SYSTEM, /250 mg = 250 g/);
   assert.match(SYSTEM, /'moti mirch' is Moti Mirch/);
   assert.match(SYSTEM, /ditto mark/);

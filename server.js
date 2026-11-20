@@ -181,6 +181,8 @@ async function takeOrder(msg, contact) {
     productList: (to, header, body, cat, sections) => wa.sendProductList(to, header, body, cat, sections)
       .then(log(`${body}\n[list: ${sections.map((s) => `${s.title} (${s.product_items.length})`).join(", ")}]`)),
     catalog: (to, body) => wa.sendCatalog(to, body).then(log(`${body}\n[View catalogue]`)),
+    list: (to, body, button, rows, section) => wa.sendList(to, body, button, rows, section)
+      .then(log(`${body}\n[${rows.map((r) => r.title).join("] [")}]`)),
   };
   const r = await autoorder.onInbound(db, { phone, msg, send, contactName: contact?.profile?.name || null, catalogId: catalogIdCache });
   if (r) console.log(`[order-bot] +${phone}: ${r.did}${r.orderNumber ? " " + r.orderNumber : ""}${r.error ? " - " + r.error : ""}`);

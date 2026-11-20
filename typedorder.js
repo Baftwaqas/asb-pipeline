@@ -94,7 +94,7 @@ function catalogueText(products) {
 const SYSTEM =
   "You read grocery orders written by customers in Karachi, in Roman Urdu, Urdu or English, " +
   "and match each item to the shop's product list. Reply with JSON only, no other text, in exactly this shape: " +
-  '{"items":[{"sku":"","qty":0,"unit":"","said":""}],"unknown":[],"unclear":[]}. ' +
+  '{"items":[{"sku":"","qty":0,"unit":"","said":""}],"choose":[{"said":"","qty":0,"unit":"","options":[""]}],"unknown":[],"unclear":[]}. ' +
   "Rules: sku must be copied exactly from the list. qty is what the customer asked for and unit is one of " +
   "kg, g, pao, gaddi, darjan, piece, packet (aadha kilo = 0.5 kg, sawa kilo = 1.25 kg, dhai kilo = 2.5 kg, " +
   "ek pao = 1 pao). Common names: aloo/aaloo/aroo = potato, payaz/piyaz = onion, tamatar = tomato, adrak = ginger, " +
@@ -103,8 +103,12 @@ const SYSTEM =
   "kala tarbooz = black watermelon (only when the customer says tarbooz), seb = apple, " +
   "kinnu/kino = kinnow, malta = orange, amrood = guava, anaar = pomegranate, angoor = grapes, papita = papaya, " +
   "khajoor = dates, aam = mango, nashpati = pear. Customers write in English, Roman Urdu or Urdu script; match " +
-  "by meaning. dozen = darjan. Plain 'chicken' / 'murghi' means Chicken Mix Boti unless the customer says boneless, " +
-  "breast or fillet (then Chicken Boneless); qeema/keema is not on the list unless listed. 'anday/andae/egg' = Eggs (sold by the dozen; " +
+  "by meaning. dozen = darjan. TYPES: if her words fit MORE THAN ONE product in the list (different " +
+  "types of the same thing, e.g. lehsan -> China / Desi / Peeled garlic; aloo -> Aloo White / Aloo Lal; gajar -> Lal / Peli; " +
+  "angoor -> the grape kinds; chicken/murghi -> Mix Boti / Boneless; palak, bengan, mirch, apple, tarbooz kinds) and she did " +
+  "NOT say which, do not pick one: put it in choose with her qty and unit and EVERY matching sku in options. If she named " +
+  "the type (lal aloo, safaid/pheeka aloo = Aloo White, desi lehsan, chhila lehsan = Peeled, boneless/breast/fillet = Chicken " +
+  "Boneless, boti/mix = Chicken Mix Boti) put it in items. qeema/keema is not on the list unless listed. 'anday/andae/egg' = Eggs (sold by the dozen; " +
   "6 eggs = half a dozen). 'mg' written for vegetables or fruit means grams (250 mg = 250 g). 'moti mirch' is Moti Mirch, " +
   "not Shimla Mirch; 'shimla' is Shimla Mirch. A ditto mark (\") after a number repeats the unit of the line above.  If the customer's unit differs from how it is sold, still copy their qty and unit. " +
   "If the same item is sold in more than one way (e.g. per kg and per dozen), choose the one that matches the " +
@@ -163,7 +167,23 @@ async function read(text, products, { env = process.env, fetchImpl = fetch, curr
     if (rounded) adjusted.push({ sku: p.sku, name: p.name_en, packs, size, unit: p.unit });
     merged.set(p.sku, (merged.get(p.sku) || 0) + packs);
   }
+  // "Which kind?" items: only real, sellable options whose units fit what she asked.
+  const choose = [];
+  for (const c of json.choose || []) {
+    const opts = [];
+    for (const sku of [...new Set((c?.options || []).map(String))]) {
+      const p = by.get(sku);
+      if (!p) continue;
+      const pk = packsExact(p, c.qty, c.unit);
+      if (pk) opts.push({ sku, name: p.name_en, packs: pk.packs });
+    }
+    const said = String(c?.said || "").trim();
+    if (opts.length === 1) merged.set(opts[0].sku, (merged.get(opts[0].sku) || 0) + opts[0].packs);
+    else if (opts.length > 1) choose.push({ said: said || opts[0].name, options: opts.slice(0, 10) });
+    else if (said) unclear.push(said);
+  }
   return {
+    choose: choose.slice(0, 5),
     lines: [...merged].map(([sku, packs]) => ({ sku, packs })),
     unknown: [...(json.unknown || [])].map(asText).filter(Boolean).slice(0, 10),
     unclear: unclear.slice(0, 10),

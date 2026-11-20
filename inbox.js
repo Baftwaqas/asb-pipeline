@@ -857,6 +857,7 @@ router.post("/api/inbox/order-ai/read", requireAuth, express.json({ limit: "20kb
         return { sku: l.sku, name: p?.name_en, qty: +(l.packs * size).toFixed(3), unit: p?.unit };
       }),
       unknown: r.unknown, unclear: r.unclear, askUnit: r.askUnit, adjusted: r.adjusted, why: r.why,
+      choose: (r.choose || []).map((c) => ({ said: c.said, options: c.options.map((o) => o.name) })),
     });
   } catch (e) {
     res.status(502).json({ error: e.code || "ai_failed", message: e.message });
@@ -867,9 +868,11 @@ router.post("/api/inbox/order-ai/read", requireAuth, express.json({ limit: "20kb
 router.get("/api/inbox/missing-items", requireAuth, async (req, res) => {
   try {
     const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
-    const rows = await require("./autoorder").missingReport(db, days);
+    const ao = require("./autoorder");
+    const rows = await ao.missingReport(db, days);
     if (!rows) return res.status(503).json({ error: "not_migrated", message: "Run the database update first (migration 023)." });
-    res.json({ days, items: rows });
+    const billTaps = await ao.billTapReport(db, days).catch(() => []);
+    res.json({ days, items: rows, billTaps });
   } catch (e) {
     console.error("[inbox] missing items failed:", e.message);
     res.status(500).json({ error: "server", message: e.message });
