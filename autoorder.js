@@ -95,6 +95,13 @@ const T = {
   cancelAsk: (num) => `Order *${num}* se sab items nikal diye. Poora order *cancel* kar doon?`,
   cancelled: (num) => `Order *${num}* cancel kar diya. 👍 Naye order ke liye *order* likh dein.`,
   kept: "Theek hai, order waise hi rahega. 👍",
+  restoreAsk: (o, delivery) => `Koi baat nahi! 🙂 Order *${o.order_number}* (${bill.money(o.total)}, ${delivery}) wapas laaun?`,
+  restored: (num) => `↩️ Order *${num}* wapas aa gaya.`,
+  restoreMergeAsk: (live, old) =>
+    `Aap ka naya order *${live.order_number}* pehle se hai. Purane order *${old.order_number}* ke items us mein shamil karun?`,
+  restoreLocked: (o, delivery, cutoffDay) =>
+    `Order *${o.order_number}* (${delivery}) cutoff ${cutoffDay} raat 9 baje ke baad wapas nahi aa sakta. Hamari team aap se rabta karegi. 🙏`,
+  noRestore: "Theek hai. 👍",
   remind: (o, delivery, cutoffDay) =>
     `⏰ Yaad dahani: aap ka order *${o.order_number}* (${delivery}) aaj ${cutoffDay} raat 9 baje band ho jayega. ` +
     "Kuch badalna ho to abhi likh dein — us ke baad tabdeeli nahi ho sakegi.",
@@ -129,6 +136,10 @@ const B = {
   change: (orderId) => ({ id: `order:change:${orderId}`, title: "✏️ Order badlein" }),
   cancelYes: (orderId) => ({ id: `order:cancel:${orderId}`, title: "🗑️ Haan, cancel" }),
   cancelNo: { id: "order:keep", title: "Nahi, rehne dein" },
+  restore: (orderId) => ({ id: `order:restore:${orderId}`, title: "↩️ Wapas lao" }),
+  restoreYes: (orderId) => ({ id: `order:restore:${orderId}`, title: "↩️ Haan, wapas lao" }),
+  restoreNo: { id: "order:norestore", title: "Nahi" },
+  restoreMerge: (orderId) => ({ id: `order:restoremerge:${orderId}`, title: "➕ Haan, shamil" }),
   split: (id) => ({ id: `order:split:${id}`, title: "🧾 Alag bill" }),
 };
 
@@ -400,12 +411,16 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       await db.query(`INSERT INTO order_drafts (phone, source, lines, status, order_id, note, decided_at)
                       VALUES ($1, 'typed', '[]', 'confirmed', $2, $3, now())`,
         [phone, o.id, changeNote({ order: o.id, number: o.order_number, before: await orderLines(db, o.id), cancelled: true })]);
-      await send.text(phone, T.cancelled(o.order_number));
+      await send.buttons(phone, T.cancelled(o.order_number), [B.restore(o.id)]);
       return { did: "order_cancelled", orderId: o.id, orderNumber: o.order_number };
     }
     return startChange(db, { phone, o, send });
   }
   if (id === B.cancelNo.id) { await send.text(phone, T.kept); return { did: "kept" }; }
+  if (id === B.restoreNo.id) { await send.text(phone, T.noRestore); return { did: "no_restore" }; }
+  // ↩️ undo a cancel - before the cut-off only; never a duplicate of a newer order
+  const rs = /^order:(restore|restoremerge):(\d+)$/.exec(id);
+  if (rs) return restoreOrder(db, { phone, orderId: Number(rs[2]), merge: rs[1] === "restoremerge", send, now });
   if (id === "order:changemenu") {
     const { editable } = await orders.upcomingOrdersFor(db, phone, now);
     if (!editable.length) return startMenu(db, { phone, send, now });
@@ -533,6 +548,15 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     }
   }
 
+  // "galti se cancel hua" / "cancel nahi karna tha" after a recent cancel: offer it back (before CHANGE_WORDS, which include "cancel").
+  if (typedText && REGRET.test(typedText)) {
+    const c = await recentCancel(db, phone, now);
+    if (c) {
+      await send.buttons(phone, T.restoreAsk(c, bill.deliveryPhrase(c.delivery_date)), [B.restoreYes(c.id), B.restoreNo]);
+      return { did: "restore_ask", orderId: c.id };
+    }
+  }
+
   // "tamatar hata dein" / "aloo 2 kg kar dein" with no order on screen: it is about her CONFIRMED order.
   if (typedText && ai.configured(env) && CHANGE_WORDS.test(typedText)) {
     const { editable, locked } = await orders.upcomingOrdersFor(db, phone, now);
@@ -602,6 +626,80 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     return showDraft(db, { phone, source: "typed", lines: r.lines, send, now, notes });
   }
   return null;
+}
+
+// "I cancelled by mistake" in the ways people write it.
+const REGRET = /(galti|ghalti|ghlti|galati|mistake|ghalat|wapas|wapis|waapas|undo|restore|cancel\s*(nahi|nhi|nai|na)\s*(karna|krna|chahiye|chahti)|nahi\s*karna\s*tha)/i;
+
+/** Her most recent cancelled order still on a delivery she can book (last 24 hours). */
+async function recentCancel(db, phone, now) {
+  const slot = schedule.deliveryFor(now || new Date());
+  const r = (await db.query(
+    `SELECT o.id, o.order_number, o.ceiling_total::float AS total, cy.delivery_date, cy.code
+       FROM orders o JOIN customers c ON c.id = o.customer_id JOIN cycles cy ON cy.id = o.cycle_id
+      WHERE c.phone = $1 AND o.status = 'cancelled' AND o.updated_at > now() - interval '24 hours'
+      ORDER BY o.updated_at DESC LIMIT 1`, [phone])).rows[0];
+  if (!r) return null;
+  r.id = Number(r.id);
+  return r.code === slot.code ? r : { ...r, lockedOut: true };
+}
+
+/** ↩️ Bring a cancelled order back (or join its items to her newer order), before the cut-off. */
+async function restoreOrder(db, { phone, orderId, merge, send, now }) {
+  const slot = schedule.deliveryFor(now || new Date());
+  let out;
+  try {
+    out = await db.tx(async (client) => {
+      const o = (await client.query(
+        `SELECT o.id, o.order_number, o.status::text AS status, o.customer_id, o.cycle_id, to_jsonb(o) ->> 'bill_label' AS bill_label,
+                o.ceiling_total::float AS total, cy.code, cy.status::text AS cycle_status, cy.delivery_date
+           FROM orders o JOIN customers c ON c.id = o.customer_id JOIN cycles cy ON cy.id = o.cycle_id
+          WHERE o.id = $1 AND c.phone = $2 FOR UPDATE OF o`, [orderId, phone])).rows[0];
+      if (!o) return { stale: true };
+      if (o.status !== "cancelled") return { already: o };
+      if (o.code !== slot.code || !["open", "draft"].includes(o.cycle_status)) return { locked: o };
+      await orders.lockHousehold(client, o.customer_id);
+      const live = await orders.findOpenOrder(client, o.customer_id, o.cycle_id, o.bill_label || null);
+      if (live && !merge) return { conflict: { live, old: o } };
+      const before = await orderLines(client, o.id);
+      if (live) {
+        const now2 = await orderLines(client, live.id);
+        const all = new Map(now2.map((l) => [l.sku, l.packs]));
+        for (const l of before) all.set(l.sku, Math.round(((all.get(l.sku) || 0) + l.packs) * 1e6) / 1e6);
+        const r = await orders.replaceOrderItems(client, { orderId: live.id, lines: [...all].map(([sku, packs]) => ({ sku, packs })), bookingCode: slot.code });
+        await client.query(`INSERT INTO order_drafts (phone, source, lines, status, order_id, note, decided_at)
+                            VALUES ($1, 'typed', $2, 'confirmed', $3, $4, now())`,
+          [phone, JSON.stringify(before), r.orderId, changeNote({ order: r.orderId, number: r.orderNumber, before: now2, joinedFrom: o.order_number })]);
+        return { merged: r.orderId };
+      }
+      await client.query(`UPDATE orders SET status = 'confirmed' WHERE id = $1 AND status = 'cancelled'`, [o.id]);
+      await client.query(`INSERT INTO order_drafts (phone, source, lines, status, order_id, note, decided_at)
+                          VALUES ($1, 'typed', $2, 'confirmed', $3, $4, now())`,
+        [phone, JSON.stringify(before), o.id, changeNote({ order: Number(o.id), number: o.order_number, before: [], restored: true })]);
+      return { restored: Number(o.id) };
+    });
+  } catch (e) {
+    if (e.locked) out = { lockedErr: true };
+    else { await send.text(phone, T.failed(e.userFacing ? e.message : "system mein masla aa gaya.")); return { did: "failed", error: e.message }; }
+  }
+  if (out.stale) { await send.text(phone, T.old); return { did: "stale" }; }
+  if (out.already) { await send.text(phone, T.restored(out.already.order_number)); return { did: "already_live" }; }
+  if (out.locked || out.lockedErr) {
+    const o = out.locked || { order_number: "", delivery_date: now };
+    await send.text(phone, T.restoreLocked(o, bill.deliveryPhrase(o.delivery_date), cutoffDayOf(o.delivery_date)));
+    return { did: "restore_locked", orderId };
+  }
+  if (out.conflict) {
+    await send.buttons(phone, T.restoreMergeAsk(out.conflict.live, out.conflict.old), [B.restoreMerge(orderId), B.restoreNo]);
+    return { did: "restore_merge_ask", orderId };
+  }
+  const id = out.restored || out.merged;
+  const forBill = await orders.loadOrderForBill(db, id);
+  const head = out.restored ? T.restored(forBill.order_number) : T.changed2(forBill.order_number);
+  const text = T.short(forBill, forBill.bill_label, false, bill.deliveryPhrase(forBill.delivery_date))
+    .replace(/^✅ Order mil gaya — \*[^*]+\*/, head);
+  await send.buttons(phone, text, [B.fullBill(id), B.change(id)]);
+  return { did: out.restored ? "restored" : "restore_merged", orderId: id, orderNumber: forBill.order_number };
 }
 
 // Words that mean "change my order" rather than a new list.
