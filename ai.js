@@ -78,10 +78,19 @@ async function completeOnce({ system, user, env = process.env, fetchImpl = fetch
     res = await fetchImpl(p.url, {
       method: "POST", signal: ctl.signal,
       headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model, max_tokens: Math.max(maxTokens, 1500), temperature: 0, system, messages: [{ role: "user", content: user }] }),
+      // Claude 5.x: no temperature/top_p/top_k; adaptive thinking is on, depth set by output_config.effort,
+      // and max_tokens must leave room for that thinking. Older Claude models keep temperature 0.
+      body: JSON.stringify(/^claude-[a-z]+-[5-9]/.test(model)
+        ? { model, max_tokens: Math.max(maxTokens, 4000), system, messages: [{ role: "user", content: user }],
+            output_config: { effort: env.ORDER_AI_REASONING_EFFORT || "low" } }
+        : { model, max_tokens: Math.max(maxTokens, 1500), temperature: 0, system, messages: [{ role: "user", content: user }] }),
     });
     body = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error("provider status " + res.status), { code: "provider_error_" + res.status });
+    if (!res.ok) {
+      console.error(`[order-ai] ${name} ${res.status}: ${String(body?.error?.message || "").slice(0, 300)}`);
+      throw Object.assign(new Error("provider status " + res.status), {
+        code: "provider_error_" + res.status, retryAfter: Number(res.headers?.get?.("retry-after")) || null });
+    }
     return (body?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
   } catch (e) {
     if (e.name === "AbortError") throw Object.assign(new Error("timeout"), { code: "timeout" });

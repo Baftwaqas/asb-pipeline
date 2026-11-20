@@ -125,3 +125,16 @@ test("the AI is told: plain chicken = Mix Boti, mg = grams, moti mirch is not sh
   assert.match(SYSTEM, /'moti mirch' is Moti Mirch/);
   assert.match(SYSTEM, /ditto mark/);
 });
+
+test("Claude 5.x: no temperature, effort via output_config, room for thinking", async () => {
+  const ai = require("../ai");
+  let body;
+  const f = async (_u, init) => { body = JSON.parse(init.body);
+    return new Response(JSON.stringify({ content: [{ type: "thinking", thinking: "…" }, { type: "text", text: "ok" }] }), { status: 200 }); };
+  const out = await ai.complete({ system: "s", user: "u", fetchImpl: f,
+    env: { ORDER_AI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "test-only", ANTHROPIC_MODEL: "claude-haiku-5-5" } });
+  assert.equal(out, "ok");
+  assert.equal(body.temperature, undefined);
+  assert.deepEqual(body.output_config, { effort: "low" });
+  assert.ok(body.max_tokens >= 4000);
+});
