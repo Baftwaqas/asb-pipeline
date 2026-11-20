@@ -2,22 +2,22 @@
 // ASB PIPELINE — schedule.js
 //
 // Which delivery an order belongs to. This is ASB's booking calendar, as set
-// by Waqas on 2026-09-28:
+// by Waqas on 2026-09-28, cut-off moved from 8pm to 9pm on 2026-11-20:
 //
-//   Sunday     before 8pm  -> Monday delivery      after 8pm -> Thursday
+//   Sunday     before 9pm  -> Monday delivery      after 9pm -> Thursday
 //   Monday                 -> Thursday
 //   Tuesday                -> Thursday
-//   Wednesday  before 8pm  -> Thursday delivery    after 8pm -> Monday
+//   Wednesday  before 9pm  -> Thursday delivery    after 9pm -> Monday
 //   Thursday               -> Monday
 //   Friday                 -> Monday
 //   Saturday               -> Monday
 //
-// Put another way there are exactly two cut-offs a week, Sunday 8pm and
-// Wednesday 8pm, and an order belongs to the FIRST cut-off still ahead of it.
+// Put another way there are exactly two cut-offs a week, Sunday 9pm and
+// Wednesday 9pm, and an order belongs to the FIRST cut-off still ahead of it.
 // Delivery is the day after that cut-off. Booking for the next delivery opens
 // the moment the previous cut-off passes.
 //
-// "Closes at 8pm" is read literally: 19:59:59 makes Monday, 20:00:00 does not.
+// "Closes at 9pm" is read literally: 20:59:59 makes Monday, 21:00:00 does not.
 //
 // All of this is Karachi time. Pakistan is UTC+5 all year with no daylight
 // saving, so a fixed offset is correct and needs no time-zone database - which
@@ -33,10 +33,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Cut-off weekday (0 = Sunday) -> the delivery it closes.
 const CUTOFFS = [
-  { dow: 0, label: "Monday" },    // Sunday 8pm closes Monday's delivery
-  { dow: 3, label: "Thursday" },  // Wednesday 8pm closes Thursday's delivery
+  { dow: 0, label: "Monday" },    // Sunday 9pm closes Monday's delivery
+  { dow: 3, label: "Thursday" },  // Wednesday 9pm closes Thursday's delivery
 ];
-const CUTOFF_HOUR = 20;
+const CUTOFF_HOUR = 21;
 
 /**
  * The delivery an order placed at `orderedAt` belongs to.
@@ -65,7 +65,7 @@ function deliveryFor(orderedAt = new Date()) {
     if (!cut) continue;
 
     const cutoffLocal = dayStart + CUTOFF_HOUR * 60 * 60 * 1000;
-    if (cutoffLocal <= local.getTime()) continue; // 8pm or later: missed it
+    if (cutoffLocal <= local.getTime()) continue; // 9pm or later: missed it
 
     const deliveryLocal = new Date(dayStart + DAY_MS);
     const deliveryDate = deliveryLocal.toISOString().slice(0, 10);

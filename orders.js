@@ -3,7 +3,7 @@
 //
 // The rules every order follows, whatever door it came in by:
 //
-//   * which delivery it belongs to     (schedule.js: Sunday 8pm / Wednesday 8pm)
+//   * which delivery it belongs to     (schedule.js: Sunday 9pm / Wednesday 9pm)
 //   * one bag per household per delivery (a second order merges into the first)
 //   * who the customer is               (phone is the identity)
 //   * what the customer is promised     (the ceiling, and the bazaar rate beside it)
@@ -194,34 +194,7 @@ async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy
   const customer = await upsertCustomer(client, { phone, name });
 
   // Look every product up first, so a bad line fails before anything is written.
-  const skus = lines.map((l) => l.sku);
-  const { rows: products } = await client.query(
-    `SELECT p.id, p.sku, p.name_en, p.name_ur, p.unit::text AS unit, p.is_active,
-            COALESCE(cp.ceiling_price, p.asb_price)   AS ceiling,
-            COALESCE(cp.market_price,  p.market_price) AS market,
-            (cp.ceiling_price IS NOT NULL)             AS already_published,
-            -- Same rule as community/classify.js: any Community signal.
-            (p.category = 'community-excluded' OR p.sku LIKE 'ASB-COM-%'
-             OR EXISTS (SELECT 1 FROM community_products cp
-                         WHERE cp.is_active AND cp.shopify_product_id = p.shopify_product_id)
-             OR EXISTS (SELECT 1 FROM community_variants cv
-                          JOIN community_products cp USING (shopify_product_id)
-                         WHERE cv.shopify_variant_id = p.shopify_variant_id AND cp.is_active)) AS is_community
-       FROM products p
-       LEFT JOIN cycle_prices cp ON cp.product_id = p.id AND cp.cycle_id = $2
-      WHERE p.sku = ANY($1)`,
-    [skus, cycle.id]
-  );
-  const bySku = new Map(products.map((p) => [p.sku, p]));
-  for (const l of lines) {
-    const p = bySku.get(l.sku);
-    if (!p) throw userError(`Unknown product ${l.sku}`);
-    // Community packs are not grocery: never typed into a grocery order.
-    if (p.is_community) throw userError(`${p.name_en} is a Community pack, not a grocery item`);
-    if (!p.is_active || !(Number(p.ceiling) > 0)) {
-      throw userError(`${p.name_en} is not for sale right now (no price in Shopify)`);
-    }
-  }
+  const bySku = await priceLines(client, lines, cycle.id);
 
   await lockHousehold(client, customer.id);
   let orderRow = await findOpenOrder(client, customer.id, cycle.id, billLabel);
@@ -278,6 +251,98 @@ async function saveInboxOrder(client, { phone, name, orderedAt, lines, enteredBy
   };
 }
 
+// ---------------------------------------------------------------------------
+// The products for these lines, at THIS delivery's price (published ceiling,
+// else today's ASB price). Refuses unknown, Community and unpriced products
+// before anything is written. Shared by new orders and order changes.
+// ---------------------------------------------------------------------------
+async function priceLines(client, lines, cycleId) {
+  const skus = lines.map((l) => l.sku);
+  const { rows: products } = await client.query(
+    `SELECT p.id, p.sku, p.name_en, p.name_ur, p.unit::text AS unit, p.is_active,
+            COALESCE(cp.ceiling_price, p.asb_price)   AS ceiling,
+            COALESCE(cp.market_price,  p.market_price) AS market,
+            (cp.ceiling_price IS NOT NULL)             AS already_published,
+            -- Same rule as community/classify.js: any Community signal.
+            (p.category = 'community-excluded' OR p.sku LIKE 'ASB-COM-%'
+             OR EXISTS (SELECT 1 FROM community_products cp
+                         WHERE cp.is_active AND cp.shopify_product_id = p.shopify_product_id)
+             OR EXISTS (SELECT 1 FROM community_variants cv
+                          JOIN community_products cp USING (shopify_product_id)
+                         WHERE cv.shopify_variant_id = p.shopify_variant_id AND cp.is_active)) AS is_community
+       FROM products p
+       LEFT JOIN cycle_prices cp ON cp.product_id = p.id AND cp.cycle_id = $2
+      WHERE p.sku = ANY($1)`,
+    [skus, cycleId]
+  );
+  const bySku = new Map(products.map((p) => [p.sku, p]));
+  for (const l of lines) {
+    const p = bySku.get(l.sku);
+    if (!p) throw userError(`Unknown product ${l.sku}`);
+    // Community packs are not grocery: never typed into a grocery order.
+    if (p.is_community) throw userError(`${p.name_en} is a Community pack, not a grocery item`);
+    if (!p.is_active || !(Number(p.ceiling) > 0)) {
+      throw userError(`${p.name_en} is not for sale right now (no price in Shopify)`);
+    }
+  }
+  return bySku;
+}
+
+// ---------------------------------------------------------------------------
+// The customer changed an order before its cut-off (founder, 20 Nov): its
+// items become exactly these lines. Only an order still being booked can be
+// changed - status pending/confirmed and its delivery still OPEN - checked
+// here, under the row lock, so a change can never land after the cut-off.
+// Returns { orderId, orderNumber } or throws userError('locked').
+// ---------------------------------------------------------------------------
+async function replaceOrderItems(client, { orderId, lines, bookingCode }) {
+  const o = (await client.query(
+    `SELECT o.id, o.order_number, o.status::text AS status, o.cycle_id, cy.code, cy.status::text AS cycle_status
+       FROM orders o JOIN cycles cy ON cy.id = o.cycle_id WHERE o.id = $1 FOR UPDATE OF o`, [orderId])).rows[0];
+  if (!o) throw userError("order not found");
+  if (!["pending", "confirmed"].includes(o.status) || !["open", "draft"].includes(o.cycle_status) ||
+      (bookingCode && o.code !== bookingCode)) {
+    throw Object.assign(userError("locked"), { locked: true });
+  }
+  const bySku = await priceLines(client, lines, o.cycle_id);
+  await client.query(`DELETE FROM order_items WHERE order_id = $1`, [o.id]);
+  for (const l of lines) {
+    const p = bySku.get(l.sku);
+    await client.query(
+      `INSERT INTO order_items (order_id, product_id, name_snapshot, name_ur_snapshot,
+                                unit, qty_ordered, ceiling_unit_price, market_unit_price)
+       VALUES ($1, $2, $3, $4, $5::unit_type, $6, $7, $8)
+       ON CONFLICT (order_id, product_id) DO UPDATE SET qty_ordered = order_items.qty_ordered + EXCLUDED.qty_ordered`,
+      [o.id, p.id, p.name_en, p.name_ur, p.unit, l.packs, p.ceiling, p.market]);
+    if (!p.already_published) {
+      await client.query(
+        `INSERT INTO cycle_prices (cycle_id, product_id, ceiling_price, market_price)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (cycle_id, product_id) DO NOTHING`,
+        [o.cycle_id, p.id, p.ceiling, p.market]);
+    }
+  }
+  await client.query(`SELECT asb_refresh_order_totals($1)`, [o.id]);
+  return { orderId: Number(o.id), orderNumber: o.order_number };
+}
+
+/** Her orders not yet delivered: the ones still being booked (editable) and the ones past their cut-off. */
+async function upcomingOrdersFor(db, phone, now) {
+  const slot = schedule.deliveryFor(now || new Date());
+  const label = (await hasBillLabel(db)) ? "o.bill_label" : "NULL::text";
+  const { rows } = await db.query(
+    `SELECT o.id, o.order_number, o.status::text AS status, ${label} AS bill_label,
+            o.ceiling_total::float AS total, cy.code, cy.status::text AS cycle_status, cy.delivery_date
+       FROM orders o JOIN customers c ON c.id = o.customer_id JOIN cycles cy ON cy.id = o.cycle_id
+      WHERE c.phone = $1 AND o.status::text NOT IN ('cancelled', 'delivered')
+        AND cy.delivery_date >= ($2::timestamptz AT TIME ZONE 'Asia/Karachi')::date
+      ORDER BY cy.delivery_date, (${label} IS NOT NULL), o.id`,
+    [phone, now || new Date()]);
+  for (const o of rows) o.id = Number(o.id);   // BIGSERIAL arrives as a string
+  const editable = rows.filter((o) => o.code === slot.code && ["pending", "confirmed"].includes(o.status) && ["open", "draft"].includes(o.cycle_status));
+  const locked = rows.filter((o) => !editable.includes(o));
+  return { editable, locked, slot };
+}
+
 // An error whose message is safe and useful to show the person at the inbox.
 function userError(message) {
   const e = new Error(message);
@@ -290,6 +355,9 @@ module.exports = {
   upsertCustomer,
   findOpenOrder,
   liveOrdersFor,
+  upcomingOrdersFor,
+  replaceOrderItems,
+  priceLines,
   hasBillLabel,
   lockHousehold,
   loadOrderForBill,

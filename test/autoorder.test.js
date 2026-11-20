@@ -171,7 +171,7 @@ test("a cart -> she checks it -> Theek hai -> a real order and the usual confirm
   assert.match(short.text, /^✅ Order mil gaya — \*ASB-\d+\*/);
   assert.match(short.text, /Zyada se zyada: \*Rs 213\*/);
   assert.doesNotMatch(short.text, /Tamatar/);
-  assert.deepEqual(short.buttons.map((b) => b.title), ["🧾 Poora bill"]);
+  assert.deepEqual(short.buttons.map((b) => b.title), ["🧾 Poora bill", "✏️ Order badlein"]);
   const o = (await db.query(`SELECT o.id, o.channel::text AS ch FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1`, [p])).rows;
   assert.equal(o.length, 1);
   const items = (await db.query(`SELECT p.sku, oi.qty_ordered::float AS q FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE oi.order_id = $1 ORDER BY p.sku`, [o[0].id])).rows;

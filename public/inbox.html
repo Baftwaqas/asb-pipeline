@@ -878,7 +878,7 @@ async function openThread(phone, keepScroll = false) {
     ctx.innerHTML = data.orders.map((o) =>
       `<span><b>${o.order_number}</b>` +
       (o.bill_label ? ` 🧾 ${String(o.bill_label).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])}` : '') +
-      ` ${o.status}` +
+      ` ${o.status}` + (o.changes ? ` · ✏️${o.changes}` : '') +
       (o.grand_total ? ` · Rs ${Math.round(o.grand_total).toLocaleString('en-PK')}` :
         o.ceiling_total ? ` · max Rs ${Math.round(o.ceiling_total).toLocaleString('en-PK')}` : '') +
       (o.cycle_code ? ` · ${o.cycle_code}` : '') + `</span>`
