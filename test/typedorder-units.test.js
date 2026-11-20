@@ -139,3 +139,19 @@ test("Claude 5.x: no temperature, effort via output_config, room for thinking", 
   assert.deepEqual(body.output_config, { effort: "low" });
   assert.ok(body.max_tokens >= 4000);
 });
+
+test("spoken fractions are settled in code: saray 2 = 2.5, sawa do = 2.25, paune 2 = 1.75, dedh, dhai", async () => {
+  const { normaliseQty } = require("../qtywords");
+  assert.equal(normaliseQty("1kg tomatoes ,saray 2 kilo lehson"), "1kg tomatoes ,2.5 kilo lehson");
+  assert.equal(normaliseQty("sawa do kilo aloo"), "2.25 kilo aloo");
+  assert.equal(normaliseQty("saade teen kg payaz"), "3.5 kg payaz");
+  assert.equal(normaliseQty("paune 2 kilo"), "1.75 kilo");
+  assert.equal(normaliseQty("dedh pao chicken, dhai kilo aloo"), "1.5 pao chicken, 2.5 kilo aloo");
+  assert.equal(normaliseQty("saare tamatar, do kilo aloo"), "saare tamatar, do kilo aloo");
+  // and the AI is handed the settled text
+  let seen = "";
+  const f = async (_u, init) => { seen = JSON.parse(init.body).messages[1].content;
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"items":[]}' } }] }), { status: 200 }); };
+  await read("saray 2 kilo lehson", products, { env, fetchImpl: f });
+  assert.match(seen, /CUSTOMER WROTE:\n2\.5 kilo lehson/);
+});
