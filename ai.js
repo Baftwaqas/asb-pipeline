@@ -8,7 +8,7 @@
 //
 //   ORDER_AI_PROVIDER = groq | xai | anthropic   (default: groq)
 //   GROQ_API_KEY + GROQ_MODEL / XAI_API_KEY + XAI_MODEL / ANTHROPIC_API_KEY + ANTHROPIC_MODEL
-//   ORDER_AI_TIMEOUT_MS (default 12000)
+//   ORDER_AI_TIMEOUT_MS (default 12000), ORDER_AI_REASONING_EFFORT (reasoning models; default low)
 // ============================================================================
 "use strict";
 
@@ -42,7 +42,10 @@ async function complete({ system, user, env = process.env, fetchImpl = fetch, ma
       res = await fetchImpl(p.url, {
         method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
-        body: JSON.stringify({ model, temperature: 0, max_tokens: maxTokens,
+        // Reasoning models (gpt-oss on Groq) think before they write: room for
+        // that, and low effort by default - reading an order is not hard.
+        body: JSON.stringify({ model, temperature: 0, max_tokens: Math.max(maxTokens, 3000),
+          ...(/gpt-oss|qwen3|reason/i.test(model) ? { reasoning_effort: env.ORDER_AI_REASONING_EFFORT || "low" } : {}),
           messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
       });
       body = await res.json().catch(() => ({}));
