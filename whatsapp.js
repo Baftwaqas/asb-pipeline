@@ -138,6 +138,10 @@ async function postMessage(body) {
       console.log(`[wa] send OK ${wamid}`);
       return result({ outcome: "accepted", phase: "response", httpStatus: res.status, wamid, data }, t0);
     }
+    if (data && data.success === true && !body?.to) {
+      // read receipts / typing indicators answer {"success":true}: that is a success, not an unknown
+      return result({ outcome: "accepted", phase: "response", httpStatus: res.status, wamid: null, data }, t0);
+    }
     console.error(`[wa] HTTP ${res.status} without a message id - outcome AMBIGUOUS`);
     return result({ outcome: "ambiguous", phase: "response", httpStatus: res.status, data: data || {},
                     errorMessage: "2xx without messages[0].id" }, t0);

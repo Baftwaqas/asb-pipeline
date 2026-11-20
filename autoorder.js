@@ -54,6 +54,8 @@ const T = {
   editAsk:
     "Koi baat nahi! Poora order dobara likhne ki zaroorat nahi. 🙂\n" +
     "Bas jo badalna hai woh likh dein, jaise:\n_tamatar 2 kg kar dein, kele hata dein, 1 kg piyaz aur_",
+  adjusted: (xs) => xs.map((x) => `_${x.name} ${x.qtyText} ke pack mein milta hai, is liye ${x.gotText} rakha._`).join("\n"),
+  askUnit: (xs) => xs.map((x) => `_${x.name} ${x.unit} ke hisaab se milta hai${x.said ? ` ("${x.said}")` : ""}. Kitne ${x.unit} chahiye? *Badlein* daba kar likh dein._`).join("\n"),
   emptied: "Order se sab items nikal diye gaye. Naye order ke liye *order* likh dein.",
   editNotUnderstood: "Maazrat, ye tabdeeli samajh nahi aayi. Dobara likh dein, jaise: _tamatar 2 kg kar dein_",
   confirmHead: "Aap ka order:",
@@ -276,9 +278,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
         return { did: "ai_failed", error: e.code || e.message };
       }
       if (r.why && r.why.length) console.log(`[order-bot] edit: ${r.lines.length} lines, unclear because: ${r.why.join("; ")}`);
-      const notes = [];
-      if (r.unknown.length) notes.push(T.unknown(r.unknown));
-      if (r.unclear.length) notes.push(T.unclear(r.unclear));
+      const notes = await notesFor(db, r);
       if (!r.lines.length) {
         if (notes.length) { await send.text(phone, T.editNotUnderstood); return { did: "edit_not_understood" }; }
         await send.text(phone, T.emptied);
@@ -302,12 +302,26 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       if (justAsked) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
       return null;
     }
-    const notes = [];
-    if (r.unknown.length) notes.push(T.unknown(r.unknown));
-    if (r.unclear.length) notes.push(T.unclear(r.unclear));
+    const notes = await notesFor(db, r);
     return showDraft(db, { phone, source: "typed", lines: r.lines, send, now, notes });
   }
   return null;
+}
+
+/** What to tell her above the order: not stocked, not understood, rounded to a pack, or "kitne kilo?". */
+async function notesFor(db, r) {
+  const notes = [];
+  if (r.unknown?.length) notes.push(T.unknown(r.unknown));
+  if (r.askUnit?.length) notes.push(T.askUnit(r.askUnit));
+  if (r.unclear?.length) notes.push(T.unclear(r.unclear));
+  if (r.adjusted?.length) {
+    notes.push(T.adjusted(r.adjusted.map((x) => ({
+      name: x.name,
+      qtyText: bill.qtyPhrase(1, x.unit, x.size),
+      gotText: bill.qtyPhrase(x.packs, x.unit, x.size),
+    }))));
+  }
+  return notes;
 }
 
 /** The draft she is changing: the bot's last message (last hour) asked for the change, and that draft is 'changed'. */

@@ -114,6 +114,7 @@ test("typed order -> the AI reads it -> the same confirmation -> Theek hai -> a 
     assert.match(c.text, /Ye hamare paas nahi: 2 kg chicken/);
     assert.match(c.text, /samajh nahi aaya[\s\S]*thoda dhania[\s\S]*1 kg made up/);
     assert.match(c.text, /Tamatar — 1 kg — Rs 198/);
+    assert.doesNotMatch(c.text, /pack mein milta hai/);
     assert.match(c.text, /Pakora Mirch — aadha kg — Rs 30/);
     await tap(p, c.buttons[0].id, "✅ Theek hai");
     await wait(p, 4);
