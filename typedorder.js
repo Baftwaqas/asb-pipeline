@@ -103,7 +103,10 @@ const SYSTEM =
   "kala tarbooz = black watermelon (only when the customer says tarbooz), seb = apple, " +
   "kinnu/kino = kinnow, malta = orange, amrood = guava, anaar = pomegranate, angoor = grapes, papita = papaya, " +
   "khajoor = dates, aam = mango, nashpati = pear. Customers write in English, Roman Urdu or Urdu script; match " +
-  "by meaning. dozen = darjan. If the customer's unit differs from how it is sold, still copy their qty and unit. " +
+  "by meaning. dozen = darjan. Plain 'chicken' / 'murghi' means Chicken Mix Boti unless the customer says boneless, " +
+  "breast or fillet (then Chicken Boneless); qeema/keema is not on the list unless listed. 'anday/andae/egg' = Eggs (sold by the dozen; " +
+  "6 eggs = half a dozen). 'mg' written for vegetables or fruit means grams (250 mg = 250 g). 'moti mirch' is Moti Mirch, " +
+  "not Shimla Mirch; 'shimla' is Shimla Mirch. A ditto mark (\") after a number repeats the unit of the line above.  If the customer's unit differs from how it is sold, still copy their qty and unit. " +
   "If the same item is sold in more than one way (e.g. per kg and per dozen), choose the one that matches the " +
   "customer's unit. If an item is not in the list, put just its name (no quantity, e.g. chicken) in unknown. " +
   "If an item has no quantity, put it in unclear. Never invent a sku.";
