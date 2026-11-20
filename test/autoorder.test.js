@@ -349,3 +349,39 @@ test("same delivery day: she is asked first - ➕ Usi mein shamil (told it joine
     `SELECT o.bill_label FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1 ORDER BY o.id`, [p])).rows.map((r) => r.bill_label);
   assert.deepEqual(labels, [null, "Ayesha — padosan"]);
 });
+
+test("an order is on her screen and she types the missing item: it is ADDED, nothing she ordered is lost", async () => {
+  Object.assign(process.env, { ORDER_AI_PROVIDER: "groq", GROQ_API_KEY: "test-only", GROQ_MODEL: "test-model" });
+  const realFetch = global.fetch;
+  let prompt = "", reply = null;
+  global.fetch = async (url, init) => {
+    if (String(url).includes("api.groq.com")) {
+      const b = JSON.parse(init.body); prompt = b.messages[0].content + "\n" + b.messages[1].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const p = "923009000014";
+    await say(p, "order");
+    await wait(p, 1);
+    await tap(p, "order:write");
+    await wait(p, 2);
+    reply = { items: [{ sku: "T1", qty: 1, unit: "kg", said: "1 kg tamatar" }], unknown: [], unclear: ["lehsan"] };
+    await say(p, "1 kg tamatar, lehsan");
+    await wait(p, 3);
+    assert.match(to(p)[2].text, /samajh nahi aaya[\s\S]*lehsan/);
+    // she answers with just the missing item
+    reply = { items: [{ sku: "T1", qty: 1, unit: "kg", said: "1 kg tamatar" }, { sku: "T2", qty: 500, unit: "g", said: "2 pao" }], unknown: [], unclear: [] };
+    await say(p, "2 pao mirch");
+    await wait(p, 4);
+    assert.match(prompt, /EDIT MODE/);
+    assert.match(prompt, /CURRENT ORDER[\s\S]*T1 \| Tamatar \| 1 kg/);
+    const c = to(p)[3].text;
+    assert.match(c, /Tamatar — 1 kg/);
+    assert.match(c, /Pakora Mirch — aadha kg/);
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.GROQ_API_KEY;
+  }
+});

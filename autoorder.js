@@ -315,7 +315,10 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
   // A typed order ("2kg aloo, aadha kilo adrak") -> the AI reader -> the same confirmation.
   // She tapped ✏️ Badlein and now types only the change ("tamatar 2 kg kar dein, kele hata dein").
   if (typedText && ai.configured(env)) {
-    const editing = await editingDraft(db, phone);
+    // Also: an order is on her screen waiting for Theek hai, and she types more items
+    // ("2 pao lehson" after "lehsan samajh nahi aaya") - that ADDS to it, never replaces it.
+    const editing = (await editingDraft(db, phone)) ||
+      (typed.looksLikeOrder(typedText) ? await pendingDraft(db, phone) : null);
     if (editing) {
       let r;
       try {
@@ -332,6 +335,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
         await send.text(phone, T.emptied);
         return { did: "emptied", draft: editing.id };
       }
+      if (editing.pending && sameLines(r.lines, editing.lines) && !notes.length) return null;   // nothing changed: leave it
       return showDraft(db, { phone, source: editing.source, lines: r.lines, send, now, notes });
     }
   }
@@ -451,6 +455,30 @@ async function editingDraft(db, phone) {
   if (!d) return null;
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
   return lines?.length ? { id: d.id, source: d.source, lines } : null;
+}
+
+/**
+ * The order on her screen right now, still waiting for Theek hai: her newest
+ * draft is 'shown' (not waiting for a bill name), under an hour old, and the
+ * bot has said nothing since showing it.
+ */
+async function pendingDraft(db, phone) {
+  const d = (await db.query(
+    `SELECT id, source, lines, status, note, created_at FROM order_drafts
+      WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
+  if (!d || d.status !== "shown" || d.note || new Date(d.created_at) < new Date(Date.now() - 3600e3)) return null;
+  const later = (await db.query(
+    `SELECT 1 FROM whatsapp_messages
+      WHERE phone = $1 AND direction = 'outbound' AND agent = 'order bot'
+        AND COALESCE(sent_at, received_at) > $2::timestamptz + interval '60 seconds' LIMIT 1`, [phone, d.created_at])).rowCount;
+  if (later) return null;
+  const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
+  return lines?.length ? { id: d.id, source: d.source, lines, pending: true } : null;
+}
+
+function sameLines(a, b) {
+  const key = (xs) => xs.map((l) => `${l.sku}:${Math.round(Number(l.packs) * 1e4)}`).sort().join("|");
+  return key(a || []) === key(b || []);
 }
 
 /** Did the bot just say "apni list likh dein" (last hour)? */
