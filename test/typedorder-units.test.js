@@ -118,3 +118,10 @@ test("openai: no temperature, max_completion_tokens, reasoning effort", async ()
   assert.ok(sent.body.max_completion_tokens >= 3000);
   assert.equal(sent.body.reasoning_effort, "low");
 });
+
+test("the AI is told: plain chicken = Mix Boti, mg = grams, moti mirch is not shimla, ditto marks", () => {
+  assert.match(SYSTEM, /Plain 'chicken'.*Chicken Mix Boti/);
+  assert.match(SYSTEM, /250 mg = 250 g/);
+  assert.match(SYSTEM, /'moti mirch' is Moti Mirch/);
+  assert.match(SYSTEM, /ditto mark/);
+});
