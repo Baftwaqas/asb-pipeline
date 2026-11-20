@@ -831,6 +831,7 @@ router.post("/api/inbox/order-ai/read", requireAuth, express.json({ limit: "20kb
   const COMPARE = {
     groq: /^(openai\/gpt-oss-(120b|20b)|qwen\/[\w.-]+|llama-[\w.-]+|meta-llama\/[\w.-]+|moonshotai\/[\w.-]+)$/,
     anthropic: /^claude-[a-z0-9.-]+$/,
+    openai: /^(gpt|o\d)[a-z0-9.-]*$/,
   };
   const prov = String(req.body?.provider || "");
   if (prov) {
