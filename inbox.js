@@ -284,6 +284,8 @@ router.get("/api/inbox/thread/:phone", requireAuth, async (req, res) => {
       db.query(
         `SELECT o.order_number, o.status, o.ceiling_total, o.grand_total,
                 to_jsonb(o) ->> 'bill_label' AS bill_label,
+                (SELECT count(*)::int FROM order_drafts d
+                  WHERE d.order_id = o.id AND d.status = 'confirmed' AND d.note LIKE 'change:%') AS changes,
                 c.code AS cycle_code, c.delivery_date
            FROM orders o
            JOIN customers cu ON cu.id = o.customer_id

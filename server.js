@@ -752,6 +752,16 @@ function start() {
 return app.listen(...(BIND_HOST ? [PORT, BIND_HOST] : [PORT]), async () => {
   console.log(`ASB Pipeline listening on ${BIND_HOST ? `${BIND_HOST}:` : "port "}${PORT} (Graph ${wa.graphVersion})`);
 
+  // ⏰ Cut-off reminders for customers who keep changing orders (autoorder.js).
+  setInterval(() => {
+    const { logOutbound } = require("./inbox");
+    const send = { text: (to, body) => wa.sendText(to, body)
+      .then((r) => logOutbound({ phone: to, body, agent: "order bot", wamid: r.wamid, ok: r.ok, payload: r.data }).then(() => r)) };
+    autoorder.remindFrequentChangers(db, { send })
+      .then((r) => { if (r.sent) console.log(`[order-bot] cut-off reminders sent: ${r.sent}`); })
+      .catch((e) => console.error("[order-bot] reminders failed:", e.message));
+  }, 10 * 60 * 1000).unref();
+
   // Fail loudly at boot rather than silently at the first message.
   if (!process.env.META_APP_SECRET) {
     console.error(

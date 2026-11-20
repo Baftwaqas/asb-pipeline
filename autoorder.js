@@ -80,6 +80,24 @@ const T = {
       `Is se zyada aap kabhi nahi denge — ye hamara wada hai.`,
     ].join("\n");
   },
+  changeAsk: (o, delivery) =>
+    `✏️ Order *${o.order_number}* (${delivery}) mein kya badalna hai?\n` +
+    "Bas wohi likh dein, jaise:\n_tamatar 2 kg kar dein, kele hata dein, 1 kg piyaz aur_",
+  changeHead: (num) => `✏️ Order *${num}* ab aisa hoga:`,
+  changed2: (num) => `✏️ Order *${num}* badal diya.`,
+  whichOrder: "Kaunsa order badalna hai? 👇",
+  locked: (o, delivery, cutoffDay) =>
+    `Aap ka order *${o.order_number}* (${delivery}) band ho chuka hai — cutoff ${cutoffDay} raat 9 baje tha, ` +
+    "saman khareeda ja raha hai. Is mein tabdeeli ke liye hamari team aap se rabta karegi. 🙏\n\n" +
+    "Naye items agli delivery ke liye chahiye hon to likh dein.",
+  lockedNew: (delivery, cutoffDay) =>
+    `_Aap ka ${delivery} ka order band ho chuka hai (cutoff ${cutoffDay} raat 9 baje). Ye naya order agli delivery ke liye hai._`,
+  cancelAsk: (num) => `Order *${num}* se sab items nikal diye. Poora order *cancel* kar doon?`,
+  cancelled: (num) => `Order *${num}* cancel kar diya. 👍 Naye order ke liye *order* likh dein.`,
+  kept: "Theek hai, order waise hi rahega. 👍",
+  remind: (o, delivery, cutoffDay) =>
+    `⏰ Yaad dahani: aap ka order *${o.order_number}* (${delivery}) aaj ${cutoffDay} raat 9 baje band ho jayega. ` +
+    "Kuch badalna ho to abhi likh dein — us ke baad tabdeeli nahi ho sakegi.",
   emptied: "Order se sab items nikal diye gaye. Naye order ke liye *order* likh dein.",
   aiBusy: "Shukriya! 🙏 Aap ka order mil gaya hai. Hamari team thori dair mein confirm kar degi.",
   editNotUnderstood: "Maazrat, ye tabdeeli samajh nahi aayi. Dobara likh dein, jaise: _tamatar 2 kg kar dein_",
@@ -99,6 +117,9 @@ const B = {
   edit: (id) => ({ id: `order:edit:${id}`, title: "✏️ Badlein" }),
   merge: (id) => ({ id: `order:merge:${id}`, title: "➕ Usi mein shamil" }),
   fullBill: (orderId) => ({ id: `order:bill:${orderId}`, title: "🧾 Poora bill" }),
+  change: (orderId) => ({ id: `order:change:${orderId}`, title: "✏️ Order badlein" }),
+  cancelYes: (orderId) => ({ id: `order:cancel:${orderId}`, title: "🗑️ Haan, cancel" }),
+  cancelNo: { id: "order:keep", title: "Nahi, rehne dein" },
   split: (id) => ({ id: `order:split:${id}`, title: "🧾 Alag bill" }),
 };
 
@@ -164,15 +185,33 @@ function draftText(lines, products, deliveryDate) {
   return [T.confirmHead, ...rows, ``, `Total: *${bill.money(total)}* (zyada se zyada)`, T.confirmFoot(bill.deliveryPhrase(deliveryDate))].join("\n");
 }
 
-async function newDraft(db, phone, source, lines) {
+async function newDraft(db, phone, source, lines, note = null) {
   // a new draft replaces any older one still waiting
   await db.query(`UPDATE order_drafts SET status = 'expired', decided_at = now() WHERE phone = $1 AND status = 'shown'`, [phone]);
   return (await db.query(
-    `INSERT INTO order_drafts (phone, source, lines) VALUES ($1, $2, $3) RETURNING id`,
-    [phone, source, JSON.stringify(lines)])).rows[0].id;
+    `INSERT INTO order_drafts (phone, source, lines, note) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [phone, source, JSON.stringify(lines), note])).rows[0].id;
 }
 
-async function showDraft(db, { phone, source, lines, send, now, notes = [] }) {
+// A draft that CHANGES a confirmed order carries it in its note:
+//   change:{"order":12,"number":"ASB-001030","before":[...lines]}
+// ("choose:" notes carry it as changeOf while kinds are being asked.)
+const changeNote = (c) => (c ? "change:" + JSON.stringify(c) : null);
+function changeOfNote(note) {
+  const n = String(note || "");
+  try {
+    if (n.startsWith("change:")) return JSON.parse(n.slice(7));
+    if (n.startsWith("choose:")) return JSON.parse(n.slice(7)).changeOf || null;
+  } catch (_) { /* not ours */ }
+  return null;
+}
+const cutoffDayOf = (deliveryDate) => {
+  // DATE columns arrive as local midnight; a 'YYYY-MM-DD' string is read the same way
+  const d = typeof deliveryDate === "string" ? new Date(deliveryDate + "T00:00:00") : new Date(deliveryDate);
+  return ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][d.getDay()];   // the day before
+};
+
+async function showDraft(db, { phone, source, lines, send, now, notes = [], changeOf = null }) {
   const products = await forSale(db);
   const sellable = new Set(products.map((p) => p.sku));
   const gone = lines.filter((l) => !sellable.has(l.sku));
@@ -181,9 +220,10 @@ async function showDraft(db, { phone, source, lines, send, now, notes = [] }) {
     await send.text(phone, T.failed("in mein se koi cheez abhi available nahi."));
     return { did: "nothing_for_sale" };
   }
-  const id = await newDraft(db, phone, source, keep);
+  const id = await newDraft(db, phone, source, keep, changeNote(changeOf));
   const slot = schedule.deliveryFor(now);
   let text = draftText(keep, products, slot.deliveryDate);
+  if (changeOf) text = text.replace(T.confirmHead, T.changeHead(changeOf.number));
   if (gone.length) text = `_${gone.length} cheez(ein) abhi available nahi, is liye nikal di gayi._\n\n` + text;
   if (notes.length) text = notes.join("\n") + "\n\n" + text;
   await send.buttons(phone, text, [B.ok(id), B.edit(id)]);
@@ -260,7 +300,8 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     const draftId = Number(m[2]);
     // Theek hai, but she already has an order for that delivery: ask before mixing them.
     if (m[1] === "ok") {
-      const d = (await db.query(`SELECT status FROM order_drafts WHERE id = $1 AND phone = $2`, [draftId, phone])).rows[0];
+      const d = (await db.query(`SELECT status, note FROM order_drafts WHERE id = $1 AND phone = $2`, [draftId, phone])).rows[0];
+      if (d?.status === "shown" && String(d.note || "").startsWith("change:")) return applyChange(db, { phone, draftId, now, send });
       if (d?.status === "shown") {
         const live = await orders.liveOrdersFor(db, phone, now);
         const main = live.find((o) => !o.bill_label) || live[0];
@@ -291,6 +332,39 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       return { did: "changed", draft: draftId };
     }
     return placeOrder(db, { phone, draftId, contactName, now, send });
+  }
+
+  // ✏️ Order badlein (on the confirmation), 🗑️ cancel, keep.
+  const ch = /^order:(change|cancel):(\d+)$/.exec(id);
+  if (ch) {
+    const { editable, locked } = await orders.upcomingOrdersFor(db, phone, now);
+    const o = editable.find((x) => x.id === Number(ch[2]));
+    if (!o) {
+      const l = locked.find((x) => x.id === Number(ch[2]));
+      if (l) { await send.text(phone, T.locked(l, bill.deliveryPhrase(l.delivery_date), cutoffDayOf(l.delivery_date))); return { did: "locked", orderId: l.id }; }
+      await send.text(phone, T.old); return { did: "stale" };
+    }
+    if (ch[1] === "cancel") {
+      const r = await db.query(
+        `UPDATE orders o SET status = 'cancelled' FROM cycles cy
+          WHERE o.id = $1 AND cy.id = o.cycle_id AND o.status IN ('pending','confirmed') AND cy.status IN ('open','draft') RETURNING o.id`, [o.id]);
+      if (!r.rowCount) { await send.text(phone, T.locked(o, bill.deliveryPhrase(o.delivery_date), cutoffDayOf(o.delivery_date))); return { did: "locked" }; }
+      await db.query(`INSERT INTO order_drafts (phone, source, lines, status, order_id, note, decided_at)
+                      VALUES ($1, 'typed', '[]', 'confirmed', $2, $3, now())`,
+        [phone, o.id, changeNote({ order: o.id, number: o.order_number, before: await orderLines(db, o.id), cancelled: true })]);
+      await send.text(phone, T.cancelled(o.order_number));
+      return { did: "order_cancelled", orderId: o.id, orderNumber: o.order_number };
+    }
+    return startChange(db, { phone, o, send });
+  }
+  if (id === B.cancelNo.id) { await send.text(phone, T.kept); return { did: "kept" }; }
+  // the order to change, when the number has several bills
+  const cw = /^order:changewhich:(\d+)$/.exec(id);
+  if (cw) {
+    const { editable } = await orders.upcomingOrdersFor(db, phone, now);
+    const o = editable.find((x) => x.id === Number(cw[1]));
+    if (!o) { await send.text(phone, T.old); return { did: "stale" }; }
+    return startChange(db, { phone, o, send });
   }
 
   // 🧾 Poora bill: the itemised bill for one of HER orders.
@@ -375,14 +449,56 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       if (r.why && r.why.length) console.log(`[order-bot] edit: ${r.lines.length} lines, unclear because: ${r.why.join("; ")}`);
       await recordMissing(db, phone, r.unknown, typedText, "edit");
       const notes = await notesFor(db, r);
-      if (r.choose?.length) return askChoices(db, { phone, source: editing.source, lines: r.lines, choose: r.choose, notes, send });
+      if (r.choose?.length) return askChoices(db, { phone, source: editing.source, lines: r.lines, choose: r.choose, notes, send, changeOf: editing.changeOf });
       if (!r.lines.length) {
         if (notes.length) { await send.text(phone, T.editNotUnderstood); return { did: "edit_not_understood" }; }
+        if (editing.changeOf) {
+          await send.buttons(phone, T.cancelAsk(editing.changeOf.number), [B.cancelYes(editing.changeOf.order), B.cancelNo]);
+          return { did: "cancel_ask", orderId: editing.changeOf.order };
+        }
         await send.text(phone, T.emptied);
         return { did: "emptied", draft: editing.id };
       }
       if (editing.pending && sameLines(r.lines, editing.lines) && !notes.length) return null;   // nothing changed: leave it
-      return showDraft(db, { phone, source: editing.source, lines: r.lines, send, now, notes });
+      return showDraft(db, { phone, source: editing.source, lines: r.lines, send, now, notes, changeOf: editing.changeOf });
+    }
+  }
+
+  // "tamatar hata dein" / "aloo 2 kg kar dein" with no order on screen: it is about her CONFIRMED order.
+  if (typedText && ai.configured(env) && CHANGE_WORDS.test(typedText)) {
+    const { editable, locked } = await orders.upcomingOrdersFor(db, phone, now);
+    if (editable.length > 1) {
+      await send.list(phone, T.whichOrder, "Order chunein", editable.slice(0, 10).map((o) => ({
+        id: `order:changewhich:${o.id}`, title: o.bill_label ? String(o.bill_label).slice(0, 24) : "Mera order",
+        description: `${o.order_number} — ${bill.money(o.total)}` })), "Orders");
+      return { did: "which_order", orders: editable.length };
+    }
+    if (editable.length === 1) {
+      const o = editable[0];
+      const before = await orderLines(db, o.id);
+      let r;
+      try {
+        r = await typed.read(typedText, await forSale(db), { env, fetchImpl, current: before });
+      } catch (e) {
+        await send.text(phone, T.aiBusy);
+        return { did: "ai_failed", error: e.code || e.message };
+      }
+      const changeOf = { order: o.id, number: o.order_number, before };
+      await recordMissing(db, phone, r.unknown, typedText, "edit");
+      const notes = await notesFor(db, r);
+      if (r.choose?.length) return askChoices(db, { phone, source: "typed", lines: r.lines, choose: r.choose, notes, send, changeOf });
+      if (!r.lines.length) {
+        if (notes.length) { await send.text(phone, T.editNotUnderstood); return { did: "edit_not_understood" }; }
+        await send.buttons(phone, T.cancelAsk(o.order_number), [B.cancelYes(o.id), B.cancelNo]);
+        return { did: "cancel_ask", orderId: o.id };
+      }
+      if (sameLines(r.lines, before) && !notes.length) return null;
+      return showDraft(db, { phone, source: "typed", lines: r.lines, send, now, notes, changeOf });
+    }
+    if (locked.length) {
+      const l = locked[0];
+      await send.text(phone, T.locked(l, bill.deliveryPhrase(l.delivery_date), cutoffDayOf(l.delivery_date)));
+      return { did: "locked", orderId: l.id };   // the team sees her message too
     }
   }
 
@@ -409,9 +525,67 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       return null;
     }
     const notes = await notesFor(db, r);
+    // her earlier order is already past its cut-off: say this one is for the next delivery
+    const { editable, locked } = await orders.upcomingOrdersFor(db, phone, now);
+    if (!editable.length && locked.length) {
+      notes.unshift(T.lockedNew(bill.deliveryPhrase(locked[0].delivery_date), cutoffDayOf(locked[0].delivery_date)));
+    }
     return showDraft(db, { phone, source: "typed", lines: r.lines, send, now, notes });
   }
   return null;
+}
+
+// Words that mean "change my order" rather than a new list.
+const CHANGE_WORDS = /\b(hata|hatain|hatayen|hata\s*d[eo]i?n?|nikal|nikaal|kam\s*kar|kam\s*kr|cancel|nahi\s*chahiye|nai\s*chahiye|na\s*bhej|mat\s*bhej|remove|badal|badl|change|kar\s*d[eo]i?n?|kardo|kardein|kr\s*d[eo])\b/i;
+
+/** The lines of a saved order, as packs - what a change starts from. */
+async function orderLines(db, orderId) {
+  return (await db.query(
+    `SELECT p.sku, oi.qty_ordered::float AS packs FROM order_items oi JOIN products p ON p.id = oi.product_id
+      WHERE oi.order_id = $1 ORDER BY oi.id`, [orderId])).rows.map((r) => ({ sku: r.sku, packs: Number(r.packs) }));
+}
+
+/** ✏️ Order badlein: her order becomes a draft she changes by typing just the change. */
+async function startChange(db, { phone, o, send }) {
+  const before = await orderLines(db, o.id);
+  const id = await newDraft(db, phone, "typed", before, changeNote({ order: o.id, number: o.order_number, before }));
+  await db.query(`UPDATE order_drafts SET status = 'changed', decided_at = now() WHERE id = $1`, [id]);
+  await send.text(phone, T.changeAsk(o, bill.deliveryPhrase(o.delivery_date)));
+  return { did: "change_ask", orderId: o.id, draft: id };
+}
+
+/** Theek hai on a changed order: its items become the draft's, if still before the cut-off. */
+async function applyChange(db, { phone, draftId, now, send }) {
+  let res;
+  try {
+    res = await db.tx(async (client) => {
+      const d = (await client.query(`SELECT * FROM order_drafts WHERE id = $1 AND phone = $2 FOR UPDATE`, [draftId, phone])).rows[0];
+      if (!d || d.status !== "shown") return { stale: true, status: d?.status };
+      const c = changeOfNote(d.note);
+      const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
+      const r = await orders.replaceOrderItems(client, { orderId: c.order, lines, bookingCode: schedule.deliveryFor(now).code });
+      await client.query(`UPDATE order_drafts SET status = 'confirmed', order_id = $2, decided_at = now() WHERE id = $1`, [draftId, r.orderId]);
+      return { orderId: r.orderId };
+    });
+  } catch (e) {
+    if (e.locked) {
+      const d = (await db.query(`SELECT note FROM order_drafts WHERE id = $1`, [draftId])).rows[0];
+      const c = changeOfNote(d?.note);
+      await db.query(`UPDATE order_drafts SET status = 'failed', decided_at = now() WHERE id = $1`, [draftId]);
+      const { locked } = await orders.upcomingOrdersFor(db, phone, now);
+      const l = locked.find((x) => x.id === c?.order) || { order_number: c?.number, delivery_date: now };
+      await send.text(phone, T.locked(l, bill.deliveryPhrase(l.delivery_date), cutoffDayOf(l.delivery_date)));
+      return { did: "locked", orderId: c?.order };
+    }
+    await send.text(phone, T.failed(e.userFacing ? e.message : "system mein masla aa gaya."));
+    return { did: "failed", draft: draftId, error: e.message };
+  }
+  if (res.stale) { await send.text(phone, res.status === "confirmed" ? T.stale : T.old); return { did: "stale", draft: draftId }; }
+  const forBill = await orders.loadOrderForBill(db, res.orderId);
+  const text = T.short(forBill, forBill.bill_label, false, bill.deliveryPhrase(forBill.delivery_date))
+    .replace(/^✅ Order mil gaya — \*[^*]+\*/, T.changed2(forBill.order_number));
+  await send.buttons(phone, text, [B.fullBill(res.orderId), B.change(res.orderId)]);
+  return { did: "order_changed", orderId: res.orderId, orderNumber: forBill.order_number };
 }
 
 /** Items we do not sell, kept for the founder's weekly "most asked" list. Never fails the order. */
@@ -457,6 +631,42 @@ async function billTapReport(db, days = 30) {
   return rows;
 }
 
+/**
+ * ⏰ A reminder before the cut-off - ONLY for customers who keep changing their
+ * orders (founder, 20 Nov): 3 or more changes in the last 30 days. Sent on the
+ * cut-off day between 6 and 9 pm, once per order, and only inside WhatsApp's
+ * 24-hour window (outside it Meta needs an approved template; those are logged
+ * and skipped). Switch: ORDER_REMINDERS=off to stop it.
+ */
+async function remindFrequentChangers(db, { send, now = new Date(), env = process.env, minChanges = 3 }) {
+  if (!on(env) || String(env.ORDER_REMINDERS || "on").toLowerCase() === "off" || !(await ready(db))) return { sent: 0 };
+  const slot = schedule.deliveryFor(now);
+  const hoursLeft = (new Date(slot.locksAt).getTime() - now.getTime()) / 3600e3;
+  if (!(hoursLeft > 0 && hoursLeft <= 3)) return { sent: 0 };
+  const { rows } = await db.query(
+    `WITH changers AS (
+       SELECT phone FROM order_drafts
+        WHERE status = 'confirmed' AND note LIKE 'change:%' AND decided_at > now() - interval '30 days'
+        GROUP BY phone HAVING count(*) >= $2)
+     SELECT o.id, o.order_number, c.phone, cy.delivery_date,
+            (SELECT max(received_at) FROM whatsapp_messages w WHERE w.phone = c.phone AND w.direction = 'inbound') AS last_in
+       FROM orders o JOIN customers c ON c.id = o.customer_id JOIN cycles cy ON cy.id = o.cycle_id
+      WHERE cy.code = $1 AND o.status IN ('pending','confirmed') AND c.phone IN (SELECT phone FROM changers)
+        AND NOT EXISTS (SELECT 1 FROM whatsapp_messages w WHERE w.phone = c.phone AND w.direction = 'outbound'
+                          AND w.agent = 'order bot' AND w.body_preview LIKE '⏰ Yaad dahani: aap ka order *' || o.order_number || '*%')`,
+    [slot.code, minChanges]);
+  let sent = 0;
+  for (const o of rows) {
+    if (!o.last_in || now.getTime() - new Date(o.last_in).getTime() > 23.5 * 3600e3) {
+      console.log(`[order-bot] reminder skipped for ${o.order_number}: outside the 24h window (needs a template)`);
+      continue;
+    }
+    await send.text(o.phone, T.remind(o, bill.deliveryPhrase(o.delivery_date), cutoffDayOf(o.delivery_date)));
+    sent++;
+  }
+  return { sent, candidates: rows.length };
+}
+
 /** The founder's list: most-asked missing items over the last N days. */
 async function missingReport(db, days = 7) {
   if (!(await db.query(`SELECT to_regclass('missing_items') IS NOT NULL AS ok`)).rows[0].ok) return null;
@@ -492,7 +702,7 @@ async function placeOrder(db, { phone, draftId, contactName, now, send, billLabe
     // itemised bill is one tap away (founder, 20 Nov) - and every tap is kept
     // (the button press is saved with the message) to see who stops checking.
     await send.buttons(phone, T.short(forBill, forBill.bill_label, r.merged, bill.deliveryPhrase(forBill.delivery_date)),
-      [B.fullBill(r.orderId)]);
+      [B.fullBill(r.orderId), B.change(r.orderId)]);
     return { did: "ordered", draft: draftId, orderId: r.orderId, orderNumber: forBill.order_number,
              merged: Boolean(r.merged), billLabel: forBill.bill_label || null };
   } catch (e) {
@@ -521,9 +731,9 @@ async function awaitingLabel(db, phone) {
 // (founder, 20 Nov). The understood items wait in a draft; the questions wait
 // in its note, one at a time; when the last is answered she sees the order.
 // ---------------------------------------------------------------------------
-async function askChoices(db, { phone, source, lines, choose, notes = [], send }) {
+async function askChoices(db, { phone, source, lines, choose, notes = [], send, changeOf = null }) {
   const id = await newDraft(db, phone, source, lines);
-  await db.query(`UPDATE order_drafts SET note = $2 WHERE id = $1`, [id, "choose:" + JSON.stringify({ queue: choose, notes })]);
+  await db.query(`UPDATE order_drafts SET note = $2 WHERE id = $1`, [id, "choose:" + JSON.stringify({ queue: choose, notes, changeOf })]);
   return askNext(db, { phone, id, choose, send });
 }
 
@@ -555,7 +765,7 @@ async function choosingDraft(db, phone, draftId = null) {
   if (!d) return null;
   const st = JSON.parse(d.note.slice("choose:".length));
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
-  return { id: d.id, source: d.source, lines: lines || [], queue: st.queue || [], notes: st.notes || [] };
+  return { id: d.id, source: d.source, lines: lines || [], queue: st.queue || [], notes: st.notes || [], changeOf: st.changeOf || null };
 }
 
 /** She picked a kind (tap, or typed its name): add it, then the next question or the order. */
@@ -569,12 +779,12 @@ async function pickKind(db, { phone, d, sku, send, now }) {
   const queue = d.queue.slice(1);
   if (queue.length) {
     await db.query(`UPDATE order_drafts SET lines = $2, note = $3 WHERE id = $1`,
-      [d.id, JSON.stringify(lines), "choose:" + JSON.stringify({ queue, notes: d.notes })]);
+      [d.id, JSON.stringify(lines), "choose:" + JSON.stringify({ queue, notes: d.notes, changeOf: d.changeOf })]);
     return askNext(db, { phone, id: d.id, choose: queue, send });
   }
   await db.query(`UPDATE order_drafts SET status = 'expired', note = NULL, decided_at = now() WHERE id = $1`, [d.id]);
   if (!lines.length) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
-  return showDraft(db, { phone, source: d.source, lines, send, now, notes: d.notes });
+  return showDraft(db, { phone, source: d.source, lines, send, now, notes: d.notes, changeOf: d.changeOf });
 }
 
 /** Her typed answer to "kaunsa?" - matched to one option by its name, or null. */
@@ -595,14 +805,15 @@ async function editingDraft(db, phone) {
         AND COALESCE(sent_at, received_at) > now() - interval '1 hour'
       ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
   const body = String(last?.body_preview || "");
-  if (!body.startsWith("Koi baat nahi! Poora order") && !body.startsWith("Maazrat, ye tabdeeli")) return null;
+  if (!body.startsWith("Koi baat nahi! Poora order") && !body.startsWith("Maazrat, ye tabdeeli") &&
+      !/^✏️ Order \*[^*]+\* \(/.test(body)) return null;
   const d = (await db.query(
-    `SELECT id, source, lines FROM order_drafts
+    `SELECT id, source, lines, note FROM order_drafts
       WHERE phone = $1 AND status = 'changed' AND decided_at > now() - interval '1 hour'
       ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
   if (!d) return null;
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
-  return lines?.length ? { id: d.id, source: d.source, lines } : null;
+  return lines?.length ? { id: d.id, source: d.source, lines, changeOf: changeOfNote(d.note) } : null;
 }
 
 /**
@@ -614,14 +825,16 @@ async function pendingDraft(db, phone) {
   const d = (await db.query(
     `SELECT id, source, lines, status, note, created_at FROM order_drafts
       WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
-  if (!d || d.status !== "shown" || d.note || new Date(d.created_at) < new Date(Date.now() - 3600e3)) return null;
+  const ch = changeOfNote(d?.note);
+  if (!d || d.status !== "shown" || (d.note && !String(d.note).startsWith("change:")) ||
+      new Date(d.created_at) < new Date(Date.now() - 3600e3)) return null;
   const later = (await db.query(
     `SELECT 1 FROM whatsapp_messages
       WHERE phone = $1 AND direction = 'outbound' AND agent = 'order bot'
         AND COALESCE(sent_at, received_at) > $2::timestamptz + interval '60 seconds' LIMIT 1`, [phone, d.created_at])).rowCount;
   if (later) return null;
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
-  return lines?.length ? { id: d.id, source: d.source, lines, pending: true } : null;
+  return lines?.length ? { id: d.id, source: d.source, lines, pending: true, changeOf: ch } : null;
 }
 
 function sameLines(a, b) {
@@ -652,4 +865,4 @@ async function sendList(db, { phone, send, catalogId }) {
 }
 
 module.exports = {
-  billTapReport, matchKind, missingReport, spoken, on, isAsk, T, B, ready, forSale, listSections, draftText, lastOrder, cartLines, confirm, onInbound };
+  remindFrequentChangers, billTapReport, matchKind, missingReport, spoken, on, isAsk, T, B, ready, forSale, listSections, draftText, lastOrder, cartLines, confirm, onInbound };
