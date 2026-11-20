@@ -85,7 +85,10 @@ const UNIT_WORD = { kg: "kilo", g: "gram", pao: "pao", dozen: "darjan", pcs: "ad
 const unitWord = (u) => UNIT_WORD[String(u || "").toLowerCase()] || String(u || "");
 
 function catalogueText(products) {
-  return products.map((p) => `${p.sku} | ${p.name_en}${p.name_ur ? " / " + p.name_ur : ""} | sold per ${p.min_qty} ${p.unit}`).join("\n");
+  return products.map((p) => {
+    const names = [p.name_en, p.name_roman, p.name_ur].filter((x, i, a) => x && a.indexOf(x) === i).join(" / ");
+    return `${p.sku} | ${names} | sold per ${p.min_qty} ${p.unit}`;
+  }).join("\n");
 }
 
 const SYSTEM =

@@ -84,7 +84,7 @@ async function ready(db) {
 // ---------------------------------------------------------------------------
 async function forSale(db) {
   return (await db.query(
-    `SELECT sku, name_en, name_ur, category, unit::text AS unit, min_qty, asb_price, market_price, meta_retailer_id
+    `SELECT sku, name_en, name_ur, name_roman, category, unit::text AS unit, min_qty, asb_price, market_price, meta_retailer_id
        FROM products
       WHERE is_active AND asb_price > 0 AND category <> 'community-excluded' AND sku NOT LIKE 'ASB-COM-%'
       ORDER BY name_en`)).rows.map((p) => ({ ...p, asb_price: Number(p.asb_price), market_price: p.market_price == null ? null : Number(p.market_price) }));
