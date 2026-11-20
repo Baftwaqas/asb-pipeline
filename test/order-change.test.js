@@ -183,3 +183,77 @@ test("⏰ reminder 3 hours before the cut-off: only customers with 3+ changes in
   const early = await O.remindFrequentChangers(db, { send, now: new Date(slot.locksAt.getTime() - 5 * 3600e3) });
   assert.equal(early.sent, 0, "not before the last 3 hours");
 });
+
+async function cancelled(p, rid, qty) {
+  const restore = fakeAI();
+  try {
+    await placed(p, rid, qty);
+    aiReply = { items: [] };
+    const n = to(p).length;
+    await say(p, "sab hata dein");
+    await wait(p, n + 1);
+    await tap(p, to(p)[n].buttons[0].id, "🗑️ Haan, cancel");
+    await wait(p, n + 2);
+    return to(p)[n + 1];
+  } finally { restore(); }
+}
+const status = async (num) => (await db.query(`SELECT status::text AS s FROM orders WHERE order_number = $1`, [num])).rows[0].s;
+
+test("↩️ undo a cancel by tap: the same order, same items, comes back", async () => {
+  const p = "923009100006";
+  const c = await cancelled(p, "RT1", 2);
+  assert.match(c.text, /cancel kar diya/);
+  assert.deepEqual(c.buttons.map((b) => b.title), ["↩️ Wapas lao"]);
+  const num = /\*(ASB-\d+)\*/.exec(c.text)[1];
+  assert.equal(await status(num), "cancelled");
+  const n = to(p).length;
+  await tap(p, c.buttons[0].id, "↩️ Wapas lao");
+  await wait(p, n + 1);
+  assert.match(to(p)[n].text, new RegExp(`^↩️ Order \\*${num}\\* wapas aa gaya\\.`));
+  assert.equal(await status(num), "confirmed");
+  assert.deepEqual(await items(p), [["T1", 2]]);
+});
+
+test("typed regret ('Oh sorry cancel nhi karna tha, ghalti sae hu gaya') offers it back", async () => {
+  const p = "923009100007";
+  const c = await cancelled(p, "RT3", 6);
+  const num = /\*(ASB-\d+)\*/.exec(c.text)[1];
+  const n = to(p).length;
+  await say(p, "Oh sorry cancel nhi karna tha, ghalti sae hu gaya");
+  await wait(p, n + 1);
+  const ask = to(p)[n];
+  assert.match(ask.text, new RegExp(`Order \\*${num}\\* .* wapas laaun\\?`));
+  assert.deepEqual(ask.buttons.map((b) => b.title), ["↩️ Haan, wapas lao", "Nahi"]);
+  await tap(p, ask.buttons[0].id, "↩️ Haan, wapas lao");
+  await wait(p, n + 2);
+  assert.equal(await status(num), "confirmed");
+});
+
+test("a newer order since the cancel: no duplicate - asks to join the old items into it", async () => {
+  const p = "923009100008";
+  const c = await cancelled(p, "RT1", 2);
+  const old = /\*(ASB-\d+)\*/.exec(c.text)[1];
+  await placed(p, "RT3", 6);   // new order on the same bill
+  const n = to(p).length;
+  await tap(p, c.buttons[0].id, "↩️ Wapas lao");
+  await wait(p, n + 1);
+  const ask = to(p)[n];
+  assert.match(ask.text, new RegExp(`Purane order \\*${old}\\* ke items us mein shamil karun\\?`));
+  await tap(p, ask.buttons[0].id, "➕ Haan, shamil");
+  await wait(p, n + 2);
+  assert.match(to(p)[n + 1].text, /badal diya/);
+  assert.equal(await status(old), "cancelled");
+  assert.deepEqual(await items(p), [["T1", 2], ["T3", 6]]);
+});
+
+test("after the cut-off a cancelled order cannot come back", async () => {
+  const p = "923009100009";
+  const c = await cancelled(p, "RT1", 2);
+  await db.query(`UPDATE cycles SET status = 'locked' WHERE id = (SELECT o.cycle_id FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1 LIMIT 1)`, [p]);
+  try {
+    const n = to(p).length;
+    await tap(p, c.buttons[0].id, "↩️ Wapas lao");
+    await wait(p, n + 1);
+    assert.match(to(p)[n].text, /wapas nahi aa sakta/);
+  } finally { await db.query(`UPDATE cycles SET status = 'open' WHERE status = 'locked'`); }
+});
