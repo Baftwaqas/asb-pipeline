@@ -175,7 +175,8 @@ test("a cart -> she checks it -> Theek hai -> a real order and the usual confirm
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1`, [p])).rows[0].n, 2);
 });
 
-test("'Badlein' saves nothing and offers the list again", async () => {
+test("'Badlein' without the AI: saves nothing and offers the list again", async () => {
+  delete process.env.GROQ_API_KEY;
   const p = "923009000003";
   await cart(p, [{ product_retailer_id: "RT3", quantity: 6 }]);
   await wait(p, 1);
@@ -219,4 +220,54 @@ test("switch off: carts are left for the team as before", async () => {
   await new Promise((r) => setTimeout(r, 250));
   assert.equal(to(p).length, 0);
   process.env.ORDER_BOT = "on";
+});
+
+test("'Badlein' with the AI: she types only the change, the rest of her order stays", async () => {
+  Object.assign(process.env, { ORDER_AI_PROVIDER: "groq", GROQ_API_KEY: "test-only", GROQ_MODEL: "test-model" });
+  const realFetch = global.fetch;
+  let lastPrompt = "", reply = null;
+  global.fetch = async (url, init) => {
+    if (String(url).includes("api.groq.com")) {
+      const body = JSON.parse(init.body);
+      lastPrompt = body.messages[0].content + "\n" + body.messages[1].content;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) } }] }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const p = "923009000011";
+    await cart(p, [{ product_retailer_id: "RT1", quantity: 2 }, { product_retailer_id: "RT3", quantity: 6 }]);
+    await wait(p, 1);
+    assert.match(to(p)[0].text, /Tamatar — 1 kg/);
+    await tap(p, to(p)[0].buttons[1].id, "✏️ Badlein");
+    await wait(p, 2);
+    assert.match(to(p)[1].text, /Poora order dobara likhne ki zaroorat nahi/);
+
+    // "tamatar 2 kg kar dein, kinno hata dein" — no quantity words needed for removals
+    reply = { items: [{ sku: "T1", qty: 2, unit: "kg", said: "tamatar 2 kg" }], unknown: [], unclear: [] };
+    await say(p, "tamatar 2 kg kar dein, kinno hata dein");
+    await wait(p, 3);
+    assert.match(lastPrompt, /EDIT MODE/);
+    assert.match(lastPrompt, /CURRENT ORDER[\s\S]*T1 \| Tamatar \| 1 kg[\s\S]*T3 \| Kinno \| 6 pcs/);
+    const c = to(p)[2];
+    assert.equal(c.kind, "buttons");
+    assert.match(c.text, /Tamatar — 2 kg/);
+    assert.doesNotMatch(c.text, /Kinno/);
+    await tap(p, c.buttons[0].id, "✅ Theek hai");
+    await wait(p, 4);
+    assert.match(to(p)[3].text, /Aap ka order mil gaya/);
+
+    // removing everything: no empty order
+    await cart(p, [{ product_retailer_id: "RT3", quantity: 2 }]);
+    await wait(p, 5);
+    await tap(p, to(p)[4].buttons[1].id, "✏️ Badlein");
+    await wait(p, 6);
+    reply = { items: [], unknown: [], unclear: [] };
+    await say(p, "sab hata dein");
+    await wait(p, 7);
+    assert.match(to(p)[6].text, /sab items nikal diye/);
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.GROQ_API_KEY;
+  }
 });

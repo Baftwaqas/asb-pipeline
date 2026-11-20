@@ -79,13 +79,31 @@ const SYSTEM =
   "by meaning. dozen = darjan. If the customer's unit differs from how it is sold, still copy their qty and unit. If an item is not in the list, put the customer's words in unknown. " +
   "If an item has no quantity, put it in unclear. Never invent a sku.";
 
+const EDIT_RULES =
+  " EDIT MODE: you get the CURRENT ORDER and a change. Return the WHOLE new order in items: every current item " +
+  "that stays (same qty and unit as listed), with the customer's changes applied. 'hata dein/nikal dein/nahi chahiye/" +
+  "remove' = drop it; 'X kar dein/X kar do' = set the new quantity; 'aur/bhi/add/plus' = add it, or add to the " +
+  "quantity if already there; 'kam kar dein' = reduce. If they remove everything, items is empty. Only put things " +
+  "in unclear or unknown if they come from the change.";
+
 /**
  * Read a typed order. Returns { lines:[{sku,packs}], unknown:[], unclear:[], said:{sku:text} }
  * or throws {code} when the AI service fails (the caller leaves it for the team).
  */
-async function read(text, products, { env = process.env, fetchImpl = fetch } = {}) {
-  const user = `PRODUCT LIST (sku | name | how it is sold):\n${catalogueText(products)}\n\nCUSTOMER WROTE:\n${String(text).slice(0, 800)}`;
-  const raw = await ai.complete({ system: SYSTEM, user, env, fetchImpl });
+async function read(text, products, { env = process.env, fetchImpl = fetch, current = null } = {}) {
+  let user = `PRODUCT LIST (sku | name | how it is sold):\n${catalogueText(products)}\n\n`;
+  if (current && current.length) {
+    const by = new Map(products.map((p) => [p.sku, p]));
+    const now = current.filter((l) => by.has(l.sku)).map((l) => {
+      const p = by.get(l.sku);
+      const size = Number(p.min_qty) > 0 ? Number(p.min_qty) : 1;
+      return `${p.sku} | ${p.name_en} | ${+(l.packs * size).toFixed(3)} ${p.unit}`;
+    });
+    user += `CURRENT ORDER (sku | name | qty unit):\n${now.join("\n")}\n\nCUSTOMER WANTS TO CHANGE IT:\n${String(text).slice(0, 800)}`;
+  } else {
+    user += `CUSTOMER WROTE:\n${String(text).slice(0, 800)}`;
+  }
+  const raw = await ai.complete({ system: current && current.length ? SYSTEM + EDIT_RULES : SYSTEM, user, env, fetchImpl });
   const json = (() => {
     const m = /\{[\s\S]*\}/.exec(raw);
     try { return m ? JSON.parse(m[0]) : null; } catch (_) { return null; }
