@@ -50,7 +50,12 @@ const T = {
     "Hamari team foran confirm kar degi.",
   notUnderstood: "Maazrat, ye list samajh nahi aayi. Hamari team abhi dekh kar confirm kar degi.",
   unknown: (xs) => `_Ye hamare paas nahi: ${xs.join(", ")}_`,
-  unclear: (xs) => `_Ye samajh nahi aaya (quantity likh dein): ${xs.join(", ")}_`,
+  unclear: (xs) => `_Ye samajh nahi aaya, dobara likh dein (jaise "1 darjan kele"): ${xs.join(", ")}_`,
+  editAsk:
+    "Koi baat nahi! Poora order dobara likhne ki zaroorat nahi. 🙂\n" +
+    "Bas jo badalna hai woh likh dein, jaise:\n_tamatar 2 kg kar dein, kele hata dein, 1 kg piyaz aur_",
+  emptied: "Order se sab items nikal diye gaye. Naye order ke liye *order* likh dein.",
+  editNotUnderstood: "Maazrat, ye tabdeeli samajh nahi aayi. Dobara likh dein, jaise: _tamatar 2 kg kar dein_",
   confirmHead: "Aap ka order:",
   confirmFoot: (delivery) => `\nDelivery: *${delivery}*\n\nSab theek hai?`,
   changed: "Koi baat nahi. List dobara kholein aur jo chahiye chun lein, ya apni list likh dein.",
@@ -209,7 +214,13 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
   if (m) {
     const draftId = Number(m[2]);
     if (m[1] === "edit") {
-      await db.query(`UPDATE order_drafts SET status = 'changed', decided_at = now() WHERE id = $1 AND phone = $2 AND status = 'shown'`, [draftId, phone]);
+      const r = await db.query(`UPDATE order_drafts SET status = 'changed', decided_at = now() WHERE id = $1 AND phone = $2 AND status = 'shown' RETURNING id`, [draftId, phone]);
+      if (!r.rowCount) { await send.text(phone, T.old); return { did: "stale", draft: draftId }; }
+      if (ai.configured(env)) {
+        // keep her order; she only types what changes
+        await send.text(phone, T.editAsk);
+        return { did: "edit_ask", draft: draftId };
+      }
       await send.buttons(phone, T.changed, [B.list, B.write]);
       return { did: "changed", draft: draftId };
     }
@@ -254,6 +265,29 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
   }
 
   // A typed order ("2kg aloo, aadha kilo adrak") -> the AI reader -> the same confirmation.
+  // She tapped ✏️ Badlein and now types only the change ("tamatar 2 kg kar dein, kele hata dein").
+  if (typedText && ai.configured(env)) {
+    const editing = await editingDraft(db, phone);
+    if (editing) {
+      let r;
+      try {
+        r = await typed.read(typedText, await forSale(db), { env, fetchImpl, current: editing.lines });
+      } catch (e) {
+        return { did: "ai_failed", error: e.code || e.message };
+      }
+      if (r.why && r.why.length) console.log(`[order-bot] edit: ${r.lines.length} lines, unclear because: ${r.why.join("; ")}`);
+      const notes = [];
+      if (r.unknown.length) notes.push(T.unknown(r.unknown));
+      if (r.unclear.length) notes.push(T.unclear(r.unclear));
+      if (!r.lines.length) {
+        if (notes.length) { await send.text(phone, T.editNotUnderstood); return { did: "edit_not_understood" }; }
+        await send.text(phone, T.emptied);
+        return { did: "emptied", draft: editing.id };
+      }
+      return showDraft(db, { phone, source: editing.source, lines: r.lines, send, now, notes });
+    }
+  }
+
   if (typedText && ai.configured(env)) {
     const justAsked = await askedToWrite(db, phone);
     if (!justAsked && !typed.looksLikeOrder(typedText)) return null;
@@ -263,6 +297,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     } catch (e) {
       return { did: "ai_failed", error: e.code || e.message };   // the team sees the message as before
     }
+    if (r.why && r.why.length) console.log(`[order-bot] typed: ${r.lines.length} read, unclear because: ${r.why.join("; ")}`);
     if (!r.lines.length) {
       if (justAsked) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
       return null;
@@ -273,6 +308,24 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     return showDraft(db, { phone, source: "typed", lines: r.lines, send, now, notes });
   }
   return null;
+}
+
+/** The draft she is changing: the bot's last message (last hour) asked for the change, and that draft is 'changed'. */
+async function editingDraft(db, phone) {
+  const last = (await db.query(
+    `SELECT body_preview FROM whatsapp_messages
+      WHERE phone = $1 AND direction = 'outbound' AND agent = 'order bot'
+        AND COALESCE(sent_at, received_at) > now() - interval '1 hour'
+      ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
+  const body = String(last?.body_preview || "");
+  if (!body.startsWith("Koi baat nahi! Poora order") && !body.startsWith("Maazrat, ye tabdeeli")) return null;
+  const d = (await db.query(
+    `SELECT id, source, lines FROM order_drafts
+      WHERE phone = $1 AND status = 'changed' AND decided_at > now() - interval '1 hour'
+      ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
+  if (!d) return null;
+  const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
+  return lines?.length ? { id: d.id, source: d.source, lines } : null;
 }
 
 /** Did the bot just say "apni list likh dein" (last hour)? */
