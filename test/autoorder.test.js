@@ -62,14 +62,91 @@ test("new customer: 'order' -> List / Likh kar; the list is WhatsApp's own produ
   await wait(p, 1);
   assert.deepEqual(to(p)[0].buttons.map((b) => b.id), ["order:list", "order:write"]);
   await tap(p, "order:list");
-  await wait(p, 3);
+  await wait(p, 2);
   const pl = to(p)[1];
   assert.equal(pl.kind, "products");
   assert.equal(pl.cat, "CAT1");
   const ids = pl.sections.flatMap((s) => s.product_items.map((x) => x.product_retailer_id));
   assert.ok(ids.includes("RT1") && ids.includes("RT3"));
   assert.ok(!ids.includes("RT4"), "not for sale");
+  assert.match(pl.text, /sab items/);
+  // one list only; the whole catalogue only when she asks
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(to(p).length, 2);
+  await say(p, "sab items");
+  await wait(p, 3);
   assert.equal(to(p)[2].kind, "catalog");
+});
+
+// ---------------------------------------------------------------------------
+// Typed orders, read by the AI (a fake model here; the real one in Render).
+// ---------------------------------------------------------------------------
+let aiReply = null, aiCalls = 0;
+test("typed order -> the AI reads it -> the same confirmation -> Theek hai -> a real order", async () => {
+  Object.assign(process.env, { ORDER_AI_PROVIDER: "groq", GROQ_API_KEY: "test-only", GROQ_MODEL: "test-model" });
+  const realFetch = global.fetch;
+  global.fetch = async (url, init) => {
+    if (String(url).includes("api.groq.com")) {
+      aiCalls++;
+      const body = JSON.parse(init.body);
+      assert.match(body.messages[1].content, /T1 \| Tamatar/);   // our list goes to the model
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(aiReply) } }] }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  try {
+    const p = "923009000010";
+    await say(p, "order");
+    await wait(p, 1);
+    await tap(p, "order:write");
+    await wait(p, 2);
+    assert.match(to(p)[1].text, /Apni list likh dein/);
+    assert.doesNotMatch(to(p)[1].text, /team/);
+    aiReply = { items: [
+      { sku: "T1", qty: 1, unit: "kg", said: "1 kilo tamatar" },        // 500 g packs -> 2
+      { sku: "T2", qty: 0.5, unit: "kg", said: "aadha kilo pakora mirch" },  // 250 g packs -> 2
+      { sku: "FAKE", qty: 1, unit: "kg", said: "1 kg made up" },         // invented sku -> dropped
+    ], unknown: ["2 kg chicken"], unclear: ["thoda dhania"] };
+    await say(p, "1 kilo tamatar, aadha kilo pakora mirch, 2 kg chicken, thoda dhania");
+    await wait(p, 3);
+    const c = to(p)[2];
+    assert.equal(c.kind, "buttons");
+    assert.match(c.text, /Ye hamare paas nahi: 2 kg chicken/);
+    assert.match(c.text, /samajh nahi aaya[\s\S]*thoda dhania[\s\S]*1 kg made up/);
+    assert.match(c.text, /Tamatar — 1 kg — Rs 198/);
+    assert.match(c.text, /Pakora Mirch — aadha kg — Rs 30/);
+    await tap(p, c.buttons[0].id, "✅ Theek hai");
+    await wait(p, 4);
+    assert.match(to(p)[3].text, /Aap ka order mil gaya/);
+    const src = (await db.query(`SELECT source, status FROM order_drafts WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [p])).rows[0];
+    assert.deepEqual([src.source, src.status], ["typed", "confirmed"]);
+
+    // chatter is not sent to the AI; a message with quantities is
+    const before = aiCalls;
+    await say(p, "shukriya bhai");
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(aiCalls, before);
+    // AI finds nothing in a non-order message with a number: silence, the team sees it
+    aiReply = { items: [], unknown: [], unclear: [] };
+    await say(p, "kal 5 baje aa jana");
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(to(p).length, 4);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("pack arithmetic is done in code, not by the AI", () => {
+  const TD = require(path.join(ROOT, "typedorder.js"));
+  assert.equal(TD.packsFor({ unit: "kg", min_qty: 0.5 }, 2, "kg"), 4);
+  assert.equal(TD.packsFor({ unit: "kg", min_qty: 1 }, 0.5, "kg"), 1);       // never below one pack
+  assert.equal(TD.packsFor({ unit: "g", min_qty: 250 }, 1, "pao"), 1);
+  assert.equal(TD.packsFor({ unit: "g", min_qty: 250 }, 1, "kg"), 4);
+  assert.equal(TD.packsFor({ unit: "bundle", min_qty: 1 }, 2, "gaddi"), 2);
+  assert.equal(TD.packsFor({ unit: "kg", min_qty: 1 }, 3, "piece"), null);   // "3 tamatar" by the piece: ask
+  assert.ok(TD.looksLikeOrder("2kg aloo"));
+  assert.ok(TD.looksLikeOrder("aadha kilo adrak"));
+  assert.ok(!TD.looksLikeOrder("shukriya bhai"));
 });
 
 test("a cart -> she checks it -> Theek hai -> a real order and the usual confirmation, once", async () => {
@@ -81,7 +158,7 @@ test("a cart -> she checks it -> Theek hai -> a real order and the usual confirm
   assert.match(c.text, /Aap ka order:[\s\S]*Tamatar — 1 kg — Rs 198[\s\S]*Pakora Mirch — (250 g|pao) — Rs 15[\s\S]*Total: \*Rs 213\*/);
   assert.match(c.text, /abhi available nahi/, "the item no longer for sale is dropped and said so");
   const okId = c.buttons[0].id;
-  assert.equal((await db.query(`SELECT count(*)::int AS n FROM orders`)).rows[0].n, 0, "nothing saved before she confirms");
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1`, [p])).rows[0].n, 0, "nothing saved before she confirms");
 
   await tap(p, okId, "✅ Theek hai");
   await wait(p, 2);

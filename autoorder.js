@@ -26,6 +26,8 @@
 const orders = require("./orders");
 const bill = require("./bill");
 const schedule = require("./schedule");
+const ai = require("./ai");
+const typed = require("./typedorder");
 
 const on = (env = process.env) => String(env.ORDER_BOT || "").toLowerCase() === "on";
 
@@ -37,11 +39,18 @@ const DAILY = /\b(aa?roo|aa?loo|pa?y[ae]a?z|piyaz|tamatar|adrak|lehsan|mirch|dha
 const T = {
   start: "Order kaise dena chahengi? 🛒",
   startNew: "Order kaise dena chahengi? 🛒\n\n☑️ List se chun lein, ya ✍️ apni list likh dein.",
-  pick: "Neeche *list* kholein, jo chahiye us par *+* dabayein, quantity chunein, phir *cart bhej dein*. 🛒",
-  everything: "Baqi saari cheezein yahan hain 👇",
+  pick:
+    "Neeche *list* kholein, jo chahiye us par *+* dabayein, quantity chunein, phir *cart bhej dein*. 🛒\n\n" +
+    "Aur items chahiye? *sab items* likh dein.",
+  everything: "Hamari saari cheezein yahan hain 👇",
   write:
+    "Theek hai! Apni list likh dein, jaise:\n_2 kg aloo, aadha kilo adrak, dhania 2 gaddi_",
+  writeTeam:
     "Theek hai! Apni list likh dein, jaise:\n_2 kg aloo, aadha kilo adrak, dhania 2 gaddi_\n\n" +
     "Hamari team foran confirm kar degi.",
+  notUnderstood: "Maazrat, ye list samajh nahi aayi. Hamari team abhi dekh kar confirm kar degi.",
+  unknown: (xs) => `_Ye hamare paas nahi: ${xs.join(", ")}_`,
+  unclear: (xs) => `_Ye samajh nahi aaya (quantity likh dein): ${xs.join(", ")}_`,
   confirmHead: "Aap ka order:",
   confirmFoot: (delivery) => `\nDelivery: *${delivery}*\n\nSab theek hai?`,
   changed: "Koi baat nahi. List dobara kholein aur jo chahiye chun lein, ya apni list likh dein.",
@@ -67,7 +76,7 @@ async function ready(db) {
 // ---------------------------------------------------------------------------
 async function forSale(db) {
   return (await db.query(
-    `SELECT sku, name_en, category, unit::text AS unit, min_qty, asb_price, market_price, meta_retailer_id
+    `SELECT sku, name_en, name_ur, category, unit::text AS unit, min_qty, asb_price, market_price, meta_retailer_id
        FROM products
       WHERE is_active AND asb_price > 0 AND category <> 'community-excluded' AND sku NOT LIKE 'ASB-COM-%'
       ORDER BY name_en`)).rows.map((p) => ({ ...p, asb_price: Number(p.asb_price), market_price: p.market_price == null ? null : Number(p.market_price) }));
@@ -113,7 +122,7 @@ async function newDraft(db, phone, source, lines) {
     [phone, source, JSON.stringify(lines)])).rows[0].id;
 }
 
-async function showDraft(db, { phone, source, lines, send, now }) {
+async function showDraft(db, { phone, source, lines, send, now, notes = [] }) {
   const products = await forSale(db);
   const sellable = new Set(products.map((p) => p.sku));
   const gone = lines.filter((l) => !sellable.has(l.sku));
@@ -126,6 +135,7 @@ async function showDraft(db, { phone, source, lines, send, now }) {
   const slot = schedule.deliveryFor(now);
   let text = draftText(keep, products, slot.deliveryDate);
   if (gone.length) text = `_${gone.length} cheez(ein) abhi available nahi, is liye nikal di gayi._\n\n` + text;
+  if (notes.length) text = notes.join("\n") + "\n\n" + text;
   await send.buttons(phone, text, [B.ok(id), B.edit(id)]);
   return { did: "confirm", draft: id, lines: keep.length };
 }
@@ -184,7 +194,7 @@ async function confirm(db, { phone, draftId, name, now }) {
 // the area bot. Returns what it did, or null.
 //   send: { text, buttons(phone, body, buttons), productList(phone, header, body, catalogId, sections), catalog(phone, body) }
 // ---------------------------------------------------------------------------
-async function onInbound(db, { phone, msg, send, contactName = null, now = new Date(), env = process.env, catalogId = null }) {
+async function onInbound(db, { phone, msg, send, contactName = null, now = new Date(), env = process.env, catalogId = null, fetchImpl = fetch }) {
   if (!on(env) || !(await ready(db))) return null;
   const id = msg?.interactive?.button_reply?.id || msg?.interactive?.list_reply?.id || "";
 
@@ -226,16 +236,53 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     return showDraft(db, { phone, source: "repeat", lines, send, now });
   }
   if (id === B.list.id) return sendList(db, { phone, send, catalogId });
-  if (id === B.write.id) { await send.text(phone, T.write); return { did: "write" }; }
+  if (id === B.write.id) {
+    await send.text(phone, ai.configured(env) ? T.write : T.writeTeam);
+    return { did: "write" };
+  }
+  if (/^\s*(sab|saare|saari|all)\s+(items?|cheezein|cheezen|saman)\s*$/i.test(msg?.text?.body || "")) {
+    await send.catalog(phone, T.everything);
+    return { did: "catalogue" };
+  }
 
   // "order" typed, or the 🛒 row in the rate-list menu
-  const typed = msg?.type === "text" ? msg.text?.body : null;
-  if (id === "ratelist:order" || isAsk(typed)) {
+  const typedText = msg?.type === "text" ? msg.text?.body : null;
+  if (id === "ratelist:order" || isAsk(typedText)) {
     const hasLast = Boolean((await lastOrder(db, phone))?.length);
     await send.buttons(phone, hasLast ? T.start : T.startNew, hasLast ? [B.repeat, B.list, B.write] : [B.list, B.write]);
     return { did: "start", hasLast };
   }
+
+  // A typed order ("2kg aloo, aadha kilo adrak") -> the AI reader -> the same confirmation.
+  if (typedText && ai.configured(env)) {
+    const justAsked = await askedToWrite(db, phone);
+    if (!justAsked && !typed.looksLikeOrder(typedText)) return null;
+    let r;
+    try {
+      r = await typed.read(typedText, await forSale(db), { env, fetchImpl });
+    } catch (e) {
+      return { did: "ai_failed", error: e.code || e.message };   // the team sees the message as before
+    }
+    if (!r.lines.length) {
+      if (justAsked) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
+      return null;
+    }
+    const notes = [];
+    if (r.unknown.length) notes.push(T.unknown(r.unknown));
+    if (r.unclear.length) notes.push(T.unclear(r.unclear));
+    return showDraft(db, { phone, source: "typed", lines: r.lines, send, now, notes });
+  }
   return null;
+}
+
+/** Did the bot just say "apni list likh dein" (last hour)? */
+async function askedToWrite(db, phone) {
+  const r = await db.query(
+    `SELECT body_preview FROM whatsapp_messages
+      WHERE phone = $1 AND direction = 'outbound' AND agent = 'order bot'
+        AND COALESCE(sent_at, received_at) > now() - interval '1 hour'
+      ORDER BY id DESC LIMIT 1`, [phone]);
+  return String(r.rows[0]?.body_preview || "").startsWith("Theek hai! Apni list likh dein");
 }
 
 async function sendList(db, { phone, send, catalogId }) {
@@ -244,8 +291,9 @@ async function sendList(db, { phone, send, catalogId }) {
     await send.text(phone, T.write);
     return { did: "no_catalogue" };
   }
+  // One list only (founder, 20 Nov: two catalogues with the same items was confusing).
+  // The whole catalogue comes when she writes "sab items".
   await send.productList(phone, "Apna Sasta Bazaar 🌿", T.pick, catalogId, sections);
-  await send.catalog(phone, T.everything);
   return { did: "list", items: sections.reduce((n, s) => n + s.product_items.length, 0) };
 }
 
