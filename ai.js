@@ -27,8 +27,21 @@ function configured(env = process.env) {
   return Boolean(n && env[PROVIDERS[n].keyVar] && env[PROVIDERS[n].modelVar]);
 }
 
+/** One request, and ONE retry when the provider says "too many, try in a few seconds". */
+async function complete(args) {
+  try {
+    return await completeOnce(args);
+  } catch (e) {
+    if (e.code === "provider_error_429" && e.retryAfter != null && e.retryAfter <= 6) {
+      await new Promise((r) => setTimeout(r, Math.max(1, e.retryAfter) * 1000));
+      return completeOnce(args);
+    }
+    throw e;
+  }
+}
+
 /** One request; returns the model's text. Throws {code} on any failure. */
-async function complete({ system, user, env = process.env, fetchImpl = fetch, maxTokens = 900 }) {
+async function completeOnce({ system, user, env = process.env, fetchImpl = fetch, maxTokens = 900 }) {
   const name = providerName(env);
   if (!name) throw Object.assign(new Error("unknown provider"), { code: "not_configured" });
   const p = PROVIDERS[name];
@@ -49,7 +62,12 @@ async function complete({ system, user, env = process.env, fetchImpl = fetch, ma
           messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
       });
       body = await res.json().catch(() => ({}));
-      if (!res.ok) throw Object.assign(new Error("provider status " + res.status), { code: "provider_error_" + res.status });
+      if (!res.ok) {
+        // say WHICH limit (tokens per minute / per day): the difference decides what to do about it
+        console.error(`[order-ai] ${name} ${res.status}: ${String(body?.error?.message || "").slice(0, 300)}`);
+        throw Object.assign(new Error("provider status " + res.status), {
+          code: "provider_error_" + res.status, retryAfter: Number(res.headers?.get?.("retry-after")) || null });
+      }
       return String(body?.choices?.[0]?.message?.content ?? "");
     }
     res = await fetchImpl(p.url, {

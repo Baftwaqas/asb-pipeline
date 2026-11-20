@@ -58,6 +58,7 @@ const T = {
   adjusted: (xs) => xs.map((x) => `_${x.name}: ${x.gotText} rakha (ye is se kam ya adhoora nahi milta)._`).join("\n"),
   askUnit: (xs) => xs.map((x) => `_${x.name} ${x.unit} ke hisaab se milta hai${x.said ? ` ("${x.said}")` : ""}. Kitne ${x.unit} chahiye? *Badlein* daba kar likh dein._`).join("\n"),
   emptied: "Order se sab items nikal diye gaye. Naye order ke liye *order* likh dein.",
+  aiBusy: "Shukriya! 🙏 Aap ka order mil gaya hai. Hamari team thori dair mein confirm kar degi.",
   editNotUnderstood: "Maazrat, ye tabdeeli samajh nahi aayi. Dobara likh dein, jaise: _tamatar 2 kg kar dein_",
   confirmHead: "Aap ka order:",
   confirmFoot: (delivery) => `\nDelivery: *${delivery}*\n\nSab theek hai?`,
@@ -291,6 +292,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       try {
         r = await typed.read(typedText, await forSale(db), { env, fetchImpl, current: editing.lines });
       } catch (e) {
+        await send.text(phone, T.aiBusy);   // never leave her waiting; the team sees the message
         return { did: "ai_failed", error: e.code || e.message };
       }
       if (r.why && r.why.length) console.log(`[order-bot] edit: ${r.lines.length} lines, unclear because: ${r.why.join("; ")}`);
@@ -312,7 +314,9 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     try {
       r = await typed.read(typedText, await forSale(db), { env, fetchImpl });
     } catch (e) {
-      return { did: "ai_failed", error: e.code || e.message };   // the team sees the message as before
+      // she asked to type her order: tell her it arrived; the team sees the message as before
+      if (justAsked) await send.text(phone, T.aiBusy);
+      return { did: "ai_failed", error: e.code || e.message };
     }
     if (r.why && r.why.length) console.log(`[order-bot] typed: ${r.lines.length} read, unclear because: ${r.why.join("; ")}`);
     await recordMissing(db, phone, r.unknown, typedText, "typed");
