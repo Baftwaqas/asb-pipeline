@@ -140,7 +140,9 @@ async function read(text, products, { env = process.env, fetchImpl = fetch, curr
   if (!json) throw Object.assign(new Error("unreadable reply"), { code: "bad_reply" });
   const by = new Map(products.map((p) => [p.sku, p]));
   const merged = new Map();
-  const unclear = [...(json.unclear || [])].map(String);
+  // the model sometimes returns objects ({said, reason}) instead of strings: show her words, never "[object Object]"
+  const asText = (x) => (x && typeof x === "object") ? String(x.said || x.text || x.item || x.name || "").trim() : String(x || "").trim();
+  const unclear = [...(json.unclear || [])].map(asText).filter(Boolean);
   const why = (json.unclear || []).length ? ["ai said unclear"] : [];
   const adjusted = [];   // she asked for less (or an odd amount) than a pack: we rounded, and we say so
   const askUnit = [];    // "12 kele" but kele are sold by the kilo: ask "kitne kilo?"
@@ -160,7 +162,7 @@ async function read(text, products, { env = process.env, fetchImpl = fetch, curr
   }
   return {
     lines: [...merged].map(([sku, packs]) => ({ sku, packs })),
-    unknown: [...(json.unknown || [])].map(String).slice(0, 10),
+    unknown: [...(json.unknown || [])].map(asText).filter(Boolean).slice(0, 10),
     unclear: unclear.slice(0, 10),
     adjusted: adjusted.slice(0, 10),
     askUnit: askUnit.slice(0, 10),

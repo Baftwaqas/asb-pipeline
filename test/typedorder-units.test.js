@@ -80,3 +80,21 @@ test("the order-reader check is behind the inbox login", async () => {
   const src = require("fs").readFileSync(require("path").join(__dirname, "..", "inbox.js"), "utf8");
   assert.match(src, /router\.post\("\/api\/inbox\/order-ai\/read", requireAuth,/);
 });
+
+test("objects in unclear/unknown become her words, never [object Object]", async () => {
+  const r = await read("1 kg aloo, 2 kg chicken", products, { env, fetchImpl: fakeAi({ items: [],
+    unclear: [{ said: "1 kg aloo", reason: "white or red?" }], unknown: [{ item: "chicken" }] }) });
+  assert.deepEqual(r.unclear, ["1 kg aloo"]);
+  assert.deepEqual(r.unknown, ["chicken"]);
+});
+
+test("one retry after a short 'too many requests'", async () => {
+  const ai = require("../ai");
+  let n = 0;
+  const f = async () => (++n === 1)
+    ? new Response(JSON.stringify({ error: { message: "Rate limit reached ... tokens per minute (TPM)" } }), { status: 429, headers: { "retry-after": "1" } })
+    : new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200 });
+  const realErr = console.error; console.error = () => {};
+  try { assert.equal(await ai.complete({ system: "s", user: "u", env, fetchImpl: f }), "ok"); } finally { console.error = realErr; }
+  assert.equal(n, 2);
+});
