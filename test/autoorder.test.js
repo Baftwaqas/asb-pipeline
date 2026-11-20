@@ -211,15 +211,77 @@ test("'Badlein' without the AI: saves nothing and offers the list again", async 
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1`, [p])).rows[0].n, 0);
 });
 
-test("repeat last order: shown at today's prices, then confirmed", async () => {
-  const p = "923009000002";   // ordered above
+test("the clock decides the 'order' menu: open order -> ✏️ Order badlein (no Pichla order); delivered -> 🔁 Pichla order at today's prices", async () => {
+  const p = "923009000002";   // ordered above, for the coming delivery
   await say(p, "order karna hai");
   await wait(p, 5);
-  assert.deepEqual(to(p)[4].buttons.map((b) => b.id), ["order:repeat", "order:list", "order:write"]);
+  assert.match(to(p)[4].text, /pehle se hai — (Sunday|Wednesday) raat 9 baje tak badal sakti hain/);
+  assert.deepEqual(to(p)[4].buttons.map((b) => b.title), ["✏️ Order badlein", "☑️ List se chunein", "✍️ Likh kar"]);
+  // the order has now been delivered (an earlier delivery)
+  await db.query(`INSERT INTO cycles (code, cycle_date, opens_at, locks_at, delivery_date, status)
+                  VALUES ('C-PAST-1', current_date - 4, now() - interval '9 days', now() - interval '5 days', current_date - 3, 'delivered')
+                  ON CONFLICT (code) DO NOTHING`);
+  await db.query(`UPDATE orders o SET cycle_id = (SELECT id FROM cycles WHERE code = 'C-PAST-1'), status = 'delivered'
+                    FROM customers c WHERE c.id = o.customer_id AND c.phone = $1`, [p]);
+  await say(p, "order");
+  await wait(p, 6);
+  assert.deepEqual(to(p)[5].buttons.map((b) => b.id), ["order:repeat", "order:list", "order:write"]);
   await db.query(`UPDATE products SET asb_price = 90 WHERE sku = 'T1'`);   // today's price changed
   await tap(p, "order:repeat");
-  await wait(p, 6);
-  assert.match(to(p)[5].text, /Tamatar — 1 kg — Rs 180/);
+  await wait(p, 7);
+  assert.match(to(p)[6].text, /^Aap ka pichla order:[\s\S]*Tamatar — 1 kg — Rs 180/);
+});
+
+test("past its cut-off: no Pichla order and no ✏️ - she is told it is closed; an old 'Pichla order' button says the same", async () => {
+  const p = "923009000016";
+  await cart(p, [{ product_retailer_id: "RT1", quantity: 2 }]);
+  await wait(p, 1);
+  await tap(p, to(p)[0].buttons[0].id, "✅ Theek hai");
+  await wait(p, 2);
+  await db.query(`UPDATE cycles SET status = 'locked' WHERE id = (SELECT o.cycle_id FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1)`, [p]);
+  try {
+    await say(p, "order");
+    await wait(p, 3);
+    assert.match(to(p)[2].text, /band ho chuka hai \(cutoff (Sunday|Wednesday) raat 9 baje\) — delivery (Monday|Thursday) ko hogi/);
+    assert.deepEqual(to(p)[2].buttons.map((b) => b.id), ["order:list", "order:write"]);
+    await tap(p, "order:repeat", "🔁 Pichla order");
+    await wait(p, 4);
+    assert.match(to(p)[3].text, /band ho chuka hai/);
+  } finally {
+    await db.query(`UPDATE cycles SET status = 'open' WHERE status = 'locked'`);
+  }
+});
+
+test("separate bills: 'Kis ka pichla order?' -> Baji rani's list, headed with her name, back onto HER bill", async () => {
+  const p = "923009000017";
+  await db.query(`INSERT INTO cycles (code, cycle_date, opens_at, locks_at, delivery_date, status)
+                  VALUES ('C-PAST-2', current_date - 4, now() - interval '9 days', now() - interval '5 days', current_date - 3, 'delivered')
+                  ON CONFLICT (code) DO NOTHING`);
+  const cust = (await db.query(`INSERT INTO customers (phone, name) VALUES ($1, 'Test') RETURNING id`, [p])).rows[0].id;
+  const cyc = (await db.query(`SELECT id FROM cycles WHERE code = 'C-PAST-2'`)).rows[0].id;
+  const mk = async (label, sku, q) => {
+    const o = (await db.query(`INSERT INTO orders (customer_id, cycle_id, channel, status, bill_label) VALUES ($1, $2, 'whatsapp', 'delivered', $3) RETURNING id`, [cust, cyc, label])).rows[0].id;
+    await db.query(`INSERT INTO order_items (order_id, product_id, name_snapshot, unit, qty_ordered, ceiling_unit_price)
+                    SELECT $1, id, name_en, unit, $3, asb_price FROM products WHERE sku = $2`, [o, sku, q]);
+  };
+  await mk(null, "T1", 2);
+  await mk("Baji rani", "T3", 6);
+  await say(p, "order");
+  await wait(p, 1);
+  await tap(p, "order:repeat", "🔁 Pichla order");
+  await wait(p, 2);
+  assert.match(to(p)[1].text, /Kis ka pichla order/);
+  assert.deepEqual(to(p)[1].buttons.map((b) => b.title), ["Mera", "Baji rani"]);
+  await tap(p, to(p)[1].buttons[1].id, "Baji rani");
+  await wait(p, 3);
+  const d = to(p)[2];
+  assert.match(d.text, /^Baji rani ka pichla order:[\s\S]*Kinno — 6 adad/);
+  assert.doesNotMatch(d.text, /Tamatar/);
+  await tap(p, d.buttons[0].id, "✅ Theek hai");
+  await wait(p, 4);
+  assert.match(to(p)[3].text, /Alag bill: \*Baji rani\*/);
+  const live = (await db.query(`SELECT o.bill_label FROM orders o WHERE o.customer_id = $1 AND o.status = 'confirmed'`, [cust])).rows;
+  assert.deepEqual(live.map((r) => r.bill_label), ["Baji rani"]);
 });
 
 test("the rate-list menu ends with 'Order karein'; choosing it starts an order", async () => {

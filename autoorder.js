@@ -105,6 +105,15 @@ const T = {
   confirmFoot: (delivery) => `\nDelivery: *${delivery}*\n\nSab theek hai?`,
   changed: "Koi baat nahi. List dobara kholein aur jo chahiye chun lein, ya apni list likh dein.",
   noLast: "Aap ka koi pichla order nahi mila. List se chun lein 👇",
+  startEditable: (os, cutoff) => (os.length === 1
+    ? `Aap ka ${os[0].day} ka order *${os[0].order_number}* (${bill.money(os[0].total)}) pehle se hai — ${cutoff} raat 9 baje tak badal sakti hain.`
+    : `Aap ke ${os[0].day} ke ${os.length} orders pehle se hain — ${cutoff} raat 9 baje tak badal sakti hain.`) +
+    "\n\n✏️ Badalna ho to *Order badlein*, ya naya alag order list se / likh kar dein.",
+  startLocked: (o, cutoff) =>
+    `Aap ka ${o.day} ka order *${o.order_number}* band ho chuka hai (cutoff ${cutoff} raat 9 baje) — delivery ${o.day} ko hogi. 🙏\n\n` +
+    "Agli delivery ke liye naya order list se chunein ya likh kar dein 👇",
+  whoseLast: "Kis ka pichla order? 👇",
+  repeatHead: (label) => (label ? `${label} ka pichla order:` : "Aap ka pichla order:"),
   failed: (why) => `Maazrat, ye order save nahi ho saka: ${why}\nHamari team abhi aap se rabta karegi.`,
   stale: "Ye order pehle hi confirm ho chuka hai. ✅",
   old: "Ye purana order tha, ise badal diya gaya. Naye order ke liye *order* likh dein.",
@@ -197,6 +206,14 @@ async function newDraft(db, phone, source, lines, note = null) {
 //   change:{"order":12,"number":"ASB-001030","before":[...lines]}
 // ("choose:" notes carry it as changeOf while kinds are being asked.)
 const changeNote = (c) => (c ? "change:" + JSON.stringify(c) : null);
+function repeatLabelOf(note) {
+  const n = String(note || "");
+  try {
+    if (n.startsWith("repeat:")) return JSON.parse(n.slice(7)).label || null;
+    if (n.startsWith("choose:")) return JSON.parse(n.slice(7)).repeatLabel || null;
+  } catch (_) { /* not ours */ }
+  return null;
+}
 function changeOfNote(note) {
   const n = String(note || "");
   try {
@@ -211,7 +228,7 @@ const cutoffDayOf = (deliveryDate) => {
   return ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][d.getDay()];   // the day before
 };
 
-async function showDraft(db, { phone, source, lines, send, now, notes = [], changeOf = null }) {
+async function showDraft(db, { phone, source, lines, send, now, notes = [], changeOf = null, repeatLabel = null, repeatHead = false }) {
   const products = await forSale(db);
   const sellable = new Set(products.map((p) => p.sku));
   const gone = lines.filter((l) => !sellable.has(l.sku));
@@ -220,26 +237,55 @@ async function showDraft(db, { phone, source, lines, send, now, notes = [], chan
     await send.text(phone, T.failed("in mein se koi cheez abhi available nahi."));
     return { did: "nothing_for_sale" };
   }
-  const id = await newDraft(db, phone, source, keep, changeNote(changeOf));
+  const id = await newDraft(db, phone, source, keep,
+    changeOf ? changeNote(changeOf) : (repeatLabel ? "repeat:" + JSON.stringify({ label: repeatLabel }) : null));
   const slot = schedule.deliveryFor(now);
   let text = draftText(keep, products, slot.deliveryDate);
   if (changeOf) text = text.replace(T.confirmHead, T.changeHead(changeOf.number));
+  else if (repeatHead || repeatLabel) text = text.replace(T.confirmHead, T.repeatHead(repeatLabel));
   if (gone.length) text = `_${gone.length} cheez(ein) abhi available nahi, is liye nikal di gayi._\n\n` + text;
   if (notes.length) text = notes.join("\n") + "\n\n" + text;
   await send.buttons(phone, text, [B.ok(id), B.edit(id)]);
   return { did: "confirm", draft: id, lines: keep.length };
 }
 
-/** Her last order's lines (packs), most recent order first. */
-async function lastOrder(db, phone) {
-  const o = (await db.query(
-    `SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id
+/**
+ * "order": what to offer depends on the clock (founder, 20 Nov).
+ *   an order still before its cut-off -> ✏️ Order badlein (no Pichla order)
+ *   an order past its cut-off        -> say it is closed; List / Likh kar for the NEXT delivery
+ *   nothing coming                    -> 🔁 Pichla order (her last DELIVERED order) / List / Likh kar
+ */
+async function startMenu(db, { phone, send, now, up = null }) {
+  up = up || await orders.upcomingOrdersFor(db, phone, now);
+  const day = (o) => ({ ...o, day: bill.deliveryPhrase(o.delivery_date).split(",")[0] });
+  if (up.editable.length) {
+    const os = up.editable.map(day);
+    const edit = os.length === 1 ? B.change(os[0].id) : { id: "order:changemenu", title: "✏️ Order badlein" };
+    await send.buttons(phone, T.startEditable(os, cutoffDayOf(os[0].delivery_date)), [edit, B.list, B.write]);
+    return { did: "start_editable", orders: os.length };
+  }
+  if (up.locked.length) {
+    const o = day(up.locked[0]);
+    await send.buttons(phone, T.startLocked(o, cutoffDayOf(o.delivery_date)), [B.list, B.write]);
+    return { did: "start_locked", orderId: o.id };
+  }
+  const hasLast = (await pastBills(db, phone)).length > 0;
+  await send.buttons(phone, hasLast ? T.start : T.startNew, hasLast ? [B.repeat, B.list, B.write] : [B.list, B.write]);
+  return { did: "start", hasLast };
+}
+
+/** Her last DELIVERED (past) order per bill on this number: her own first, then neighbours' by name. */
+async function pastBills(db, phone) {
+  const label = (await orders.hasBillLabel(db)) ? "o.bill_label" : "NULL::text";
+  const { rows } = await db.query(
+    `SELECT DISTINCT ON (COALESCE(lower(${label}), '')) o.id, ${label} AS bill_label
+       FROM orders o JOIN customers c ON c.id = o.customer_id JOIN cycles cy ON cy.id = o.cycle_id
       WHERE c.phone = $1 AND o.status::text <> 'cancelled'
-      ORDER BY o.id DESC LIMIT 1`, [phone])).rows[0];
-  if (!o) return null;
-  return (await db.query(
-    `SELECT p.sku, oi.qty_ordered::float AS packs FROM order_items oi JOIN products p ON p.id = oi.product_id
-      WHERE oi.order_id = $1 ORDER BY oi.id`, [o.id])).rows.map((r) => ({ sku: r.sku, packs: Number(r.packs) }));
+        AND cy.delivery_date < (now() AT TIME ZONE 'Asia/Karachi')::date
+        AND EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = o.id)
+      ORDER BY COALESCE(lower(${label}), ''), o.id DESC`, [phone]);
+  return rows.map((r) => ({ id: Number(r.id), bill_label: r.bill_label }))
+    .sort((a, b) => (a.bill_label ? 1 : 0) - (b.bill_label ? 1 : 0));
 }
 
 /** A WhatsApp catalogue cart -> lines by SKU (unknown items dropped and counted). */
@@ -302,6 +348,8 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     if (m[1] === "ok") {
       const d = (await db.query(`SELECT status, note FROM order_drafts WHERE id = $1 AND phone = $2`, [draftId, phone])).rows[0];
       if (d?.status === "shown" && String(d.note || "").startsWith("change:")) return applyChange(db, { phone, draftId, now, send });
+      const rl = d?.status === "shown" ? repeatLabelOf(d.note) : null;
+      if (rl) return placeOrder(db, { phone, draftId, contactName, now, send, billLabel: rl });
       if (d?.status === "shown") {
         const live = await orders.liveOrdersFor(db, phone, now);
         const main = live.find((o) => !o.bill_label) || live[0];
@@ -358,6 +406,14 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     return startChange(db, { phone, o, send });
   }
   if (id === B.cancelNo.id) { await send.text(phone, T.kept); return { did: "kept" }; }
+  if (id === "order:changemenu") {
+    const { editable } = await orders.upcomingOrdersFor(db, phone, now);
+    if (!editable.length) return startMenu(db, { phone, send, now });
+    await send.list(phone, T.whichOrder, "Order chunein", editable.slice(0, 10).map((o) => ({
+      id: `order:changewhich:${o.id}`, title: o.bill_label ? String(o.bill_label).slice(0, 24) : "Mera order",
+      description: `${o.order_number} — ${bill.money(o.total)}` })), "Orders");
+    return { did: "which_order", orders: editable.length };
+  }
   // the order to change, when the number has several bills
   const cw = /^order:changewhich:(\d+)$/.exec(id);
   if (cw) {
@@ -405,13 +461,27 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     }
   }
 
-  if (id === B.repeat.id) {
-    const lines = await lastOrder(db, phone);
-    if (!lines?.length) {
+  if (id === B.repeat.id || /^order:repeatof:\d+$/.test(id)) {
+    // the clock decides (founder, 20 Nov): an order still open -> change it; past its cut-off -> no repeat
+    const up = await orders.upcomingOrdersFor(db, phone, now);
+    if (up.editable.length || up.locked.length) return startMenu(db, { phone, send, now, up });
+    const bills = await pastBills(db, phone);
+    if (!bills.length) {
       await send.text(phone, T.noLast);
       return sendList(db, { phone, send, catalogId });
     }
-    return showDraft(db, { phone, source: "repeat", lines, send, now });
+    let pick = bills[0];
+    const of = /^order:repeatof:(\d+)$/.exec(id);
+    if (of) pick = bills.find((b) => b.id === Number(of[1])) || null;
+    else if (bills.length > 1) {
+      await send.buttons(phone, T.whoseLast, bills.slice(0, 3).map((b) => ({
+        id: `order:repeatof:${b.id}`, title: (b.bill_label ? String(b.bill_label) : "Mera").slice(0, 20) })));
+      return { did: "whose_last", bills: bills.length };
+    }
+    if (!pick) { await send.text(phone, T.old); return { did: "stale" }; }
+    const lines = await orderLines(db, pick.id);
+    if (!lines.length) { await send.text(phone, T.noLast); return sendList(db, { phone, send, catalogId }); }
+    return showDraft(db, { phone, source: "repeat", lines, send, now, repeatLabel: pick.bill_label || null, repeatHead: true });
   }
   if (id === B.list.id) return sendList(db, { phone, send, catalogId });
   if (id === B.write.id) {
@@ -426,9 +496,8 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
   // "order" typed, or the 🛒 row in the rate-list menu
   const typedText = msg?.type === "text" ? msg.text?.body : null;
   if (id === "ratelist:order" || isAsk(typedText)) {
-    const hasLast = Boolean((await lastOrder(db, phone))?.length);
-    await send.buttons(phone, hasLast ? T.start : T.startNew, hasLast ? [B.repeat, B.list, B.write] : [B.list, B.write]);
-    return { did: "start", hasLast };
+    if (/pichl[ae]|pehl[ae]\s*wala|same|wahi|dobara/i.test(typedText || "")) console.log(`[order-bot] +${phone}: asked for the last order by text`);
+    return startMenu(db, { phone, send, now });
   }
 
   // A typed order ("2kg aloo, aadha kilo adrak") -> the AI reader -> the same confirmation.
@@ -449,7 +518,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       if (r.why && r.why.length) console.log(`[order-bot] edit: ${r.lines.length} lines, unclear because: ${r.why.join("; ")}`);
       await recordMissing(db, phone, r.unknown, typedText, "edit");
       const notes = await notesFor(db, r);
-      if (r.choose?.length) return askChoices(db, { phone, source: editing.source, lines: r.lines, choose: r.choose, notes, send, changeOf: editing.changeOf });
+      if (r.choose?.length) return askChoices(db, { phone, source: editing.source, lines: r.lines, choose: r.choose, notes, send, changeOf: editing.changeOf, repeatLabel: editing.repeatLabel });
       if (!r.lines.length) {
         if (notes.length) { await send.text(phone, T.editNotUnderstood); return { did: "edit_not_understood" }; }
         if (editing.changeOf) {
@@ -460,7 +529,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
         return { did: "emptied", draft: editing.id };
       }
       if (editing.pending && sameLines(r.lines, editing.lines) && !notes.length) return null;   // nothing changed: leave it
-      return showDraft(db, { phone, source: editing.source, lines: r.lines, send, now, notes, changeOf: editing.changeOf });
+      return showDraft(db, { phone, source: editing.source, lines: r.lines, send, now, notes, changeOf: editing.changeOf, repeatLabel: editing.repeatLabel });
     }
   }
 
@@ -731,9 +800,9 @@ async function awaitingLabel(db, phone) {
 // (founder, 20 Nov). The understood items wait in a draft; the questions wait
 // in its note, one at a time; when the last is answered she sees the order.
 // ---------------------------------------------------------------------------
-async function askChoices(db, { phone, source, lines, choose, notes = [], send, changeOf = null }) {
+async function askChoices(db, { phone, source, lines, choose, notes = [], send, changeOf = null, repeatLabel = null }) {
   const id = await newDraft(db, phone, source, lines);
-  await db.query(`UPDATE order_drafts SET note = $2 WHERE id = $1`, [id, "choose:" + JSON.stringify({ queue: choose, notes, changeOf })]);
+  await db.query(`UPDATE order_drafts SET note = $2 WHERE id = $1`, [id, "choose:" + JSON.stringify({ queue: choose, notes, changeOf, repeatLabel })]);
   return askNext(db, { phone, id, choose, send });
 }
 
@@ -765,7 +834,7 @@ async function choosingDraft(db, phone, draftId = null) {
   if (!d) return null;
   const st = JSON.parse(d.note.slice("choose:".length));
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
-  return { id: d.id, source: d.source, lines: lines || [], queue: st.queue || [], notes: st.notes || [], changeOf: st.changeOf || null };
+  return { id: d.id, source: d.source, lines: lines || [], queue: st.queue || [], notes: st.notes || [], changeOf: st.changeOf || null, repeatLabel: st.repeatLabel || null };
 }
 
 /** She picked a kind (tap, or typed its name): add it, then the next question or the order. */
@@ -779,12 +848,12 @@ async function pickKind(db, { phone, d, sku, send, now }) {
   const queue = d.queue.slice(1);
   if (queue.length) {
     await db.query(`UPDATE order_drafts SET lines = $2, note = $3 WHERE id = $1`,
-      [d.id, JSON.stringify(lines), "choose:" + JSON.stringify({ queue, notes: d.notes, changeOf: d.changeOf })]);
+      [d.id, JSON.stringify(lines), "choose:" + JSON.stringify({ queue, notes: d.notes, changeOf: d.changeOf, repeatLabel: d.repeatLabel })]);
     return askNext(db, { phone, id: d.id, choose: queue, send });
   }
   await db.query(`UPDATE order_drafts SET status = 'expired', note = NULL, decided_at = now() WHERE id = $1`, [d.id]);
   if (!lines.length) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
-  return showDraft(db, { phone, source: d.source, lines, send, now, notes: d.notes, changeOf: d.changeOf });
+  return showDraft(db, { phone, source: d.source, lines, send, now, notes: d.notes, changeOf: d.changeOf, repeatLabel: d.repeatLabel });
 }
 
 /** Her typed answer to "kaunsa?" - matched to one option by its name, or null. */
@@ -813,7 +882,7 @@ async function editingDraft(db, phone) {
       ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
   if (!d) return null;
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
-  return lines?.length ? { id: d.id, source: d.source, lines, changeOf: changeOfNote(d.note) } : null;
+  return lines?.length ? { id: d.id, source: d.source, lines, changeOf: changeOfNote(d.note), repeatLabel: repeatLabelOf(d.note) } : null;
 }
 
 /**
@@ -826,7 +895,7 @@ async function pendingDraft(db, phone) {
     `SELECT id, source, lines, status, note, created_at FROM order_drafts
       WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [phone])).rows[0];
   const ch = changeOfNote(d?.note);
-  if (!d || d.status !== "shown" || (d.note && !String(d.note).startsWith("change:")) ||
+  if (!d || d.status !== "shown" || (d.note && !/^(change|repeat):/.test(String(d.note))) ||
       new Date(d.created_at) < new Date(Date.now() - 3600e3)) return null;
   const later = (await db.query(
     `SELECT 1 FROM whatsapp_messages
@@ -834,7 +903,7 @@ async function pendingDraft(db, phone) {
         AND COALESCE(sent_at, received_at) > $2::timestamptz + interval '60 seconds' LIMIT 1`, [phone, d.created_at])).rowCount;
   if (later) return null;
   const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
-  return lines?.length ? { id: d.id, source: d.source, lines, pending: true, changeOf: ch } : null;
+  return lines?.length ? { id: d.id, source: d.source, lines, pending: true, changeOf: ch, repeatLabel: repeatLabelOf(d?.note) } : null;
 }
 
 function sameLines(a, b) {
@@ -865,4 +934,4 @@ async function sendList(db, { phone, send, catalogId }) {
 }
 
 module.exports = {
-  remindFrequentChangers, billTapReport, matchKind, missingReport, spoken, on, isAsk, T, B, ready, forSale, listSections, draftText, lastOrder, cartLines, confirm, onInbound };
+  remindFrequentChangers, billTapReport, matchKind, missingReport, spoken, on, isAsk, T, B, ready, forSale, listSections, draftText, pastBills, cartLines, confirm, onInbound };
