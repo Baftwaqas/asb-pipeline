@@ -2005,6 +2005,13 @@ async function openMissing(days = 7) {
     : `Nothing asked for in the last ${data.days} days.`;
   const box = $('miList');
   box.innerHTML = '';
+  if (data.billTaps?.length) {
+    const h = document.createElement('p');
+    h.className = 'op-hint';
+    h.textContent = '🧾 "Poora bill" opened: ' + data.billTaps.map((b) =>
+      `${b.which} ${b.opened_full_bill}/${b.confirmed}` + (b.confirmed ? ` (${Math.round(100 * b.opened_full_bill / b.confirmed)}%)` : '')).join(' · ');
+    box.append(h);
+  }
   for (const it of data.items) {
     const row = document.createElement('div');
     row.className = 'ar-row';

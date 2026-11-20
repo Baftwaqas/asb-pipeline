@@ -64,6 +64,22 @@ const T = {
   askLabel: "Theek hai! Ye alag bill kis naam se banaun?\n_Jaise: Ayesha — padosan_",
   badLabel: "Naam thora chhota likh dein (40 huroof tak), jaise: _Ayesha — padosan_",
   mergedNote: (num) => `✅ Ye items aap ke order *${num}* mein shamil kar diye. Poora order neeche 👇`,
+  whichKind: (said) => `"${said}" — kaunsa chahiye? 👇`,
+  whichKindBtn: "Chunein",
+  short: (o, label, merged, delivery) => {
+    const ceiling = Number(o.ceiling_total || 0), market = Number(o.market_total || 0);
+    const saved = Math.max(0, Math.round(market - ceiling));
+    return [
+      merged ? `✅ Ye items aap ke order *${o.order_number}* mein shamil kar diye.` : `✅ Order mil gaya — *${o.order_number}*`,
+      ...(label ? [`Alag bill: *${label}*`] : []),
+      ...(delivery ? [`Delivery: *${delivery}*`] : []),
+      ``,
+      `Zyada se zyada: *${bill.money(ceiling)}*`,
+      ...(saved > 0 ? [`Bazaar rate par: ${bill.money(market)}`, `Aap ki bachat: *${bill.money(saved)}* ✅`] : []),
+      ``,
+      `Is se zyada aap kabhi nahi denge — ye hamara wada hai.`,
+    ].join("\n");
+  },
   emptied: "Order se sab items nikal diye gaye. Naye order ke liye *order* likh dein.",
   aiBusy: "Shukriya! 🙏 Aap ka order mil gaya hai. Hamari team thori dair mein confirm kar degi.",
   editNotUnderstood: "Maazrat, ye tabdeeli samajh nahi aayi. Dobara likh dein, jaise: _tamatar 2 kg kar dein_",
@@ -82,6 +98,7 @@ const B = {
   ok: (id) => ({ id: `order:ok:${id}`, title: "✅ Theek hai" }),
   edit: (id) => ({ id: `order:edit:${id}`, title: "✏️ Badlein" }),
   merge: (id) => ({ id: `order:merge:${id}`, title: "➕ Usi mein shamil" }),
+  fullBill: (orderId) => ({ id: `order:bill:${orderId}`, title: "🧾 Poora bill" }),
   split: (id) => ({ id: `order:split:${id}`, title: "🧾 Alag bill" }),
 };
 
@@ -276,6 +293,34 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     return placeOrder(db, { phone, draftId, contactName, now, send });
   }
 
+  // 🧾 Poora bill: the itemised bill for one of HER orders.
+  const fb = /^order:bill:(\d+)$/.exec(id);
+  if (fb) {
+    const own = (await db.query(
+      `SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.id = $1 AND c.phone = $2`, [Number(fb[1]), phone])).rows[0];
+    if (!own) return null;
+    const forBill = await orders.loadOrderForBill(db, own.id);
+    await send.text(phone, bill.orderConfirmation(forBill).rich);
+    return { did: "full_bill", orderId: own.id, orderNumber: forBill.order_number };
+  }
+
+  // "Kaunsa?" - a tap on one of the kinds, or her typed answer.
+  const pk = /^order:pick:(\d+):(.+)$/.exec(id);
+  if (pk) {
+    const d = await choosingDraft(db, phone, Number(pk[1]));
+    if (!d) { await send.text(phone, T.old); return { did: "stale" }; }
+    return pickKind(db, { phone, d, sku: pk[2], send, now });
+  }
+  if (msg?.type === "text") {
+    const d = await choosingDraft(db, phone);
+    if (d && d.queue.length) {
+      const sku = matchKind(msg.text?.body, d.queue[0].options);
+      if (sku) return pickKind(db, { phone, d, sku, send, now });
+      // a short reply we could not match: ask again; a longer message goes on as usual
+      if (String(msg.text?.body || "").trim().split(/\s+/).length <= 3) return askNext(db, { phone, id: d.id, choose: d.queue, send });
+    }
+  }
+
   // 🧾 Alag bill: the name she types for the separate bill.
   if (msg?.type === "text") {
     const waiting = await awaitingLabel(db, phone);
@@ -330,6 +375,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
       if (r.why && r.why.length) console.log(`[order-bot] edit: ${r.lines.length} lines, unclear because: ${r.why.join("; ")}`);
       await recordMissing(db, phone, r.unknown, typedText, "edit");
       const notes = await notesFor(db, r);
+      if (r.choose?.length) return askChoices(db, { phone, source: editing.source, lines: r.lines, choose: r.choose, notes, send });
       if (!r.lines.length) {
         if (notes.length) { await send.text(phone, T.editNotUnderstood); return { did: "edit_not_understood" }; }
         await send.text(phone, T.emptied);
@@ -353,6 +399,7 @@ async function onInbound(db, { phone, msg, send, contactName = null, now = new D
     }
     if (r.why && r.why.length) console.log(`[order-bot] typed: ${r.lines.length} read, unclear because: ${r.why.join("; ")}`);
     await recordMissing(db, phone, r.unknown, typedText, "typed");
+    if (r.choose?.length) return askChoices(db, { phone, source: "typed", lines: r.lines, choose: r.choose, notes: await notesFor(db, r), send });
     if (!r.lines.length) {
       if (r.unknown.length && (justAsked || !r.unclear.length)) {
         await send.text(phone, T.onlyUnknown(r.unknown));
@@ -381,6 +428,33 @@ async function recordMissing(db, phone, items, said, source) {
   } catch (e) {
     console.error("[order-bot] could not record missing items:", e.message);
   }
+}
+
+/**
+ * Who opens the full bill? Bot-confirmed orders in the last N days, by how
+ * many orders that customer had placed by then (1st, 2nd, 3rd+), with how
+ * many of those orders she tapped 🧾 Poora bill for. Read only.
+ */
+async function billTapReport(db, days = 30) {
+  const { rows } = await db.query(
+    `WITH conf AS (
+       SELECT d.order_id, d.phone, min(d.decided_at) AS at
+         FROM order_drafts d WHERE d.status = 'confirmed' AND d.order_id IS NOT NULL
+          AND d.decided_at > now() - make_interval(days => $1)
+        GROUP BY d.order_id, d.phone),
+     nth AS (
+       SELECT conf.*, (SELECT count(*) FROM orders o2 JOIN customers c2 ON c2.id = o2.customer_id
+                        WHERE c2.phone = conf.phone AND o2.id <= conf.order_id AND o2.status <> 'cancelled') AS n
+         FROM conf),
+     taps AS (
+       SELECT DISTINCT (regexp_match(payload #>> '{interactive,button_reply,id}', '^order:bill:([0-9]+)$'))[1]::bigint AS order_id
+         FROM whatsapp_messages
+        WHERE direction = 'inbound' AND payload #>> '{interactive,button_reply,id}' LIKE 'order:bill:%')
+     SELECT CASE WHEN n <= 1 THEN '1st order' WHEN n = 2 THEN '2nd order' ELSE '3rd+ order' END AS which,
+            count(*)::int AS confirmed, count(t.order_id)::int AS opened_full_bill
+       FROM nth LEFT JOIN taps t ON t.order_id = nth.order_id
+      GROUP BY 1 ORDER BY 1`, [days]);
+  return rows;
 }
 
 /** The founder's list: most-asked missing items over the last N days. */
@@ -414,8 +488,11 @@ async function placeOrder(db, { phone, draftId, contactName, now, send, billLabe
     if (r.stale) { await send.text(phone, r.status === "confirmed" ? T.stale : T.old); return { did: "stale", draft: draftId }; }
     const forBill = await orders.loadOrderForBill(db, r.orderId);
     forBill.ordered_at = now;
-    const text = bill.orderConfirmation(forBill).rich;
-    await send.text(phone, r.merged ? `${T.mergedNote(forBill.order_number)}\n\n${text}` : text);
+    // Short: number, delivery, the most she pays and what she saves. The full
+    // itemised bill is one tap away (founder, 20 Nov) - and every tap is kept
+    // (the button press is saved with the message) to see who stops checking.
+    await send.buttons(phone, T.short(forBill, forBill.bill_label, r.merged, bill.deliveryPhrase(forBill.delivery_date)),
+      [B.fullBill(r.orderId)]);
     return { did: "ordered", draft: draftId, orderId: r.orderId, orderNumber: forBill.order_number,
              merged: Boolean(r.merged), billLabel: forBill.bill_label || null };
   } catch (e) {
@@ -437,6 +514,77 @@ async function awaitingLabel(db, phone) {
   return (await db.query(
     `SELECT id FROM order_drafts WHERE phone = $1 AND status = 'shown' AND note = 'awaiting_label'
       ORDER BY id DESC LIMIT 1`, [phone])).rows[0] || null;
+}
+
+// ---------------------------------------------------------------------------
+// "Kaunsa lehsan?" - items that come in several kinds are asked, never guessed
+// (founder, 20 Nov). The understood items wait in a draft; the questions wait
+// in its note, one at a time; when the last is answered she sees the order.
+// ---------------------------------------------------------------------------
+async function askChoices(db, { phone, source, lines, choose, notes = [], send }) {
+  const id = await newDraft(db, phone, source, lines);
+  await db.query(`UPDATE order_drafts SET note = $2 WHERE id = $1`, [id, "choose:" + JSON.stringify({ queue: choose, notes })]);
+  return askNext(db, { phone, id, choose, send });
+}
+
+async function askNext(db, { phone, id, choose, send }) {
+  const c = choose[0];
+  const products = await forSale(db);
+  const by = new Map(products.map((p) => [p.sku, p]));
+  const rows = c.options.map((o) => {
+    const p = by.get(o.sku);
+    const amt = p ? bill.money(p.asb_price * o.packs) : "";
+    // WhatsApp list titles hold 24 characters: "Desi Garlic (Desi Lehsan)" -> "Desi Lehsan"
+    const nm = String(o.name);
+    const inner = /\(([^)]+)\)/.exec(nm)?.[1];
+    const title = nm.length <= 24 ? nm : (inner && inner.length <= 24 ? inner : nm.slice(0, 24));
+    return { id: `order:pick:${id}:${o.sku}`, title,
+             description: `${p ? spoken(o.packs, p.unit, p.min_qty) : ""}${amt ? " — " + amt : ""}`.slice(0, 72) };
+  });
+  await send.list(phone, T.whichKind(c.said), T.whichKindBtn, rows, "Qisam");
+  return { did: "which_kind", draft: id, item: c.said, options: rows.length };
+}
+
+/** The draft waiting for a "which kind" answer, with its queue. */
+async function choosingDraft(db, phone, draftId = null) {
+  const d = (await db.query(
+    `SELECT id, source, lines, note FROM order_drafts
+      WHERE phone = $1 AND status = 'shown' AND note LIKE 'choose:%' ${draftId ? "AND id = $2" : ""}
+        AND created_at > now() - interval '1 hour'
+      ORDER BY id DESC LIMIT 1`, draftId ? [phone, draftId] : [phone])).rows[0];
+  if (!d) return null;
+  const st = JSON.parse(d.note.slice("choose:".length));
+  const lines = typeof d.lines === "string" ? JSON.parse(d.lines) : d.lines;
+  return { id: d.id, source: d.source, lines: lines || [], queue: st.queue || [], notes: st.notes || [] };
+}
+
+/** She picked a kind (tap, or typed its name): add it, then the next question or the order. */
+async function pickKind(db, { phone, d, sku, send, now }) {
+  const c = d.queue[0];
+  const opt = c.options.find((o) => o.sku === sku);
+  if (!opt) return askNext(db, { phone, id: d.id, choose: d.queue, send });
+  const lines = d.lines.map((l) => ({ ...l }));
+  const have = lines.find((l) => l.sku === sku);
+  if (have) have.packs = Math.round((Number(have.packs) + opt.packs) * 1e6) / 1e6; else lines.push({ sku, packs: opt.packs });
+  const queue = d.queue.slice(1);
+  if (queue.length) {
+    await db.query(`UPDATE order_drafts SET lines = $2, note = $3 WHERE id = $1`,
+      [d.id, JSON.stringify(lines), "choose:" + JSON.stringify({ queue, notes: d.notes })]);
+    return askNext(db, { phone, id: d.id, choose: queue, send });
+  }
+  await db.query(`UPDATE order_drafts SET status = 'expired', note = NULL, decided_at = now() WHERE id = $1`, [d.id]);
+  if (!lines.length) { await send.text(phone, T.notUnderstood); return { did: "not_understood" }; }
+  return showDraft(db, { phone, source: d.source, lines, send, now, notes: d.notes });
+}
+
+/** Her typed answer to "kaunsa?" - matched to one option by its name, or null. */
+function matchKind(text, options) {
+  const t = " " + String(text || "").toLowerCase().replace(/[^a-z\u0600-\u06ff]+/g, " ") + " ";
+  const words = (s) => String(s).toLowerCase().replace(/[^a-z\u0600-\u06ff]+/g, " ").split(" ").filter((w) => w.length >= 3);
+  const all = options.map((o) => words(o.name));
+  const shared = (w) => all.every((ws) => ws.includes(w));
+  const hits = options.filter((o, i) => all[i].some((w) => !shared(w) && t.includes(" " + w + " ")));
+  return hits.length === 1 ? hits[0].sku : null;
 }
 
 /** The draft she is changing: the bot's last message (last hour) asked for the change, and that draft is 'changed'. */
@@ -504,4 +652,4 @@ async function sendList(db, { phone, send, catalogId }) {
 }
 
 module.exports = {
-  missingReport, spoken, on, isAsk, T, B, ready, forSale, listSections, draftText, lastOrder, cartLines, confirm, onInbound };
+  billTapReport, matchKind, missingReport, spoken, on, isAsk, T, B, ready, forSale, listSections, draftText, lastOrder, cartLines, confirm, onInbound };

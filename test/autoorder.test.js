@@ -120,7 +120,7 @@ test("typed order -> the AI reads it -> the same confirmation -> Theek hai -> a 
     assert.match(c.text, /Pakora Mirch — aadha kg — Rs 30/);
     await tap(p, c.buttons[0].id, "✅ Theek hai");
     await wait(p, 4);
-    assert.match(to(p)[3].text, /Aap ka order mil gaya/);
+    assert.match(to(p)[3].text, /Order mil gaya/);
     const src = (await db.query(`SELECT source, status FROM order_drafts WHERE phone = $1 ORDER BY id DESC LIMIT 1`, [p])).rows[0];
     assert.deepEqual([src.source, src.status], ["typed", "confirmed"]);
 
@@ -165,7 +165,13 @@ test("a cart -> she checks it -> Theek hai -> a real order and the usual confirm
 
   await tap(p, okId, "✅ Theek hai");
   await wait(p, 2);
-  assert.match(to(p)[1].text, /Aap ka order mil gaya — \*[A-Z0-9-]+\*/);
+  // short confirmation: number, the most she pays, her saving; the itemised bill is one tap away
+  const short = to(p)[1];
+  assert.equal(short.kind, "buttons");
+  assert.match(short.text, /^✅ Order mil gaya — \*ASB-\d+\*/);
+  assert.match(short.text, /Zyada se zyada: \*Rs 213\*/);
+  assert.doesNotMatch(short.text, /Tamatar/);
+  assert.deepEqual(short.buttons.map((b) => b.title), ["🧾 Poora bill"]);
   const o = (await db.query(`SELECT o.id, o.channel::text AS ch FROM orders o JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1`, [p])).rows;
   assert.equal(o.length, 1);
   const items = (await db.query(`SELECT p.sku, oi.qty_ordered::float AS q FROM order_items oi JOIN products p ON p.id = oi.product_id WHERE oi.order_id = $1 ORDER BY p.sku`, [o[0].id])).rows;
@@ -176,6 +182,16 @@ test("a cart -> she checks it -> Theek hai -> a real order and the usual confirm
   await wait(p, 3);
   assert.match(to(p)[2].text, /pehle hi confirm/);
   assert.equal((await db.query(`SELECT count(*)::int AS n FROM order_items oi JOIN orders o ON o.id = oi.order_id JOIN customers c ON c.id = o.customer_id WHERE c.phone = $1`, [p])).rows[0].n, 2);
+
+  // 🧾 Poora bill -> the itemised bill; another number cannot open it
+  await tap(p, short.buttons[0].id, "🧾 Poora bill");
+  await wait(p, 4);
+  assert.match(to(p)[3].text, /Aap ka order mil gaya[\s\S]*ٹماٹر|Aap ka order mil gaya[\s\S]*Tamatar/);
+  await tap("923009000099", short.buttons[0].id, "🧾 Poora bill");
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(to("923009000099").length, 0);
+  const rep = await O.billTapReport(db, 30);
+  assert.ok(rep.find((r) => r.which === "1st order" && r.opened_full_bill >= 1));
 });
 
 test("'Badlein' without the AI: saves nothing and offers the list again", async () => {
@@ -198,12 +214,12 @@ test("'Badlein' without the AI: saves nothing and offers the list again", async 
 test("repeat last order: shown at today's prices, then confirmed", async () => {
   const p = "923009000002";   // ordered above
   await say(p, "order karna hai");
-  await wait(p, 4);
-  assert.deepEqual(to(p)[3].buttons.map((b) => b.id), ["order:repeat", "order:list", "order:write"]);
+  await wait(p, 5);
+  assert.deepEqual(to(p)[4].buttons.map((b) => b.id), ["order:repeat", "order:list", "order:write"]);
   await db.query(`UPDATE products SET asb_price = 90 WHERE sku = 'T1'`);   // today's price changed
   await tap(p, "order:repeat");
-  await wait(p, 5);
-  assert.match(to(p)[4].text, /Tamatar — 1 kg — Rs 180/);
+  await wait(p, 6);
+  assert.match(to(p)[5].text, /Tamatar — 1 kg — Rs 180/);
 });
 
 test("the rate-list menu ends with 'Order karein'; choosing it starts an order", async () => {
@@ -258,7 +274,7 @@ test("'Badlein' with the AI: she types only the change, the rest of her order st
     assert.doesNotMatch(c.text, /Kinno/);
     await tap(p, c.buttons[0].id, "✅ Theek hai");
     await wait(p, 4);
-    assert.match(to(p)[3].text, /Aap ka order mil gaya/);
+    assert.match(to(p)[3].text, /Order mil gaya/);
 
     // removing everything: no empty order
     await cart(p, [{ product_retailer_id: "RT3", quantity: 2 }]);
@@ -308,7 +324,7 @@ test("same delivery day: she is asked first - ➕ Usi mein shamil (told it joine
   await wait(p, 1);
   await tap(p, to(p)[0].buttons[0].id, "✅ Theek hai");
   await wait(p, 2);
-  assert.match(to(p)[1].text, /Aap ka order mil gaya/);
+  assert.match(to(p)[1].text, /Order mil gaya/);
   const first = /\*(ASB-\d+)\*/.exec(to(p)[1].text)[1];
 
   // second order, same delivery: asked before anything is saved
@@ -341,7 +357,7 @@ test("same delivery day: she is asked first - ➕ Usi mein shamil (told it joine
   await say(p, "Ayesha — padosan");
   await wait(p, 9);
   const billMsg = to(p)[8].text;
-  assert.match(billMsg, /Aap ka order mil gaya/);
+  assert.match(billMsg, /Order mil gaya/);
   assert.match(billMsg, /Alag bill: \*Ayesha — padosan\*/);
   assert.doesNotMatch(billMsg, /mein shamil kar diye/);
   assert.equal(await n(), 2);
@@ -380,6 +396,58 @@ test("an order is on her screen and she types the missing item: it is ADDED, not
     const c = to(p)[3].text;
     assert.match(c, /Tamatar — 1 kg/);
     assert.match(c, /Pakora Mirch — aadha kg/);
+  } finally {
+    global.fetch = realFetch;
+    delete process.env.GROQ_API_KEY;
+  }
+});
+
+test("kinds are asked, never guessed: 'Kaunsa?' with the choices; a tap or a typed 'desi' answers it", async () => {
+  Object.assign(process.env, { ORDER_AI_PROVIDER: "groq", GROQ_API_KEY: "test-only", GROQ_MODEL: "test-model" });
+  await db.query(`INSERT INTO products (sku, name_en, category, unit, step_qty, min_qty, shopify_variant_id, is_active, asb_price, market_price) VALUES
+    ('GC', 'China Garlic (China Lehsan)', 'sabziyaan', 'g', 250, 250, 'vgc', true, 130, 160),
+    ('GD', 'Desi Garlic (Desi Lehsan)', 'sabziyaan', 'g', 250, 250, 'vgd', true, 95, 120),
+    ('AW', 'Aloo White', 'sabziyaan', 'kg', 1, 1, 'vaw', true, 45, 60),
+    ('AL', 'Aloo Lal', 'sabziyaan', 'kg', 1, 1, 'val', true, 45, 70) ON CONFLICT DO NOTHING`);
+  const realFetch = global.fetch;
+  global.fetch = async (url, init) => String(url).includes("api.groq.com")
+    ? new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        items: [{ sku: "T1", qty: 1, unit: "kg", said: "1 kg tamatar" }],
+        choose: [{ said: "2 pao lehsan", qty: 2, unit: "pao", options: ["GC", "GD"] },
+                 { said: "2 kg aloo", qty: 2, unit: "kg", options: ["AW", "AL", "NOPE"] }],
+        unknown: [], unclear: [] }) } }] }), { status: 200 })
+    : realFetch(url, init);
+  try {
+    const p = "923009000015";
+    await say(p, "order");
+    await wait(p, 1);
+    await tap(p, "order:write");
+    await wait(p, 2);
+    await say(p, "1 kg tamatar, 2 pao lehsan, 2 kg aloo");
+    await wait(p, 3);
+    const q1 = to(p)[2];
+    assert.equal(q1.kind, "list");
+    assert.match(q1.text, /"2 pao lehsan" — kaunsa chahiye/);
+    assert.deepEqual(q1.rows.map((r) => r.title), ["China Lehsan", "Desi Lehsan"]);
+    assert.match(q1.rows[1].description, /aadha kg — Rs 190/);
+    // nothing is ordered or shown for confirmation yet
+    assert.equal((await db.query(`SELECT count(*)::int AS n FROM order_drafts WHERE phone = $1 AND note IS NULL AND status = 'shown'`, [p])).rows[0].n, 0);
+    // typed answer
+    await say(p, "desi");
+    await wait(p, 4);
+    const q2 = to(p)[3];
+    assert.equal(q2.kind, "list");
+    assert.match(q2.text, /"2 kg aloo" — kaunsa/);
+    assert.equal(q2.rows.length, 2, "an invented sku is never offered");
+    // tap
+    await H.postWhatsApp(base, hook(p, { type: "interactive", interactive: { type: "list_reply", list_reply: { id: q2.rows[1].id, title: "Aloo Lal" } } }));
+    await wait(p, 5);
+    const c = to(p)[4];
+    assert.equal(c.kind, "buttons");
+    assert.match(c.text, /Tamatar — 1 kg/);
+    assert.match(c.text, /Desi Garlic \(Desi Lehsan\) — aadha kg/);
+    assert.match(c.text, /Aloo Lal — 2 kg/);
+    assert.doesNotMatch(c.text, /China|Aloo White/);
   } finally {
     global.fetch = realFetch;
     delete process.env.GROQ_API_KEY;
