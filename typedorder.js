@@ -17,6 +17,8 @@
 // ============================================================================
 "use strict";
 
+const { normaliseQty } = require("./qtywords");
+
 const ai = require("./ai");
 
 // Looks like an order: a number or a quantity word. ("salam", "kab aayega" do not.)
@@ -135,9 +137,9 @@ async function read(text, products, { env = process.env, fetchImpl = fetch, curr
       const size = Number(p.min_qty) > 0 ? Number(p.min_qty) : 1;
       return `${p.sku} | ${p.name_en} | ${+(l.packs * size).toFixed(3)} ${p.unit}`;
     });
-    user += `CURRENT ORDER (sku | name | qty unit):\n${now.join("\n")}\n\nCUSTOMER WANTS TO CHANGE IT:\n${String(text).slice(0, 800)}`;
+    user += `CURRENT ORDER (sku | name | qty unit):\n${now.join("\n")}\n\nCUSTOMER WANTS TO CHANGE IT:\n${normaliseQty(text).slice(0, 800)}`;
   } else {
-    user += `CUSTOMER WROTE:\n${String(text).slice(0, 800)}`;
+    user += `CUSTOMER WROTE:\n${normaliseQty(text).slice(0, 800)}`;
   }
   const raw = await ai.complete({ system: current && current.length ? SYSTEM + EDIT_RULES : SYSTEM, user, env, fetchImpl });
   const json = (() => {
