@@ -26,7 +26,8 @@ const wait = (p, k) => H.waitFor(async () => to(p).length >= k);
 before(async () => {
   const url = await H.createDatabase("asb_t_orderchange", ROOT);
   H.setEnv(url);
-  Object.assign(process.env, { ORDER_BOT: "on", RATELIST_BOT: "on", AREA_BOT: "off", CATALOG_ID: "CAT1" });
+  Object.assign(process.env, { ORDER_BOT: "on", RATELIST_BOT: "on", AREA_BOT: "off", CATALOG_ID: "CAT1",
+    INBOX_PASSWORD: "local-test-only", INBOX_COOKIE_SECRET: "local-test-only-secret" });
   sent = H.stubOutside(ROOT);
   const wa = require(path.join(ROOT, "whatsapp.js"));
   let k = 0;
@@ -256,4 +257,25 @@ test("after the cut-off a cancelled order cannot come back", async () => {
     await wait(p, n + 1);
     assert.match(to(p)[n].text, /wapas nahi aa sakta/);
   } finally { await db.query(`UPDATE cycles SET status = 'open' WHERE status = 'locked'`); }
+});
+
+test("purchase export: every ordered item with both rates, phones masked, nothing written", async () => {
+  const p = "923001119999";
+  await placed(p, "RT1", 2);
+  const r = await fetch(`${base}/api/inbox/login`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: "local-test-only", name: "Waqas" }) });
+  const cookie = (r.headers.get("set-cookie") || "").split(";")[0];
+  const before = (await db.query(`SELECT count(*)::int AS n FROM orders`)).rows[0].n;
+  const out = await (await fetch(`${base}/api/inbox/analytics/lines`, { headers: { cookie } })).json();
+  const mine = out.lines.filter((l) => l.customer_id && l.phone.startsWith("9230") && l.phone.endsWith("999"));
+  assert.ok(mine.length >= 1, JSON.stringify(out).slice(0, 300));
+  const l = mine[mine.length - 1];
+  assert.equal(l.sku, "T1");
+  assert.equal(l.asb_rate, 99);
+  assert.equal(l.market_rate, 200);
+  assert.match(l.phone, /•••/);
+  assert.ok(l.delivery_date);
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM orders`)).rows[0].n, before);
+  const noAuth = await fetch(`${base}/api/inbox/analytics/lines`);
+  assert.equal(noAuth.status, 401);
 });

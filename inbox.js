@@ -1281,6 +1281,126 @@ router.post("/api/inbox/rates/link", requireAuth, express.json({ limit: "1mb" })
   res.json({ linked: linked.length, missing, meta });
 });
 
+// ---------------------------------------------------------------------------
+// Catalogue completeness (catalogPlan.js)
+//
+//   GET  /api/inbox/rates/plan    dry run: what is missing from the WhatsApp
+//                                 catalogue, what can be joined up, what is
+//                                 left over. Changes nothing.
+//   POST /api/inbox/rates/apply   { add: [shopify_variant_id],
+//                                   link: [{ shopify_variant_id, retailer_id }],
+//                                   hide: [retailer_id] }
+//                                 does exactly the approved rows, nothing else
+// ---------------------------------------------------------------------------
+const catalogPlan = require("./catalogPlan");
+const PRODUCT_COLS = `id, sku, name_en, name_roman, name_ur, unit::text AS unit, min_qty, asb_price,
+                      market_price, is_active, image_url, shopify_variant_id, shopify_handle,
+                      meta_retailer_id`;
+
+router.get("/api/inbox/rates/plan", requireAuth, async (_req, res) => {
+  try {
+    const catId = await productSync.catalogId(db);
+    if (!catId) return res.status(404).json({ error: "no_catalogue" });
+    const items = await productSync.metaItems(catId);
+    const { rows } = await db.query(`SELECT ${PRODUCT_COLS} FROM products`);
+    res.json({ catalogId: catId, ...catalogPlan.plan(rows, items) });
+  } catch (e) { ratesFail(e, res); }
+});
+
+router.post("/api/inbox/rates/apply", requireAuth, express.json({ limit: "1mb" }), async (req, res) => {
+  const add = (Array.isArray(req.body?.add) ? req.body.add : []).map(String);
+  const link = Array.isArray(req.body?.link) ? req.body.link : [];
+  const hide = (Array.isArray(req.body?.hide) ? req.body.hide : []).map(String);
+  if (!add.length && !link.length && !hide.length) return res.status(400).json({ error: "nothing_approved" });
+  const out = {};
+  try {
+    const catId = await productSync.catalogId(db);
+    if (!catId) return res.status(404).json({ error: "no_catalogue" });
+
+    if (link.length) {
+      const done = [];
+      await db.tx(async (client) => { for (const l of link) {
+        const rid = String(l.retailer_id || "").trim();
+        const vid = String(l.shopify_variant_id || "").trim();
+        if (!rid || !vid) continue;
+        await client.query(`UPDATE products SET meta_retailer_id = NULL
+                             WHERE meta_retailer_id = $1 AND shopify_variant_id <> $2`, [rid, vid]);
+        const { rows } = await client.query(
+          `UPDATE products SET meta_retailer_id = $1 WHERE shopify_variant_id = $2 RETURNING ${PRODUCT_COLS}`,
+          [rid, vid]);
+        if (rows[0]) done.push(rows[0]);
+      } });
+      // Our title goes with the prices, so "Adrak 1kg" becomes "Adrak — 250 gm"
+      // and never shows a 1 kg name at a 250 gm price.
+      out.link = await productSync.metaUpdate(catId, done.map((r) => ({
+        retailer_id: r.meta_retailer_id, asb_price: r.asb_price, market_price: r.market_price,
+        in_stock: r.is_active, name: catalogPlan.titleOf(r) })));
+      out.link.linked = done.length;
+    }
+
+    if (add.length) {
+      const { rows } = await db.query(
+        `SELECT ${PRODUCT_COLS} FROM products
+          WHERE shopify_variant_id = ANY($1) AND meta_retailer_id IS NULL AND is_active
+            AND image_url IS NOT NULL AND asb_price > 0`, [add]);
+      out.add = rows.length ? await productSync.metaCreate(db, catId, rows) : { sent: 0 };
+      out.add.skipped = add.filter((v) => !rows.some((r) => r.shopify_variant_id === v));
+    }
+
+    if (hide.length) {
+      out.hide = await productSync.metaUpdate(catId, hide.map((rid) => ({ retailer_id: rid, in_stock: false })));
+    }
+    res.json(out);
+  } catch (e) { ratesFail(e, res); }
+});
+
+// ---------------------------------------------------------------------------
+// Purchase analysis export (read-only)
+//
+//   GET /api/inbox/analytics/lines?since=YYYY-MM-DD
+//     one row per item ever ordered (cancelled orders included, flagged), with
+//     the customer, area, delivery day, quantity and both rates. Phones are
+//     masked unless ?phones=full. Nothing is written.
+// ---------------------------------------------------------------------------
+router.get("/api/inbox/analytics/lines", requireAuth, async (req, res) => {
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || "")) ? req.query.since : "2000-01-01";
+  const full = req.query.phones === "full";
+  try {
+    const hasLoc = (await db.query(`SELECT to_regclass('customer_locations') IS NOT NULL AS t`)).rows[0].t;
+    const hasLabel = (await db.query(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_name = 'orders' AND column_name = 'bill_label') AS t`)).rows[0].t;
+    const { rows } = await db.query(
+      `SELECT o.order_number, o.channel::text AS channel, o.status::text AS status,
+              o.placed_at, cy.delivery_date::text AS delivery_date,
+              c.id AS customer_id, c.name AS customer, c.phone,
+              s.name AS society, ${hasLoc ? "ka.name" : "NULL"} AS area,
+              ${hasLabel ? "o.bill_label" : "NULL"} AS bill_label,
+              p.sku, oi.name_snapshot AS item, p.category, oi.unit::text AS unit,
+              oi.billed_qty AS qty, oi.billed_unit_price AS asb_rate, oi.market_unit_price AS market_rate,
+              oi.line_total, oi.market_line_total
+         FROM order_items oi
+         JOIN orders o     ON o.id = oi.order_id
+         JOIN customers c  ON c.id = o.customer_id
+         JOIN cycles cy    ON cy.id = o.cycle_id
+         JOIN products p   ON p.id = oi.product_id
+         LEFT JOIN societies s ON s.id = COALESCE(o.society_id, c.society_id)
+         ${hasLoc ? `LEFT JOIN customer_locations cl ON cl.phone = c.phone
+                     LEFT JOIN karachi_areas ka ON ka.id = cl.area_id` : ""}
+        WHERE o.placed_at >= $1::date
+        ORDER BY o.placed_at, o.order_number, oi.id`, [since]);
+    const mask = (ph) => (full || !ph ? ph : `${String(ph).slice(0, 4)}•••${String(ph).slice(-3)}`);
+    res.json({ count: rows.length, since, lines: rows.map((r) => ({ ...r, phone: mask(r.phone),
+      qty: Number(r.qty), asb_rate: Number(r.asb_rate),
+      market_rate: r.market_rate == null ? null : Number(r.market_rate),
+      line_total: Number(r.line_total),
+      market_line_total: r.market_line_total == null ? null : Number(r.market_line_total) })) });
+  } catch (e) {
+    console.error("[analytics]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.post("/api/inbox/rates/meta", requireAuth, express.json({ limit: "1mb" }), async (req, res) => {
   const updates = Array.isArray(req.body?.updates) ? req.body.updates : [];
   if (!updates.length) return res.status(400).json({ error: "no_updates" });

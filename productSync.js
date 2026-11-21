@@ -82,6 +82,7 @@ function parseTitle(title) {
  */
 async function ensureSchema(db) {
   await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS meta_retailer_id TEXT`);
+  await db.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS shopify_handle TEXT`);
   await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS products_meta_retailer_id_key
                     ON products (meta_retailer_id) WHERE meta_retailer_id IS NOT NULL`);
 }
@@ -120,9 +121,9 @@ async function upsertFromShopify(db, p) {
   const { rows } = await db.query(
     `INSERT INTO products (sku, name_en, name_ur, name_roman, category, unit, step_qty, min_qty,
                            is_weighed, shopify_product_id, shopify_variant_id, image_url,
-                           is_active, asb_price, market_price)
+                           is_active, asb_price, market_price, shopify_handle)
      VALUES ($1, $2, $3, $2, $4, COALESCE($5::unit_type, 'kg'), COALESCE($6, 1), COALESCE($6, 1),
-             COALESCE($5::text, 'kg') IN ('kg','g'), $7, $8, $9, $10, $11, $12)
+             COALESCE($5::text, 'kg') IN ('kg','g'), $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT (shopify_variant_id) DO UPDATE SET
        name_en      = EXCLUDED.name_en,
        name_roman   = EXCLUDED.name_roman,
@@ -135,13 +136,15 @@ async function upsertFromShopify(db, p) {
        image_url    = COALESCE(EXCLUDED.image_url, products.image_url),
        is_active    = EXCLUDED.is_active,
        asb_price    = EXCLUDED.asb_price,
-       market_price = EXCLUDED.market_price
-     RETURNING id, sku, name_en, unit::text AS unit, min_qty, asb_price, market_price,
-               is_active, meta_retailer_id`,
+       market_price = EXCLUDED.market_price,
+       shopify_handle = COALESCE(EXCLUDED.shopify_handle, products.shopify_handle)
+     RETURNING id, sku, name_en, name_ur, name_roman, unit::text AS unit, min_qty, asb_price,
+               market_price, is_active, image_url, shopify_variant_id, shopify_handle,
+               meta_retailer_id`,
     [
       `SHP-${v.id}`, parsed.name, parsed.urdu, CATEGORY(p.product_type),
       parsed.unit, parsed.pack, String(p.id), String(v.id), image,
-      active, price, market,
+      active, price, market, p.handle || null,
     ]
   );
   return rows[0];
@@ -223,6 +226,11 @@ async function metaUpdate(catId, updates) {
     if (u.in_stock != null) data.availability = u.in_stock ? "in stock" : "out of stock";
     return { method: "UPDATE", data };
   });
+  return metaBatch(catId, requests);
+}
+
+/** Send items_batch requests (500 at a time) and wait for Meta's verdict. */
+async function metaBatch(catId, requests) {
   const handles = [];
   for (let i = 0; i < requests.length; i += 500) {
     const body = await graph("POST", `/${catId}/items_batch`, {
@@ -244,6 +252,34 @@ async function metaUpdate(catId, updates) {
                    warnings: status?.warnings || [] });
   }
   return { sent: requests.length, results };
+}
+
+/**
+ * Create catalogue items for products that are not in it yet, then remember
+ * the link (retailer id = our sku). rows: products rows (see catalogPlan).
+ * Only rows Meta did not report an error for are linked.
+ */
+async function metaCreate(db, catId, rows) {
+  const { createData } = require("./catalogPlan");
+  const requests = rows.map((p) => ({ method: "CREATE", data: createData(p) }));
+  const r = await metaBatch(catId, requests);
+  const bad = new Set();
+  for (const x of r.results) for (const e of x.errors || []) {
+    const id = e.id || e.retailer_id || (e.data && e.data.id);
+    if (id) bad.add(String(id));
+  }
+  const failedWholeBatch = r.results.some((x) => x.status !== "finished" && !(x.errors || []).length);
+  const linked = [];
+  if (!failedWholeBatch) {
+    for (const p of rows) {
+      if (bad.has(String(p.sku))) continue;
+      await db.query(
+        `UPDATE products SET meta_retailer_id = $1 WHERE shopify_variant_id = $2 AND meta_retailer_id IS NULL`,
+        [p.sku, p.shopify_variant_id]);
+      linked.push(p.sku);
+    }
+  }
+  return { ...r, linked, failed: [...bad] };
 }
 
 /**
@@ -270,6 +306,27 @@ async function pushOne(db, row) {
   }
 }
 
+/**
+ * A product for sale that the catalogue does not have yet: create it there.
+ * Off until CATALOG_AUTO_ADD=1 (the owner turns it on after approving the
+ * first batch). Never throws.
+ */
+async function addOne(db, row) {
+  if (process.env.CATALOG_AUTO_ADD !== "1" || !TOKEN) return null;
+  if (!row?.is_active || !row.image_url || !(Number(row.asb_price) > 0)) return null;
+  try {
+    const catId = await catalogId(db);
+    if (!catId) return null;
+    const r = await metaCreate(db, catId, [row]);
+    if (r.linked.length) console.log(`[rates] catalogue: added ${row.name_en}`);
+    else console.error(`[rates] catalogue add for ${row.name_en} failed:`, JSON.stringify(r.results).slice(0, 300));
+    return r;
+  } catch (e) {
+    console.error(`[rates] catalogue add for ${row.name_en} failed: ${e.message}`);
+    return null;
+  }
+}
+
 /** The whole Shopify webhook step: save, then pass the price on. */
 async function fromShopifyWebhook(db, product) {
   const row = await upsertFromShopify(db, product);
@@ -277,11 +334,12 @@ async function fromShopifyWebhook(db, product) {
   console.log(`[rates] ${row.name_en}: Rs ${Number(row.asb_price)}` +
     (row.market_price ? ` (bazaar ${Number(row.market_price)})` : "") +
     ` · ${row.is_active ? "on sale" : "not on sale"}`);
-  await pushOne(db, row);
+  if (row.meta_retailer_id) await pushOne(db, row);
+  else await addOne(db, row);
   return row;
 }
 
 module.exports = {
   ensureSchema, parseTitle, upsertFromShopify, fromShopifyWebhook, pushOne,
-  catalogId, metaItems, metaUpdate,
+  catalogId, metaItems, metaUpdate, metaBatch, metaCreate, addOne,
 };
