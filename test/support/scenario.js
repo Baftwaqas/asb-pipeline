@@ -82,6 +82,9 @@ async function main() {
   const dump = {};
   const q = async (k, sql) => { dump[k] = normalise((await db.query(sql)).rows); };
   await q("products", `SELECT * FROM products ORDER BY id`);
+  // products.shopify_handle (catalogue links) is the same kind of empty new
+  // column: left out only when NULL.
+  dump.products = dump.products.map((p) => { if (p.shopify_handle == null) { const { shopify_handle, ...rest } = p; return rest; } return p; });
   await q("customers", `SELECT * FROM customers ORDER BY id`);
   await q("cycles", `SELECT * FROM cycles ORDER BY id`);
   await q("orders", `SELECT * FROM orders ORDER BY id`);
